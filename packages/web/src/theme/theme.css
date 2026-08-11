@@ -1,0 +1,170 @@
+/*
+ * Design tokens — implements docs/DECISIONS.md D10 verbatim.
+ *
+ * Token values are the single source of truth for the visual language and
+ * are asserted byte-for-byte in theme.tokens.test.ts against D10's table.
+ * Do not edit a hex value here without updating D10 (out of scope for
+ * @shadow/web) and the test together.
+ *
+ * Theme resolution: an explicit choice stamps data-theme="dark" or
+ * data-theme="light" on <html> (see ThemeProvider.tsx); the default
+ * "system" setting stamps nothing, so only prefers-color-scheme decides.
+ * Light values live on bare :root. Dark values are redefined twice: once
+ * under prefers-color-scheme (guarded so an explicit "light" choice wins),
+ * and again under [data-theme="dark"] so the toggle wins in both directions.
+ */
+
+:root {
+  /* colour */
+  --bg: #fbfaf7;
+  --surface: #ffffff;
+  --surface-sunken: #f4f2ed;
+  --border: #e6e2d9;
+  --text: #1f2429;
+  --text-muted: #6b7280;
+  --accent: #7c9885;
+  --accent-soft: #e8efe9;
+  --clay: #c08a72;
+  --clay-soft: #f3e8e2;
+  --warn: #c9a227;
+  --warn-soft: #f7f0d8;
+  --danger: #b4685e;
+  --danger-soft: #f6e4e1;
+
+  /* typography */
+  --font-serif: "Iowan Old Style", "Palatino Linotype", Palatino, Georgia, serif;
+  --font-sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;
+  --font-mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+
+  /* spacing, 4px scale */
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 20px;
+  --space-6: 24px;
+  --space-8: 32px;
+  --space-10: 40px;
+  --space-12: 48px;
+
+  /* form */
+  --radius: 6px;
+  --radius-card: 8px;
+  --measure: 68ch;
+
+  /* motion — under 150ms, easing only, no bounce */
+  --motion-fast: 100ms;
+  --motion-base: 140ms;
+  --motion-easing: cubic-bezier(0.2, 0, 0, 1);
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #14161a;
+    --surface: #1b1e23;
+    --surface-sunken: #101216;
+    --border: #2a2e35;
+    --text: #e8e6e1;
+    --text-muted: #9aa0a8;
+    --accent: #8fae97;
+    --accent-soft: #232b26;
+    --clay: #ce9a83;
+    --clay-soft: #2c211c;
+    --warn: #d9b540;
+    --warn-soft: #2e2914;
+    --danger: #c87c71;
+    --danger-soft: #301f1c;
+  }
+}
+
+:root[data-theme="dark"] {
+  --bg: #14161a;
+  --surface: #1b1e23;
+  --surface-sunken: #101216;
+  --border: #2a2e35;
+  --text: #e8e6e1;
+  --text-muted: #9aa0a8;
+  --accent: #8fae97;
+  --accent-soft: #232b26;
+  --clay: #ce9a83;
+  --clay-soft: #2c211c;
+  --warn: #d9b540;
+  --warn-soft: #2e2914;
+  --danger: #c87c71;
+  --danger-soft: #301f1c;
+}
+
+/* ---- base ------------------------------------------------------------- */
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+html {
+  color-scheme: light dark;
+}
+
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--text);
+  font-family: var(--font-sans);
+  font-size: 15px;
+  line-height: 1.5;
+  -webkit-font-smoothing: antialiased;
+}
+
+code,
+kbd,
+samp,
+pre {
+  font-family: var(--font-mono);
+}
+
+a {
+  color: var(--accent);
+}
+
+::selection {
+  background: var(--accent-soft);
+}
+
+button,
+input,
+textarea,
+select {
+  font-family: inherit;
+  font-size: inherit;
+  color: inherit;
+}
+
+/* Borders over shadows: a single soft shadow, overlays only. */
+.shadow-overlay {
+  box-shadow: 0 8px 24px rgb(0 0 0 / 0.16);
+}
+
+/* Visible focus, in both themes, on every interactive element. */
+:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+/* Motion under 150ms, easing only, respecting prefers-reduced-motion. */
+.motion-fade {
+  transition:
+    opacity var(--motion-base) var(--motion-easing),
+    transform var(--motion-base) var(--motion-easing);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.001ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.001ms !important;
+    scroll-behavior: auto !important;
+  }
+}

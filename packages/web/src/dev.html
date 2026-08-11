@@ -1,0 +1,18 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Shadow (dev — fake client)</title>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script>
+      // @shadow/api may not exist yet (see the task's boundaries). This flag
+      // tells main.tsx to wire the SPA to FakeApiClient instead, seeded from
+      // fake-data.ts, so the app is fully inspectable offline.
+      window.shadowUseFakeClient = true;
+    </script>
+    <script type="module" src="./main.tsx"></script>
+  </body>
+</html>
