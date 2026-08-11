@@ -79,7 +79,7 @@ actually catch an injected hallucination? Both must be shown, not asserted.
 
 | # | Task | Owns | Depends on | State |
 |---|---|---|---|---|
-| T3.1 | `@shadow/cli`: `discover`, `navigate`, `read` commands; composable Unix-citizen surface with in-band `next_steps` steering (D12) | `packages/cli` | T1.1, T2.3 | ⬜ |
+| T3.1 | `@shadow/cli`: `discover`, `navigate`, `read` commands; composable Unix-citizen surface with in-band `next_steps` steering (D12) | `packages/cli` | T1.1, T2.3 | ✅ `0b43c98` |
 | T3.2 | Skills: volume-writing skill guiding Shadow, consumer skill for coding agents, `shadow install` to place it | `skills/`, `packages/cli` | T3.1 | ⬜ |
 | T3.3 | `@shadow/agent`: Shadow — intent handling, research delegation, skill-guided chapter writing, reindex triggering | `packages/agent` | T2.1, T2.2, T2.4 | ⬜ |
 | T3.4 | `@shadow/api`: Bun HTTP server, volume CRUD, SSE streaming of Shadow's turns | `packages/api` | T3.3 | ⬜ |
@@ -121,6 +121,11 @@ A few good e2e tests over coverage; unit tests only where correctness is subtle.
    A task needing a dependency added says so in its report instead of editing the root.
 4. Every task ends green: `bun run check` passes before its commit.
 5. Stage by name, never `git add -A` — concurrent work may be in the tree.
+5a. **Always pass an explicit pathspec to `git commit`.** A bare `git commit -m` picks up
+   whatever another agent has staged. This has happened twice.
+5b. **Never rewrite history.** No `reset --hard`, no amending another agent's commit, no
+   rebase. A history correction on a shared branch dropped a second agent's files back to
+   untracked once already. If a commit came out wrong, fix it forward with a new commit.
 6. **Commit green work before you run out of budget.** Subagents can be killed mid-task by a
    session limit. A task that dies with everything uncommitted loses all of it; one that has
    been committing incrementally loses only the last step. If a task must stop early, it
