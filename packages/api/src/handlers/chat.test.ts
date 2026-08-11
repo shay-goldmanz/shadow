@@ -86,23 +86,27 @@ describe("Chat — SSE", () => {
 
   test("a chapter.restated event reaches the stream when a claim needs repair", async () => {
     const OPERATOR_MESSAGE = "I believe spacing should be systemic, not per-screen.";
+    // The claim must be `sourced`, not `operator`: operator claims verify at
+    // Tier 0 by exact quote match and are deliberately excluded from the Tier 2
+    // judge (docs/EVIDENCE.md), so a scripted judge would never be consulted
+    // and nothing would ever need repairing.
+    const SNAPSHOT_TEXT = "Linear standardizes every sidebar measurement on a 4 px grid.";
+    const QUOTE = "every sidebar measurement on a 4 px grid";
+    let sourcedId = "";
 
-    const respond: FakeAgenticTurnResponder = (prompt, { turnIndex }) => {
+    const respond: FakeAgenticTurnResponder = (_prompt, { turnIndex }) => {
       if (turnIndex === 0) {
-        const match = /Operator \(sourceId: (\S+)\):/.exec(prompt);
-        const operatorSourceId = match?.[1];
-        if (!operatorSourceId) throw new Error("operator sourceId not found in prompt");
         const chapter = {
           slug: "spacing",
           title: "Spacing",
-          body: `${OPERATOR_MESSAGE}[^~op-belief]`,
+          body: `Linear puts every measurement on a 4 px grid.[^lin-grid]`,
           frontmatter: { when_to_use: "Designing dense UI." },
           claims: [
             {
-              label: "op-belief",
-              kind: "operator",
-              text: OPERATOR_MESSAGE,
-              evidence: [{ sourceId: operatorSourceId, quote: OPERATOR_MESSAGE }],
+              label: "lin-grid",
+              kind: "sourced",
+              text: "Linear puts every measurement on a 4 px grid.",
+              evidence: [{ sourceId: sourcedId, quote: QUOTE }],
             },
           ],
         };
@@ -139,6 +143,29 @@ describe("Chat — SSE", () => {
         const volume = toVolumeSlug("design-craft");
         await seedVolume(deps, volume);
 
+        // A real retrieval witness, so the quote resolves in a stored snapshot
+        // — the judge only ever sees resolved bytes (D24).
+        const source = await deps.evidenceStore.putSourceFromRetrieval(
+          volume,
+          {
+            requestedUrl: "https://linear.app/blog/design-system",
+            finalUrl: "https://linear.app/blog/design-system",
+            httpStatus: 200,
+            contentType: "text/html",
+            bytes: new TextEncoder().encode(`<p>${SNAPSHOT_TEXT}</p>`),
+            extractedText: SNAPSHOT_TEXT,
+            retrievedAt: "2026-08-11T09:14:22Z",
+            transport: "live",
+          },
+          {
+            title: "How we built Linear's design system",
+            agent: "test",
+            authority: { tier: "primary", rationale: "first-party publisher" },
+            volatility: "slow-changing",
+          },
+        );
+        sourcedId = source.id;
+
         const res = await fetch(`${baseUrl}/api/chat`, {
           method: "POST",
           headers: { "content-type": "application/json" },
@@ -156,7 +183,7 @@ describe("Chat — SSE", () => {
           reason: string;
           outcome: string;
         };
-        expect(first.claim).toBe("op-belief");
+        expect(first.claim).toBe("lin-grid");
         expect(first.to).toContain("as far as I can confirm");
         expect(["applied", "escalated"]).toContain(first.outcome);
 
