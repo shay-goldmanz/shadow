@@ -337,6 +337,99 @@ to frontmatter, not just to summaries.
 **Cost.** A BM25 implementation to own, and retrieval quality now depends on frontmatter
 quality. The latter is a real risk and is exactly what T4.1's golden set must measure.
 
+### D11a — Amendment: at our scale the agent is the locator, not BM25
+
+D11 above was written from evidence gathered at corpus scale, and it over-applied it. Sizing
+the design against our actual numbers changes the default.
+
+Our corpus is 1–20 volumes × 2–50 chapters × 300–3,000 words. A routing row
+(`title` + `when_to_use` + `not_for` + `keywords`) is ~120 tokens, so the **entire chapter
+index is ~12k tokens** — the calling agent can read all of it in one prompt. A hundred rows of
+authored applicability statements is a *higher-signal, smaller* input than a hundred
+BM25-scored chapter bodies. The crossover where a cheap scorer must locate first sits around
+10M tokens; we are three orders of magnitude below it.
+
+**Revised default:**
+
+| Stage | At our scale |
+|---|---|
+| Locate | **Agent reads the full chapter index.** BM25 is not in the default path. |
+| BM25 | **Fallback** when navigation returns nothing — it catches vocabulary the `when_to_use` fields miss (product names like "Linear" or "Epoch", error codes, people). |
+| BM25 | **Disagreement signal** — if its top hit is far from the agent's pick, log it as a routing-quality alarm. |
+| Promotion | BM25 becomes the primary locator past ~300 chapters. |
+
+Everything else in D11 stands: the `1/√(N+1)·Σ` rollup (used whenever we do score), tree as
+expander, shallowest-level routing, passages in document order, and the zero-LLM index.
+
+**Why keep BM25 at all if it is off the default path.** It is ~150 lines with no dependencies
+and no API key, and it earns its keep as the disagreement alarm — that signal is what tells
+the operator a `when_to_use` is wrong, which is the feedback loop the whole design rests on.
+
+**Lesson recorded.** Two of the four things I originally took from the research — Merkle
+invalidation as a performance optimization, and the `merge_tree` cost model as a runtime
+optimizer — were also corpus-scale machinery that buys nothing here. Full index rebuild on
+every write takes milliseconds at 100 chapters. Hashes stay, but for citation staleness and
+change detection, not for skipping work. The cost model stays too, inverted into a `shadow
+lint` rule that tells the *operator* a chapter has grown too long to route into.
+
+---
+
+## D13 — Chapter identity is a ULID persisted in the file
+
+**Context.** PageIndex's `node_id` is a DFS pre-order ordinal, so inserting a section
+renumbers everything after it; its Markdown mode addresses nodes by line number, so any edit
+above shifts every node below. Both are unusable for a corpus that is continuously edited —
+and ours is edited by design.
+
+**Decision.**
+
+| Level | Identity | Stable across |
+|---|---|---|
+| Volume | directory slug | content edits, chapter add/remove |
+| Chapter | **ULID, minted once by the indexer, written back into frontmatter** | rename, move, retitle, complete rewrite |
+| Section | `<chapter ULID>#<slugified-heading-path>` | edits above and below, reflow, sibling changes |
+| — | ~~line numbers, byte offsets, DFS ordinals~~ | nothing |
+
+Byte offsets are derived at index time for fast reads and are **never** citation truth.
+Resolution order across rebuilds: `id` → heading-path slug → `aliases` → `content_hash`
+(catches a pure rename with unchanged body) → treat as new.
+
+**Why.** The ULID lives *in the file*, so it survives everything short of deleting the file.
+This is what makes a citation durable, and durable citations are what D9's chain of evidence
+needs to still mean something after the operator edits a chapter.
+
+**Cost.** The indexer mutates chapter files to mint IDs — a write during what looks like a
+read-only operation. Deliberate and documented.
+
+---
+
+## D14 — Index self-critique is a first-class command
+
+**Context.** Retrieval quality now rests on authored `when_to_use`/`not_for` fields (D11), so
+bad frontmatter is the dominant failure mode. Measurement of PageIndex's own shipped trees
+found generated summaries collapse into each other — 71% of nodes shared a page span with
+another node, and 14 of 32 same-span pairs exceeded 0.90 summary similarity, several
+byte-identical. Authored applicability statements resist this, but nothing guarantees it.
+
+**Decision.** Ship `shadow lint` as a real command, run offline and never in the query path:
+
+- **Discriminability** — flag sibling chapters whose `when_to_use` similarity exceeds 0.85.
+- **Coverage / self-retrieval** — generate a plausible task per chapter and check the router
+  returns that chapter. A chapter that cannot retrieve itself has a bad `when_to_use`.
+- **Orphan detection** — chapters never returned by any probe.
+- **Contradiction** — overlapping `when_to_use` with conflicting guidance, for the operator
+  to reconcile or resolve with `supersedes`.
+- **Miss log** — every `not-in-corpus` verdict appended to `misses.jsonl`.
+
+**Why.** Self-retrieval is a routing evaluation that needs *zero labels* and, at ~100
+chapters, costs ~100 cheap probes. It catches the dominant failure mode before it degrades
+retrieval rather than after.
+
+**The miss log is the point.** It is the operator's authoring backlog — it says which belief
+to distill next, which is how Shadow closes its own loop instead of waiting to be asked.
+
+**Cost.** One more command, and self-retrieval probes cost inference. Bounded and offline.
+
 ---
 
 ## D12 — The CLI is composable, and steers its caller in-band

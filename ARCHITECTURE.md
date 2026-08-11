@@ -4,7 +4,8 @@ Shadow distills the operator's beliefs into curated **volumes** that coding agen
 and reason over. This document defines the pillars, the seams between them, and the
 invariants each seam enforces.
 
-See `ACCEPTANCE.md` for what must be true, and `DECISIONS.md` for why each choice was made.
+See `ACCEPTANCE.md` for what must be true, `DECISIONS.md` for why each choice was made, and
+`docs/INDEXING.md` for the indexing contract.
 
 ## The shape of the system
 

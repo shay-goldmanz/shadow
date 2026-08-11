@@ -55,6 +55,7 @@ The pillars that do real work. This is where the acceptance criteria are won or 
 | T2.3 | `@shadow/indexing`: `Navigator` — BM25 locator, `1/√(N+1)·Σ` rollup, ancestor-closure expansion, passages in document order, grade step ≤3 rounds (D11) | `packages/indexing` | T2.2 | ⬜ |
 | T2.4 | `@shadow/evidence`: CoE Audit — source integrity, span entailment, claim completeness (checks 1–3 of D9) | `packages/evidence` | T1.3, T1.2 | ⬜ |
 | T2.5 | `@shadow/evidence`: index-alignment check (check 4 of D9) + conservative-restatement repair | `packages/evidence` | T2.4, T2.2 | ⬜ |
+| T2.6 | `@shadow/indexing`: `shadow lint` self-critique — discriminability, self-retrieval coverage, orphans, contradictions, miss log (D14) | `packages/indexing` | T2.3 | ⬜ |
 
 T2.1 runs parallel with T2.2. T2.4 runs parallel with T2.2/T2.3. T2.3 and T2.5 are sequenced.
 
