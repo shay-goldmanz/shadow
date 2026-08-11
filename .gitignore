@@ -1,0 +1,6 @@
+node_modules/
+.shadow/
+*.tsbuildinfo
+coverage/
+junit.xml
+.DS_Store

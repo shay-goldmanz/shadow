@@ -1,0 +1,17 @@
+{
+  "name": "@shadow/api",
+  "version": "0.0.0",
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts",
+    "./*": "./src/*.ts"
+  },
+  "scripts": {
+    "typecheck": "tsc -p ."
+  },
+  "dependencies": {
+    "@shadow/core": "workspace:*",
+    "@shadow/agent": "workspace:*",
+    "@shadow/indexing": "workspace:*"
+  }
+}
