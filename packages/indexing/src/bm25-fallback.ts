@@ -20,7 +20,7 @@
  * fetch them, only when this path actually triggers.
  */
 
-import { Bm25Index, type Bm25Document, type Bm25Hit } from "./bm25.ts";
+import { type Bm25Document, type Bm25Hit, Bm25Index } from "./bm25.ts";
 import { sliceBytesToText, toBytes } from "./byte-text.ts";
 import type { ChapterIndexNode, IndexDocument, SectionIndexNode } from "./types.ts";
 

@@ -18,7 +18,13 @@ import { toChapterSlug, toVolumeSlug, type VolumeStore } from "@shadow/core";
 import { sliceBytesToText, toBytes } from "./byte-text.ts";
 import { flattenIndex } from "./closure.ts";
 import { NodeNotFoundError } from "./errors.ts";
-import type { ChapterIndexNode, IndexDocument, SectionIndexNode, Span, VolumeIndexNode } from "./types.ts";
+import type {
+  ChapterIndexNode,
+  IndexDocument,
+  SectionIndexNode,
+  Span,
+  VolumeIndexNode,
+} from "./types.ts";
 
 interface LocatedNode {
   readonly volume: VolumeIndexNode;
@@ -94,7 +100,10 @@ function siblingTitles(document: IndexDocument, nodeId: string): readonly string
 }
 
 /** `undefined` when `nodeId` resolves to nothing in `document` — callers (the concrete `Navigator`) turn that into `NodeNotFoundError`. */
-export function resolveReadContext(document: IndexDocument, nodeId: string): ReadContext | undefined {
+export function resolveReadContext(
+  document: IndexDocument,
+  nodeId: string,
+): ReadContext | undefined {
   const located = locateNode(document, nodeId);
   if (!located) {
     return undefined;
@@ -160,7 +169,10 @@ export async function readNode(
   if (!ctx) {
     throw new NodeNotFoundError(nodeId);
   }
-  const chapter = await store.getChapter(toVolumeSlug(ctx.volumeId), toChapterSlug(ctx.chapterSlug));
+  const chapter = await store.getChapter(
+    toVolumeSlug(ctx.volumeId),
+    toChapterSlug(ctx.chapterSlug),
+  );
   const body = sliceBytesToText(toBytes(chapter.body), ctx.span.start_byte, ctx.span.end_byte);
   return {
     node_id: ctx.node_id,

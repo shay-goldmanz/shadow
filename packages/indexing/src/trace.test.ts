@@ -31,7 +31,11 @@ describe("citationForChapter — hash-pinned, span slices the real body", () => 
 
   test("the span, applied to the real body bytes, reproduces the actual chapter text — not model prose", () => {
     const citation = citationForChapter(chapterNode);
-    const sliced = sliceBytesToText(toBytes(body), citation.span.start_byte, citation.span.end_byte);
+    const sliced = sliceBytesToText(
+      toBytes(body),
+      citation.span.start_byte,
+      citation.span.end_byte,
+    );
     expect(sliced).toBe(body); // chapter span is [0, EOF), union semantics
   });
 });

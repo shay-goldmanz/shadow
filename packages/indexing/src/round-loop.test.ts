@@ -8,7 +8,10 @@ import {
   type RoundState,
 } from "./round-loop.ts";
 
-function decision(chosen: string[], rejected: { node_id: string; why: string }[] = []): NavigateDecision {
+function decision(
+  chosen: string[],
+  rejected: { node_id: string; why: string }[] = [],
+): NavigateDecision {
   return { chosen, rejected };
 }
 
@@ -69,7 +72,10 @@ describe("canContinue — hard stop at 3 rounds", () => {
     let roundsExecuted = 0;
     while (canContinue(state)) {
       roundsExecuted += 1;
-      state = advanceRound(state, decision([], [{ node_id: `R${roundsExecuted}`, why: "need-more" }]));
+      state = advanceRound(
+        state,
+        decision([], [{ node_id: `R${roundsExecuted}`, why: "need-more" }]),
+      );
     }
     expect(roundsExecuted).toBe(MAX_ROUNDS);
     expect(state.round).toBe(MAX_ROUNDS + 1);

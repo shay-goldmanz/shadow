@@ -49,7 +49,10 @@ describe("resolveReadContext — chapter-level reads", () => {
   test("heading_path is [volumeTitle, chapterTitle]; parent_when_to_use is the volume's", () => {
     const ctx = resolveReadContext(document, linear.node_id);
     expect(ctx?.kind).toBe("chapter");
-    expect(ctx?.heading_path).toEqual(["Interface Design", "How Linear handles information density"]);
+    expect(ctx?.heading_path).toEqual([
+      "Interface Design",
+      "How Linear handles information density",
+    ]);
     expect(ctx?.parent_when_to_use).toBe("Designing UI: layout, density, navigation.");
     expect(ctx?.content_hash).toBe(linear.content_hash);
     expect(ctx?.span).toEqual(linear.span);

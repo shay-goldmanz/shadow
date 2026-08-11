@@ -31,7 +31,12 @@
  * one level — that is what keeps the tree "pruned".
  */
 
-import type { ChapterIndexNode, IndexDocument, SectionIndexNode, VolumeIndexNode } from "./types.ts";
+import type {
+  ChapterIndexNode,
+  IndexDocument,
+  SectionIndexNode,
+  VolumeIndexNode,
+} from "./types.ts";
 
 export type NodeKind = "volume" | "chapter" | "section";
 
@@ -69,7 +74,11 @@ function flattenSections(
   }
 }
 
-function flattenChapter(flat: Map<string, FlatNode>, chapter: ChapterIndexNode, volumeId: string): void {
+function flattenChapter(
+  flat: Map<string, FlatNode>,
+  chapter: ChapterIndexNode,
+  volumeId: string,
+): void {
   const childIds = (chapter.sections ?? []).map((section) => section.node_id);
   flat.set(chapter.node_id, {
     node_id: chapter.node_id,

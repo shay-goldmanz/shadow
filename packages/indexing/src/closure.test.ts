@@ -1,6 +1,11 @@
 import { describe, expect, test } from "bun:test";
 import { ancestorClosure, flattenIndex, renderOutline } from "./closure.ts";
-import type { ChapterIndexNode, IndexDocument, SectionIndexNode, VolumeIndexNode } from "./types.ts";
+import type {
+  ChapterIndexNode,
+  IndexDocument,
+  SectionIndexNode,
+  VolumeIndexNode,
+} from "./types.ts";
 import { INDEX_SCHEMA_VERSION } from "./types.ts";
 
 function section(
@@ -35,7 +40,10 @@ function chapter(
 }
 
 function volume(
-  overrides: Partial<VolumeIndexNode> & { volume_id: string; chapters: readonly ChapterIndexNode[] },
+  overrides: Partial<VolumeIndexNode> & {
+    volume_id: string;
+    chapters: readonly ChapterIndexNode[];
+  },
 ): VolumeIndexNode {
   return {
     title: overrides.volume_id,

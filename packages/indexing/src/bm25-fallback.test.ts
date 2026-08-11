@@ -1,9 +1,16 @@
 import { describe, expect, test } from "bun:test";
 import { bm25Fallback, buildFallbackIndex, detectDisagreement } from "./bm25-fallback.ts";
-import type { ChapterIndexNode, IndexDocument, SectionIndexNode, VolumeIndexNode } from "./types.ts";
+import type {
+  ChapterIndexNode,
+  IndexDocument,
+  SectionIndexNode,
+  VolumeIndexNode,
+} from "./types.ts";
 import { INDEX_SCHEMA_VERSION } from "./types.ts";
 
-function chapter(overrides: Partial<ChapterIndexNode> & { node_id: string; title: string }): ChapterIndexNode {
+function chapter(
+  overrides: Partial<ChapterIndexNode> & { node_id: string; title: string },
+): ChapterIndexNode {
   return {
     kind: "chapter",
     slug: overrides.node_id.toLowerCase(),
@@ -18,7 +25,13 @@ function chapter(overrides: Partial<ChapterIndexNode> & { node_id: string; title
 }
 
 function volume(volumeId: string, chapters: readonly ChapterIndexNode[]): VolumeIndexNode {
-  return { volume_id: volumeId, title: volumeId, chapter_count: chapters.length, volume_hash: "sha256:bb", chapters };
+  return {
+    volume_id: volumeId,
+    title: volumeId,
+    chapter_count: chapters.length,
+    volume_hash: "sha256:bb",
+    chapters,
+  };
 }
 
 function document(volumes: readonly VolumeIndexNode[]): IndexDocument {

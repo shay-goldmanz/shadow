@@ -50,7 +50,9 @@ function manyChapters(n: number, prefix = "C"): ChapterIndexNode[] {
 
 describe("shouldSkipRouting / buildRoutePayload — threshold behavior", () => {
   test("exactly at the threshold (60 chapters): routing is skipped", () => {
-    const doc = document([volume({ volume_id: "v", chapters: manyChapters(CHAPTER_INDEX_THRESHOLD) })]);
+    const doc = document([
+      volume({ volume_id: "v", chapters: manyChapters(CHAPTER_INDEX_THRESHOLD) }),
+    ]);
     expect(shouldSkipRouting(doc)).toBe(true);
     expect(buildRoutePayload(doc)).toEqual({ stage: "route", skip: true, volumes: [] });
   });
@@ -141,7 +143,10 @@ describe("buildNavigatePayload", () => {
 
   test("visited[] excludes previously-seen chapters from the payload and is echoed back", () => {
     const doc = document([
-      volume({ volume_id: "v", chapters: [chapter({ node_id: "N1" }), chapter({ node_id: "N2" })] }),
+      volume({
+        volume_id: "v",
+        chapters: [chapter({ node_id: "N1" }), chapter({ node_id: "N2" })],
+      }),
     ]);
     const payload = buildNavigatePayload(doc, { visited: ["N1"], round: 2 });
     expect(payload.chapters.map((c) => c.node_id)).toEqual(["N2"]);

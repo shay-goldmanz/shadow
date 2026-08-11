@@ -31,7 +31,10 @@ class ScriptedAgent implements NavigationAgent {
   public readonly gradeCalls: GradePayload[] = [];
 
   constructor(
-    private readonly navigateScript: (payload: NavigatePayload, callIndex: number) => NavigateDecision,
+    private readonly navigateScript: (
+      payload: NavigatePayload,
+      callIndex: number,
+    ) => NavigateDecision,
     private readonly gradeScript: (payload: GradePayload, callIndex: number) => RetrievalVerdict,
     private readonly routeScript?: (payload: RoutePayload) => RouteDecision,
   ) {}
@@ -230,7 +233,10 @@ describe("ReasoningNavigator.find — round loop: visited[], rejections, hard st
           // forces need-more every round, all the way to the hard stop.
           const target = payload.chapters[0];
           return target
-            ? { chosen: [], rejected: [{ node_id: target.node_id, why: `round ${callIndex + 1} reason` }] }
+            ? {
+                chosen: [],
+                rejected: [{ node_id: target.node_id, why: `round ${callIndex + 1} reason` }],
+              }
             : { chosen: [], rejected: [] };
         },
         () => ({ kind: "need-more", refinedQuery: "refined" }),

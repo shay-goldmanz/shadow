@@ -28,7 +28,7 @@ import {
   type NavigatePayload,
   type RoutePayload,
 } from "./payloads.ts";
-import { readNode, resolveReadContext, type ReadResult } from "./read.ts";
+import { type ReadResult, readNode, resolveReadContext } from "./read.ts";
 import {
   advanceRound,
   initialRoundState,
@@ -40,10 +40,15 @@ import type { Citation, RetrievalTrace, RetrievalVerdict, TraceStep } from "./tr
 import { buildTrace } from "./trace.ts";
 import type { IndexDocument } from "./types.ts";
 
-export type { ChapterIndexRow, NavigatePayload, RoutePayload, VolumeManifestRow } from "./payloads.ts";
+export type {
+  ChapterIndexRow,
+  NavigatePayload,
+  RoutePayload,
+  VolumeManifestRow,
+} from "./payloads.ts";
+export type { ReadResult } from "./read.ts";
 export type { NavigateDecision, Rejection } from "./round-loop.ts";
 export type { Citation, RetrievalTrace, RetrievalVerdict, TraceStep } from "./trace.ts";
-export type { ReadResult } from "./read.ts";
 
 export interface NavigateOptions {
   /** Bound at `MAX_ROUNDS` (3) regardless of what is requested here — `docs/INDEXING.md`: "Bound at 3 rounds". A smaller value narrows the bound further. */
@@ -108,7 +113,13 @@ function citationFor(document: IndexDocument, nodeId: string): Citation | undefi
   if (!ctx) {
     return undefined;
   }
-  return { node_id: ctx.node_id, path: ctx.heading_path, file: ctx.file, content_hash: ctx.content_hash, span: ctx.span };
+  return {
+    node_id: ctx.node_id,
+    path: ctx.heading_path,
+    file: ctx.file,
+    content_hash: ctx.content_hash,
+    span: ctx.span,
+  };
 }
 
 /**
@@ -127,7 +138,11 @@ export class ReasoningNavigator implements Navigator {
     private readonly agent: NavigationAgent,
   ) {}
 
-  async find(document: IndexDocument, query: string, options: NavigateOptions = {}): Promise<RetrievalTrace> {
+  async find(
+    document: IndexDocument,
+    query: string,
+    options: NavigateOptions = {},
+  ): Promise<RetrievalTrace> {
     this.fallbackIndexPromise = undefined; // fresh corpus body cache per find() call
     const maxRounds = Math.min(options.rounds ?? MAX_ROUNDS, MAX_ROUNDS);
     const steps: TraceStep[] = [];
@@ -264,7 +279,9 @@ export class ReasoningNavigator implements Navigator {
     const bodies = new Map<string, string>();
     for (const volume of document.volumes) {
       const chapters = await this.store.listChapters(toVolumeSlug(volume.volume_id));
-      const bodyBySlug = new Map<string, string>(chapters.map((chapter) => [chapter.slug, chapter.body]));
+      const bodyBySlug = new Map<string, string>(
+        chapters.map((chapter) => [chapter.slug, chapter.body]),
+      );
       for (const chapterNode of volume.chapters) {
         const body = bodyBySlug.get(chapterNode.slug);
         if (body !== undefined) {
