@@ -1,0 +1,1184 @@
+{
+  "reportSchemaVersion": 1,
+  "generatedAt": "2026-08-11T12:27:33.243Z",
+  "mode": "scripted",
+  "corpus": {
+    "volumes": 4,
+    "chapters": 26,
+    "tokens": 8274,
+    "corpusHash": "sha256:ba5e0a692d06d91c110f273ccc65a8dfe247e000dd5d1e796489e714ae30896f"
+  },
+  "goldenSetVersion": "2026-08-11.1",
+  "goldenSetSize": 35,
+  "strategies": [
+    {
+      "strategyName": "naive-bm25",
+      "description": "Flat BM25 over chapter title + body text only — no routing metadata, no reasoning. The honest baseline (docs/PLAN.md T4.2).",
+      "perQuery": [
+        {
+          "queryId": "density-exact",
+          "query": "How should I set row height for a dense data table like Linear's?",
+          "tags": ["single-chapter", "exact-vocabulary"],
+          "relevant": ["interface-design/information-density"],
+          "retrieved": [
+            "interface-design/information-density",
+            "architecture-practice/migration-safety",
+            "interface-design/navigation-hierarchy"
+          ],
+          "verdict": "found",
+          "expectedVerdict": "found",
+          "tokenCost": {
+            "estimatedPromptTokens": 0,
+            "usage": {
+              "inputTokens": 0,
+              "outputTokens": 0,
+              "cacheReadTokens": 0,
+              "cacheWriteTokens": 0
+            },
+            "llmCalls": 0
+          },
+          "score": {
+            "precision": 0.3333333333333333,
+            "recall": 1,
+            "reciprocalRank": 1,
+            "ndcg": 1,
+            "holes": 1,
+            "holesRatio": 0.3333333333333333,
+            "retrievedCount": 3,
+            "relevantCount": 1
+          }
+        },
+        {
+          "queryId": "commit-exact",
+          "query": "What's the right way to write a commit message?",
+          "tags": ["single-chapter", "exact-vocabulary"],
+          "relevant": ["writing-craft/commit-messages"],
+          "retrieved": [
+            "writing-craft/commit-messages",
+            "architecture-practice/error-handling-philosophy",
+            "writing-craft/error-copy"
+          ],
+          "verdict": "found",
+          "expectedVerdict": "found",
+          "tokenCost": {
+            "estimatedPromptTokens": 0,
+            "usage": {
+              "inputTokens": 0,
+              "outputTokens": 0,
+              "cacheReadTokens": 0,
+              "cacheWriteTokens": 0
+            },
+            "llmCalls": 0
+          },
+          "score": {
+            "precision": 0.3333333333333333,
+            "recall": 1,
+            "reciprocalRank": 1,
+            "ndcg": 1,
+            "holes": 2,
+            "holesRatio": 0.6666666666666666,
+            "retrievedCount": 3,
+            "relevantCount": 1
+          }
+        },
+        {
+          "queryId": "flag-exact",
+          "query": "When should I use a feature flag and how long can it live?",
+          "tags": ["single-chapter", "exact-vocabulary"],
+          "relevant": ["architecture-practice/feature-flags"],
+          "retrieved": [
+            "architecture-practice/feature-flags",
+            "writing-craft/readme-structure",
+            "team-process/on-call-rotation"
+          ],
+          "verdict": "found",
+          "expectedVerdict": "found",
+          "tokenCost": {
+            "estimatedPromptTokens": 0,
+            "usage": {
+              "inputTokens": 0,
+              "outputTokens": 0,
+              "cacheReadTokens": 0,
+              "cacheWriteTokens": 0
+            },
+            "llmCalls": 0
+          },
+          "score": {
+            "precision": 0.3333333333333333,
+            "recall": 1,
+            "reciprocalRank": 1,
+            "ndcg": 1,
+            "holes": 2,
+            "holesRatio": 0.6666666666666666,
+            "retrievedCount": 3,
+            "relevantCount": 1
+          }
+        },
+        {
+          "queryId": "postmortem-exact",
+          "query": "How do we run a blameless postmortem after an incident?",
+          "tags": ["single-chapter", "exact-vocabulary"],
+          "relevant": ["team-process/incident-postmortems"],
+          "retrieved": [
+            "team-process/incident-postmortems",
+            "writing-craft/readme-structure",
+            "writing-craft/pr-descriptions"
+          ],
+          "verdict": "found",
+          "expectedVerdict": "found",
+          "tokenCost": {
+            "estimatedPromptTokens": 0,
+            "usage": {
+              "inputTokens": 0,
+              "outputTokens": 0,
+              "cacheReadTokens": 0,
+              "cacheWriteTokens": 0
+            },
+            "llmCalls": 0
+          },
+          "score": {
+            "precision": 0.3333333333333333,
+            "recall": 1,
+            "reciprocalRank": 1,
+            "ndcg": 1,
+            "holes": 2,
+            "holesRatio": 0.6666666666666666,
+            "retrievedCount": 3,
+            "relevantCount": 1
+          }
+        },
+        {
+          "queryId": "empty-exact",
+          "query": "What should an empty state say when there's no data yet?",
+          "tags": ["single-chapter", "exact-vocabulary"],
+          "relevant": ["interface-design/empty-states"],
+          "retrieved": [
+            "interface-design/empty-states",
+            "interface-design/loading-and-skeletons",
+            "architecture-practice/migration-safety"
+          ],
+          "verdict": "found",
+          "expectedVerdict": "found",
+          "tokenCost": {
+            "estimatedPromptTokens": 0,
+            "usage": {
+              "inputTokens": 0,
+              "outputTokens": 0,
+              "cacheReadTokens": 0,
+              "cacheWriteTokens": 0
+            },
+            "llmCalls": 0
+          },
+          "score": {
+            "precision": 0.3333333333333333,
+            "recall": 1,
+            "reciprocalRank": 1,
+            "ndcg": 1,
+            "holes": 1,
+            "holesRatio": 0.3333333333333333,
+            "retrievedCount": 3,
+            "relevantCount": 1
+          }
+        },
+        {
+          "queryId": "errorcopy-exact",
+          "query": "How should error messages be written for end users?",
+          "tags": ["single-chapter", "exact-vocabulary"],
+          "relevant": ["writing-craft/error-copy"],
+          "retrieved": [
+            "writing-craft/error-copy",
+            "architecture-practice/error-handling-philosophy",
+            "writing-craft/pr-descriptions"
+          ],
+          "verdict": "found",
+          "expectedVerdict": "found",
+          "tokenCost": {
+            "estimatedPromptTokens": 0,
+            "usage": {
+              "inputTokens": 0,
+              "outputTokens": 0,
+              "cacheReadTokens": 0,
+              "cacheWriteTokens": 0
+            },
+            "llmCalls": 0
+          },
+          "score": {
+            "precision": 0.3333333333333333,
+            "recall": 1,
+            "reciprocalRank": 1,
+            "ndcg": 1,
+            "holes": 2,
+            "holesRatio": 0.6666666666666666,
+            "retrievedCount": 3,
+            "relevantCount": 1
+          }
+        },
+        {
+          "queryId": "versioning-exact",
+          "query": "How do I version a public API without breaking every client on every change?",
+          "tags": ["single-chapter", "exact-vocabulary"],
+          "relevant": ["architecture-practice/api-versioning"],
+          "retrieved": [
+            "architecture-practice/api-versioning",
+            "architecture-practice/monorepo-boundaries",
+            "writing-craft/readme-structure"
+          ],
+          "verdict": "found",
+          "expectedVerdict": "found",
+          "tokenCost": {
+            "estimatedPromptTokens": 0,
+            "usage": {
+              "inputTokens": 0,
+              "outputTokens": 0,
+              "cacheReadTokens": 0,
+              "cacheWriteTokens": 0
+            },
+            "llmCalls": 0
+          },
+          "score": {
+            "precision": 0.3333333333333333,
+            "recall": 1,
+            "reciprocalRank": 1,
+            "ndcg": 1,
+            "holes": 2,
+            "holesRatio": 0.6666666666666666,
+            "retrievedCount": 3,
+            "relevantCount": 1
+          }
+        },
+        {
+          "queryId": "ports-exact",
+          "query": "When does a dependency deserve its own interface boundary instead of being called directly?",
+          "tags": ["single-chapter", "exact-vocabulary"],
+          "relevant": ["architecture-practice/ports-and-adapters"],
+          "retrieved": [
+            "architecture-practice/ports-and-adapters",
+            "architecture-practice/testing-strategy",
+            "architecture-practice/monorepo-boundaries"
+          ],
+          "verdict": "found",
+          "expectedVerdict": "found",
+          "tokenCost": {
+            "estimatedPromptTokens": 0,
+            "usage": {
+              "inputTokens": 0,
+              "outputTokens": 0,
+              "cacheReadTokens": 0,
+              "cacheWriteTokens": 0
+            },
+            "llmCalls": 0
+          },
+          "score": {
+            "precision": 0.3333333333333333,
+            "recall": 1,
+            "reciprocalRank": 1,
+            "ndcg": 1,
+            "holes": 1,
+            "holesRatio": 0.3333333333333333,
+            "retrievedCount": 3,
+            "relevantCount": 1
+          }
+        },
+        {
+          "queryId": "form-exact",
+          "query": "When should a form show a validation error — as soon as I start typing, or after I leave the field?",
+          "tags": ["single-chapter", "exact-vocabulary"],
+          "relevant": ["interface-design/form-validation"],
+          "retrieved": [
+            "interface-design/form-validation",
+            "writing-craft/readme-structure",
+            "architecture-practice/error-handling-philosophy"
+          ],
+          "verdict": "found",
+          "expectedVerdict": "found",
+          "tokenCost": {
+            "estimatedPromptTokens": 0,
+            "usage": {
+              "inputTokens": 0,
+              "outputTokens": 0,
+              "cacheReadTokens": 0,
+              "cacheWriteTokens": 0
+            },
+            "llmCalls": 0
+          },
+          "score": {
+            "precision": 0.3333333333333333,
+            "recall": 1,
+            "reciprocalRank": 1,
+            "ndcg": 1,
+            "holes": 2,
+            "holesRatio": 0.6666666666666666,
+            "retrievedCount": 3,
+            "relevantCount": 1
+          }
+        },
+        {
+          "queryId": "onepager-exact",
+          "query": "How do I write a one-page proposal that argues for a single decision?",
+          "tags": ["single-chapter", "exact-vocabulary"],
+          "relevant": ["writing-craft/one-pagers"],
+          "retrieved": [
+            "writing-craft/one-pagers",
+            "writing-craft/readme-structure",
+            "interface-design/information-density"
+          ],
+          "verdict": "found",
+          "expectedVerdict": "found",
+          "tokenCost": {
+            "estimatedPromptTokens": 0,
+            "usage": {
+              "inputTokens": 0,
+              "outputTokens": 0,
+              "cacheReadTokens": 0,
+              "cacheWriteTokens": 0
+            },
+            "llmCalls": 0
+          },
+          "score": {
+            "precision": 0.3333333333333333,
+            "recall": 1,
+            "reciprocalRank": 1,
+            "ndcg": 1,
+            "holes": 1,
+            "holesRatio": 0.3333333333333333,
+            "retrievedCount": 3,
+            "relevantCount": 1
+          }
+        },
+        {
+          "queryId": "onboarding-noverlap",
+          "query": "Our first-run experience walks brand-new signups through a five-screen tour before they can do anything real — good idea?",
+          "tags": ["single-chapter", "no-vocabulary-overlap"],
+          "relevant": ["interface-design/onboarding-flows"],
+          "retrieved": [
+            "interface-design/onboarding-flows",
+            "architecture-practice/testing-strategy",
+            "interface-design/empty-states"
+          ],
+          "verdict": "found",
+          "expectedVerdict": "found",
+          "tokenCost": {
+            "estimatedPromptTokens": 0,
+            "usage": {
+              "inputTokens": 0,
+              "outputTokens": 0,
+              "cacheReadTokens": 0,
+              "cacheWriteTokens": 0
+            },
+            "llmCalls": 0
+          },
+          "score": {
+            "precision": 0.3333333333333333,
+            "recall": 1,
+            "reciprocalRank": 1,
+            "ndcg": 1,
+            "holes": 1,
+            "holesRatio": 0.3333333333333333,
+            "retrievedCount": 3,
+            "relevantCount": 1
+          }
+        },
+        {
+          "queryId": "pr-noverlap",
+          "query": "What should I actually write in the box GitHub gives me before someone reviews my code changes?",
+          "tags": ["single-chapter", "no-vocabulary-overlap"],
+          "relevant": ["writing-craft/pr-descriptions"],
+          "retrieved": [
+            "writing-craft/readme-structure",
+            "writing-craft/changelog-voice",
+            "writing-craft/commit-messages"
+          ],
+          "verdict": "found",
+          "expectedVerdict": "found",
+          "tokenCost": {
+            "estimatedPromptTokens": 0,
+            "usage": {
+              "inputTokens": 0,
+              "outputTokens": 0,
+              "cacheReadTokens": 0,
+              "cacheWriteTokens": 0
+            },
+            "llmCalls": 0
+          },
+          "score": {
+            "precision": 0,
+            "recall": 0,
+            "reciprocalRank": 0,
+            "ndcg": 0,
+            "holes": 2,
+            "holesRatio": 0.6666666666666666,
+            "retrievedCount": 3,
+            "relevantCount": 1
+          }
+        },
+        {
+          "queryId": "migration-noverlap",
+          "query": "We changed a column's name in a single deploy step against a live production database and now some rows are missing data — what went wrong?",
+          "tags": ["single-chapter", "no-vocabulary-overlap"],
+          "relevant": ["architecture-practice/migration-safety"],
+          "retrieved": [
+            "architecture-practice/migration-safety",
+            "writing-craft/error-copy",
+            "interface-design/information-density"
+          ],
+          "verdict": "found",
+          "expectedVerdict": "found",
+          "tokenCost": {
+            "estimatedPromptTokens": 0,
+            "usage": {
+              "inputTokens": 0,
+              "outputTokens": 0,
+              "cacheReadTokens": 0,
+              "cacheWriteTokens": 0
+            },
+            "llmCalls": 0
+          },
+          "score": {
+            "precision": 0.3333333333333333,
+            "recall": 1,
+            "reciprocalRank": 1,
+            "ndcg": 1,
+            "holes": 2,
+            "holesRatio": 0.6666666666666666,
+            "retrievedCount": 3,
+            "relevantCount": 1
+          }
+        },
+        {
+          "queryId": "errors-noverlap",
+          "query": "Is it fine to catch an error and check if its text contains a certain phrase to decide what to do next?",
+          "tags": ["single-chapter", "no-vocabulary-overlap"],
+          "relevant": ["architecture-practice/error-handling-philosophy"],
+          "retrieved": [
+            "writing-craft/error-copy",
+            "interface-design/dark-mode-tokens",
+            "team-process/code-review-norms"
+          ],
+          "verdict": "found",
+          "expectedVerdict": "found",
+          "tokenCost": {
+            "estimatedPromptTokens": 0,
+            "usage": {
+              "inputTokens": 0,
+              "outputTokens": 0,
+              "cacheReadTokens": 0,
+              "cacheWriteTokens": 0
+            },
+            "llmCalls": 0
+          },
+          "score": {
+            "precision": 0,
+            "recall": 0,
+            "reciprocalRank": 0,
+            "ndcg": 0,
+            "holes": 2,
+            "holesRatio": 0.6666666666666666,
+            "retrievedCount": 3,
+            "relevantCount": 1
+          }
+        },
+        {
+          "queryId": "nav-noverlap",
+          "query": "At what point does clicking through nested menus become worse than just letting people type what they want?",
+          "tags": ["single-chapter", "no-vocabulary-overlap"],
+          "relevant": ["interface-design/navigation-hierarchy"],
+          "retrieved": [
+            "team-process/decision-records",
+            "architecture-practice/testing-strategy",
+            "interface-design/navigation-hierarchy"
+          ],
+          "verdict": "found",
+          "expectedVerdict": "found",
+          "tokenCost": {
+            "estimatedPromptTokens": 0,
+            "usage": {
+              "inputTokens": 0,
+              "outputTokens": 0,
+              "cacheReadTokens": 0,
+              "cacheWriteTokens": 0
+            },
+            "llmCalls": 0
+          },
+          "score": {
+            "precision": 0.3333333333333333,
+            "recall": 1,
+            "reciprocalRank": 0.3333333333333333,
+            "ndcg": 0.5,
+            "holes": 2,
+            "holesRatio": 0.6666666666666666,
+            "retrievedCount": 3,
+            "relevantCount": 1
+          }
+        },
+        {
+          "queryId": "decision-noverlap",
+          "query": "Our team keeps re-arguing the same architectural choice every few months because nobody remembers why we picked it — how do we stop that?",
+          "tags": ["single-chapter", "no-vocabulary-overlap"],
+          "relevant": ["team-process/decision-records"],
+          "retrieved": [
+            "team-process/documentation-debt",
+            "team-process/decision-records",
+            "architecture-practice/monorepo-boundaries"
+          ],
+          "verdict": "found",
+          "expectedVerdict": "found",
+          "tokenCost": {
+            "estimatedPromptTokens": 0,
+            "usage": {
+              "inputTokens": 0,
+              "outputTokens": 0,
+              "cacheReadTokens": 0,
+              "cacheWriteTokens": 0
+            },
+            "llmCalls": 0
+          },
+          "score": {
+            "precision": 0.3333333333333333,
+            "recall": 1,
+            "reciprocalRank": 0.5,
+            "ndcg": 0.6309297535714575,
+            "holes": 2,
+            "holesRatio": 0.6666666666666666,
+            "retrievedCount": 3,
+            "relevantCount": 1
+          }
+        },
+        {
+          "queryId": "testing-noverlap",
+          "query": "We have almost every line of code covered by a test and the product still broke in production — what's missing?",
+          "tags": ["single-chapter", "no-vocabulary-overlap"],
+          "relevant": ["architecture-practice/testing-strategy"],
+          "retrieved": [
+            "architecture-practice/testing-strategy",
+            "writing-craft/error-copy",
+            "architecture-practice/migration-safety"
+          ],
+          "verdict": "found",
+          "expectedVerdict": "found",
+          "tokenCost": {
+            "estimatedPromptTokens": 0,
+            "usage": {
+              "inputTokens": 0,
+              "outputTokens": 0,
+              "cacheReadTokens": 0,
+              "cacheWriteTokens": 0
+            },
+            "llmCalls": 0
+          },
+          "score": {
+            "precision": 0.3333333333333333,
+            "recall": 1,
+            "reciprocalRank": 1,
+            "ndcg": 1,
+            "holes": 2,
+            "holesRatio": 0.6666666666666666,
+            "retrievedCount": 3,
+            "relevantCount": 1
+          }
+        },
+        {
+          "queryId": "oncall-noverlap",
+          "query": "How do we stop the same one engineer from getting woken up every single night?",
+          "tags": ["single-chapter", "no-vocabulary-overlap"],
+          "relevant": ["team-process/on-call-rotation"],
+          "retrieved": [
+            "team-process/documentation-debt",
+            "team-process/on-call-rotation",
+            "writing-craft/readme-structure"
+          ],
+          "verdict": "found",
+          "expectedVerdict": "found",
+          "tokenCost": {
+            "estimatedPromptTokens": 0,
+            "usage": {
+              "inputTokens": 0,
+              "outputTokens": 0,
+              "cacheReadTokens": 0,
+              "cacheWriteTokens": 0
+            },
+            "llmCalls": 0
+          },
+          "score": {
+            "precision": 0.3333333333333333,
+            "recall": 1,
+            "reciprocalRank": 0.5,
+            "ndcg": 0.6309297535714575,
+            "holes": 2,
+            "holesRatio": 0.6666666666666666,
+            "retrievedCount": 3,
+            "relevantCount": 1
+          }
+        },
+        {
+          "queryId": "darkmode-noverlap",
+          "query": "If I just flip every white pixel to black for a night theme, why does it look worse than the light version?",
+          "tags": ["single-chapter", "no-vocabulary-overlap"],
+          "relevant": ["interface-design/dark-mode-tokens"],
+          "retrieved": [
+            "interface-design/dark-mode-tokens",
+            "team-process/decision-records",
+            "architecture-practice/api-versioning"
+          ],
+          "verdict": "found",
+          "expectedVerdict": "found",
+          "tokenCost": {
+            "estimatedPromptTokens": 0,
+            "usage": {
+              "inputTokens": 0,
+              "outputTokens": 0,
+              "cacheReadTokens": 0,
+              "cacheWriteTokens": 0
+            },
+            "llmCalls": 0
+          },
+          "score": {
+            "precision": 0.3333333333333333,
+            "recall": 1,
+            "reciprocalRank": 1,
+            "ndcg": 1,
+            "holes": 2,
+            "holesRatio": 0.6666666666666666,
+            "retrievedCount": 3,
+            "relevantCount": 1
+          }
+        },
+        {
+          "queryId": "monorepo-noverlap",
+          "query": "Two parts of our codebase live in the same repo but never change together — should they still share one package?",
+          "tags": ["single-chapter", "no-vocabulary-overlap"],
+          "relevant": ["architecture-practice/monorepo-boundaries"],
+          "retrieved": [
+            "architecture-practice/feature-flags",
+            "architecture-practice/monorepo-boundaries",
+            "architecture-practice/ports-and-adapters"
+          ],
+          "verdict": "found",
+          "expectedVerdict": "found",
+          "tokenCost": {
+            "estimatedPromptTokens": 0,
+            "usage": {
+              "inputTokens": 0,
+              "outputTokens": 0,
+              "cacheReadTokens": 0,
+              "cacheWriteTokens": 0
+            },
+            "llmCalls": 0
+          },
+          "score": {
+            "precision": 0.3333333333333333,
+            "recall": 1,
+            "reciprocalRank": 0.5,
+            "ndcg": 0.6309297535714575,
+            "holes": 1,
+            "holesRatio": 0.3333333333333333,
+            "retrievedCount": 3,
+            "relevantCount": 1
+          }
+        },
+        {
+          "queryId": "loading-noverlap",
+          "query": "Our page flashes a spinner for barely a tenth of a second before the content pops in — should we even show it?",
+          "tags": ["single-chapter", "no-vocabulary-overlap"],
+          "relevant": ["interface-design/loading-and-skeletons"],
+          "retrieved": [
+            "interface-design/loading-and-skeletons",
+            "interface-design/dark-mode-tokens",
+            "team-process/on-call-rotation"
+          ],
+          "verdict": "found",
+          "expectedVerdict": "found",
+          "tokenCost": {
+            "estimatedPromptTokens": 0,
+            "usage": {
+              "inputTokens": 0,
+              "outputTokens": 0,
+              "cacheReadTokens": 0,
+              "cacheWriteTokens": 0
+            },
+            "llmCalls": 0
+          },
+          "score": {
+            "precision": 0.3333333333333333,
+            "recall": 1,
+            "reciprocalRank": 1,
+            "ndcg": 1,
+            "holes": 2,
+            "holesRatio": 0.6666666666666666,
+            "retrievedCount": 3,
+            "relevantCount": 1
+          }
+        },
+        {
+          "queryId": "codereview-noverlap",
+          "query": "Should every comment I leave on someone's code change be treated as something they must fix before merging?",
+          "tags": ["single-chapter", "no-vocabulary-overlap"],
+          "relevant": ["team-process/code-review-norms"],
+          "retrieved": [
+            "writing-craft/changelog-voice",
+            "writing-craft/commit-messages",
+            "writing-craft/readme-structure"
+          ],
+          "verdict": "found",
+          "expectedVerdict": "found",
+          "tokenCost": {
+            "estimatedPromptTokens": 0,
+            "usage": {
+              "inputTokens": 0,
+              "outputTokens": 0,
+              "cacheReadTokens": 0,
+              "cacheWriteTokens": 0
+            },
+            "llmCalls": 0
+          },
+          "score": {
+            "precision": 0,
+            "recall": 0,
+            "reciprocalRank": 0,
+            "ndcg": 0,
+            "holes": 3,
+            "holesRatio": 1,
+            "retrievedCount": 3,
+            "relevantCount": 1
+          }
+        },
+        {
+          "queryId": "sprint-noverlap",
+          "query": "Is it better to size upcoming work in hours, or by how unfamiliar it is?",
+          "tags": ["single-chapter", "no-vocabulary-overlap"],
+          "relevant": ["team-process/sprint-planning-critique"],
+          "retrieved": [
+            "team-process/sprint-planning-critique",
+            "writing-craft/changelog-voice",
+            "writing-craft/error-copy"
+          ],
+          "verdict": "found",
+          "expectedVerdict": "found",
+          "tokenCost": {
+            "estimatedPromptTokens": 0,
+            "usage": {
+              "inputTokens": 0,
+              "outputTokens": 0,
+              "cacheReadTokens": 0,
+              "cacheWriteTokens": 0
+            },
+            "llmCalls": 0
+          },
+          "score": {
+            "precision": 0.3333333333333333,
+            "recall": 1,
+            "reciprocalRank": 1,
+            "ndcg": 1,
+            "holes": 2,
+            "holesRatio": 0.6666666666666666,
+            "retrievedCount": 3,
+            "relevantCount": 1
+          }
+        },
+        {
+          "queryId": "multi-reader-decides",
+          "query": "I'm writing documentation meant to be read quickly by someone deciding whether my project or my change is relevant to them.",
+          "tags": ["multi-chapter"],
+          "relevant": ["writing-craft/readme-structure", "writing-craft/changelog-voice"],
+          "retrieved": [
+            "writing-craft/commit-messages",
+            "writing-craft/readme-structure",
+            "writing-craft/changelog-voice"
+          ],
+          "verdict": "found",
+          "expectedVerdict": "found",
+          "tokenCost": {
+            "estimatedPromptTokens": 0,
+            "usage": {
+              "inputTokens": 0,
+              "outputTokens": 0,
+              "cacheReadTokens": 0,
+              "cacheWriteTokens": 0
+            },
+            "llmCalls": 0
+          },
+          "score": {
+            "precision": 0.6666666666666666,
+            "recall": 1,
+            "reciprocalRank": 0.5,
+            "ndcg": 0.6934264036172708,
+            "holes": 1,
+            "holesRatio": 0.3333333333333333,
+            "retrievedCount": 3,
+            "relevantCount": 2
+          }
+        },
+        {
+          "queryId": "multi-breaking-signal",
+          "query": "What's the right way to signal a breaking change to people who depend on my code?",
+          "tags": ["multi-chapter"],
+          "relevant": ["architecture-practice/api-versioning", "writing-craft/changelog-voice"],
+          "retrieved": [
+            "writing-craft/changelog-voice",
+            "architecture-practice/api-versioning",
+            "team-process/on-call-rotation"
+          ],
+          "verdict": "found",
+          "expectedVerdict": "found",
+          "tokenCost": {
+            "estimatedPromptTokens": 0,
+            "usage": {
+              "inputTokens": 0,
+              "outputTokens": 0,
+              "cacheReadTokens": 0,
+              "cacheWriteTokens": 0
+            },
+            "llmCalls": 0
+          },
+          "score": {
+            "precision": 0.6666666666666666,
+            "recall": 1,
+            "reciprocalRank": 1,
+            "ndcg": 1,
+            "holes": 1,
+            "holesRatio": 0.3333333333333333,
+            "retrievedCount": 3,
+            "relevantCount": 2
+          }
+        },
+        {
+          "queryId": "multi-newhire",
+          "query": "How much should a new teammate be expected to figure out on their own versus have written down for them?",
+          "tags": ["multi-chapter", "no-vocabulary-overlap"],
+          "relevant": ["team-process/documentation-debt", "interface-design/onboarding-flows"],
+          "retrieved": [
+            "writing-craft/changelog-voice",
+            "team-process/on-call-rotation",
+            "interface-design/form-validation"
+          ],
+          "verdict": "found",
+          "expectedVerdict": "found",
+          "tokenCost": {
+            "estimatedPromptTokens": 0,
+            "usage": {
+              "inputTokens": 0,
+              "outputTokens": 0,
+              "cacheReadTokens": 0,
+              "cacheWriteTokens": 0
+            },
+            "llmCalls": 0
+          },
+          "score": {
+            "precision": 0,
+            "recall": 0,
+            "reciprocalRank": 0,
+            "ndcg": 0,
+            "holes": 3,
+            "holesRatio": 1,
+            "retrievedCount": 3,
+            "relevantCount": 2
+          }
+        },
+        {
+          "queryId": "multi-firstimpression",
+          "query": "What's the first thing a new reader or new user should see, before anything else?",
+          "tags": ["multi-chapter"],
+          "relevant": ["writing-craft/readme-structure", "interface-design/onboarding-flows"],
+          "retrieved": [
+            "writing-craft/changelog-voice",
+            "interface-design/onboarding-flows",
+            "interface-design/empty-states"
+          ],
+          "verdict": "found",
+          "expectedVerdict": "found",
+          "tokenCost": {
+            "estimatedPromptTokens": 0,
+            "usage": {
+              "inputTokens": 0,
+              "outputTokens": 0,
+              "cacheReadTokens": 0,
+              "cacheWriteTokens": 0
+            },
+            "llmCalls": 0
+          },
+          "score": {
+            "precision": 0.3333333333333333,
+            "recall": 0.5,
+            "reciprocalRank": 0.5,
+            "ndcg": 0.38685280723454163,
+            "holes": 2,
+            "holesRatio": 0.6666666666666666,
+            "retrievedCount": 3,
+            "relevantCount": 2
+          }
+        },
+        {
+          "queryId": "notincorpus-pricing",
+          "query": "What's the best way to price an enterprise SaaS contract with volume discounts?",
+          "tags": ["not-in-corpus"],
+          "relevant": [],
+          "retrieved": [
+            "architecture-practice/api-versioning",
+            "interface-design/onboarding-flows",
+            "architecture-practice/ports-and-adapters"
+          ],
+          "verdict": "found",
+          "expectedVerdict": "not-in-corpus",
+          "tokenCost": {
+            "estimatedPromptTokens": 0,
+            "usage": {
+              "inputTokens": 0,
+              "outputTokens": 0,
+              "cacheReadTokens": 0,
+              "cacheWriteTokens": 0
+            },
+            "llmCalls": 0
+          },
+          "score": {
+            "precision": 0,
+            "holes": 3,
+            "holesRatio": 1,
+            "correctRejection": false,
+            "retrievedCount": 3,
+            "relevantCount": 0
+          }
+        },
+        {
+          "queryId": "notincorpus-k8s",
+          "query": "How should I configure autoscaling thresholds for a Kubernetes deployment?",
+          "tags": ["not-in-corpus", "distractor"],
+          "relevant": [],
+          "retrieved": [
+            "writing-craft/readme-structure",
+            "interface-design/information-density",
+            "architecture-practice/feature-flags"
+          ],
+          "verdict": "found",
+          "expectedVerdict": "not-in-corpus",
+          "tokenCost": {
+            "estimatedPromptTokens": 0,
+            "usage": {
+              "inputTokens": 0,
+              "outputTokens": 0,
+              "cacheReadTokens": 0,
+              "cacheWriteTokens": 0
+            },
+            "llmCalls": 0
+          },
+          "score": {
+            "precision": 0,
+            "holes": 3,
+            "holesRatio": 1,
+            "correctRejection": false,
+            "retrievedCount": 3,
+            "relevantCount": 0
+          }
+        },
+        {
+          "queryId": "notincorpus-typeface",
+          "query": "What typeface pairs well with a serif body font for marketing emails?",
+          "tags": ["not-in-corpus", "distractor"],
+          "relevant": [],
+          "retrieved": [
+            "writing-craft/commit-messages",
+            "interface-design/information-density",
+            "architecture-practice/testing-strategy"
+          ],
+          "verdict": "found",
+          "expectedVerdict": "not-in-corpus",
+          "tokenCost": {
+            "estimatedPromptTokens": 0,
+            "usage": {
+              "inputTokens": 0,
+              "outputTokens": 0,
+              "cacheReadTokens": 0,
+              "cacheWriteTokens": 0
+            },
+            "llmCalls": 0
+          },
+          "score": {
+            "precision": 0,
+            "holes": 3,
+            "holesRatio": 1,
+            "correctRejection": false,
+            "retrievedCount": 3,
+            "relevantCount": 0
+          }
+        },
+        {
+          "queryId": "notincorpus-salestax",
+          "query": "How do I calculate sales tax nexus for a multi-state e-commerce business?",
+          "tags": ["not-in-corpus"],
+          "relevant": [],
+          "retrieved": [
+            "writing-craft/readme-structure",
+            "team-process/on-call-rotation",
+            "interface-design/loading-and-skeletons"
+          ],
+          "verdict": "found",
+          "expectedVerdict": "not-in-corpus",
+          "tokenCost": {
+            "estimatedPromptTokens": 0,
+            "usage": {
+              "inputTokens": 0,
+              "outputTokens": 0,
+              "cacheReadTokens": 0,
+              "cacheWriteTokens": 0
+            },
+            "llmCalls": 0
+          },
+          "score": {
+            "precision": 0,
+            "holes": 3,
+            "holesRatio": 1,
+            "correctRejection": false,
+            "retrievedCount": 3,
+            "relevantCount": 0
+          }
+        },
+        {
+          "queryId": "notincorpus-compression",
+          "query": "What's a good algorithm for compressing images losslessly?",
+          "tags": ["not-in-corpus"],
+          "relevant": [],
+          "retrieved": [
+            "architecture-practice/testing-strategy",
+            "writing-craft/pr-descriptions",
+            "team-process/on-call-rotation"
+          ],
+          "verdict": "found",
+          "expectedVerdict": "not-in-corpus",
+          "tokenCost": {
+            "estimatedPromptTokens": 0,
+            "usage": {
+              "inputTokens": 0,
+              "outputTokens": 0,
+              "cacheReadTokens": 0,
+              "cacheWriteTokens": 0
+            },
+            "llmCalls": 0
+          },
+          "score": {
+            "precision": 0,
+            "holes": 2,
+            "holesRatio": 0.6666666666666666,
+            "correctRejection": false,
+            "retrievedCount": 3,
+            "relevantCount": 0
+          }
+        },
+        {
+          "queryId": "distractor-onboarding-whitespace",
+          "query": "How much whitespace should a mobile-first onboarding screen have?",
+          "tags": ["single-chapter", "distractor"],
+          "relevant": ["interface-design/onboarding-flows"],
+          "retrieved": [
+            "interface-design/onboarding-flows",
+            "interface-design/information-density",
+            "writing-craft/changelog-voice"
+          ],
+          "verdict": "found",
+          "expectedVerdict": "found",
+          "tokenCost": {
+            "estimatedPromptTokens": 0,
+            "usage": {
+              "inputTokens": 0,
+              "outputTokens": 0,
+              "cacheReadTokens": 0,
+              "cacheWriteTokens": 0
+            },
+            "llmCalls": 0
+          },
+          "score": {
+            "precision": 0.3333333333333333,
+            "recall": 1,
+            "reciprocalRank": 1,
+            "ndcg": 1,
+            "holes": 1,
+            "holesRatio": 0.3333333333333333,
+            "retrievedCount": 3,
+            "relevantCount": 1
+          }
+        },
+        {
+          "queryId": "distractor-search-empty",
+          "query": "Our search box shows 'no results' right now — what should replace that message?",
+          "tags": ["single-chapter", "distractor"],
+          "relevant": ["interface-design/empty-states"],
+          "retrieved": [
+            "interface-design/empty-states",
+            "writing-craft/commit-messages",
+            "writing-craft/error-copy"
+          ],
+          "verdict": "found",
+          "expectedVerdict": "found",
+          "tokenCost": {
+            "estimatedPromptTokens": 0,
+            "usage": {
+              "inputTokens": 0,
+              "outputTokens": 0,
+              "cacheReadTokens": 0,
+              "cacheWriteTokens": 0
+            },
+            "llmCalls": 0
+          },
+          "score": {
+            "precision": 0.3333333333333333,
+            "recall": 1,
+            "reciprocalRank": 1,
+            "ndcg": 1,
+            "holes": 2,
+            "holesRatio": 0.6666666666666666,
+            "retrievedCount": 3,
+            "relevantCount": 1
+          }
+        },
+        {
+          "queryId": "distractor-backfill-rollback",
+          "query": "Should I add a rollback plan for a one-off backfill script an engineer runs by hand once?",
+          "tags": ["not-in-corpus", "distractor"],
+          "relevant": [],
+          "retrieved": [
+            "architecture-practice/migration-safety",
+            "team-process/incident-postmortems",
+            "architecture-practice/ports-and-adapters"
+          ],
+          "verdict": "found",
+          "expectedVerdict": "not-in-corpus",
+          "tokenCost": {
+            "estimatedPromptTokens": 0,
+            "usage": {
+              "inputTokens": 0,
+              "outputTokens": 0,
+              "cacheReadTokens": 0,
+              "cacheWriteTokens": 0
+            },
+            "llmCalls": 0
+          },
+          "score": {
+            "precision": 0,
+            "holes": 2,
+            "holesRatio": 0.6666666666666666,
+            "correctRejection": false,
+            "retrievedCount": 3,
+            "relevantCount": 0
+          }
+        }
+      ],
+      "metrics": {
+        "queryCount": 35,
+        "meanPrecision": 0.2571428571428571,
+        "meanRecall": 0.8448275862068966,
+        "mrr": 0.7528735632183909,
+        "meanNdcg": 0.7749333955712479,
+        "holesRatio": 0.638095238095238,
+        "meanHolesRatio": 0.6380952380952382,
+        "correctRejectionRate": 0
+      },
+      "tokenCost": {
+        "estimatedPromptTokens": 0,
+        "usage": {
+          "inputTokens": 0,
+          "outputTokens": 0,
+          "cacheReadTokens": 0,
+          "cacheWriteTokens": 0
+        },
+        "llmCalls": 0
+      }
+    }
+  ]
+}
