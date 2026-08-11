@@ -104,7 +104,7 @@ async function buildBodies(
       continue;
     }
     const chapters = await store.listChapters(toVolumeSlug(volume.volume_id));
-    const bodyBySlug = new Map(chapters.map((c) => [c.slug, c.body]));
+    const bodyBySlug = new Map<string, string>(chapters.map((c) => [c.slug, c.body]));
     for (const chapterNode of volume.chapters) {
       const body = bodyBySlug.get(chapterNode.slug);
       if (body !== undefined) {

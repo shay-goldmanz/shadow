@@ -19,7 +19,12 @@ async function withStore(fn: (store: FileSystemVolumeStore) => Promise<void>): P
 describe("loadCorpusIndex", () => {
   test("throws IndexMissingError when nothing has been built yet", async () => {
     await withStore(async (store) => {
-      await expect(loadCorpusIndex(store)).rejects.toBeInstanceOf(IndexMissingError);
+      // `expect(promise).rejects...` is documented Bun API, but its
+      // matchers are typed `void` despite needing an await, which trips
+      // oxlint's type-aware `await-thenable` rule (D8) — plain try/catch
+      // sidesteps it, matching the pattern `@shadow/core`'s test helpers use.
+      const error = await loadCorpusIndex(store).catch((e: unknown) => e);
+      expect(error).toBeInstanceOf(IndexMissingError);
     });
   });
 

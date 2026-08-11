@@ -45,8 +45,13 @@ export async function readMisses(root: string): Promise<readonly LoggedMiss[]> {
     return [];
   }
   const text = await readFile(missLogPath(root), "utf8");
-  return text
-    .split("\n")
-    .filter((line) => line.trim().length > 0)
-    .map((line) => JSON.parse(line) as LoggedMiss);
+  return (
+    text
+      .split("\n")
+      .filter((line) => line.trim().length > 0)
+      // Trust boundary: this file is only ever written by `appendMiss` below,
+      // so the shape is trusted rather than schema-validated at read time —
+      // the same posture `@shadow/core` documents for its own opaque-JSON reads.
+      .map((line) => JSON.parse(line) as LoggedMiss)
+  );
 }
