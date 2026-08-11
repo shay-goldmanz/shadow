@@ -35,7 +35,7 @@ The layers everything else stands on. No feature work until these are green.
 
 | # | Task | Owns | Depends on | State |
 |---|---|---|---|---|
-| T1.1 | `@shadow/core`: Volume/Chapter domain model, `VolumeStore` port + filesystem impl, slug rules, frontmatter parsing. Unit tested. | `packages/core` | — | ⬜ |
+| T1.1 | `@shadow/core`: Volume/Chapter domain model, `VolumeStore` port + filesystem impl, slug rules, frontmatter parsing. Unit tested. | `packages/core` | — | ✅ `5e7aa03` |
 | T1.2 | `@shadow/model`: structured-generation port + agentic-session port, the two adapters from D5, session reuse, **no-API-key guardrail test** | `packages/model` | T1.1 | ⬜ |
 | T1.3 | `@shadow/evidence`: package scaffold + domain model (Source, Snapshot, EvidenceSpan, Claim, Ledger) + append-only store. No LLM checks yet. | `packages/evidence` | T1.1 | ⬜ |
 
