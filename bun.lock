@@ -82,6 +82,9 @@
     "packages/research": {
       "name": "@shadow/research",
       "version": "0.0.0",
+      "dependencies": {
+        "@shadow/evidence": "workspace:*",
+      },
     },
     "packages/web": {
       "name": "@shadow/web",
