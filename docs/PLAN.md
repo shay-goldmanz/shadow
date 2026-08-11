@@ -18,7 +18,7 @@ baseline.
 | 0 — Groundwork | ✅ complete |
 | 1 — Foundation | ✅ complete — 386 tests passing |
 | 2 — Capability | ✅ complete (bar T2.7) — 733 tests passing |
-| 3 — Surfaces | ⏳ in progress |
+| 3 — Surfaces | ✅ complete — 918 tests passing, walked by hand |
 | 4 — Measure and prove | ⬜ not started |
 
 ## Wave 0 — Groundwork ✅
@@ -84,14 +84,20 @@ actually catch an injected hallucination? Both must be shown, not asserted.
 | T3.1 | `@shadow/cli`: `discover`, `navigate`, `read` commands; composable Unix-citizen surface with in-band `next_steps` steering (D12) | `packages/cli` | T1.1, T2.3 | ✅ `0b43c98` |
 | T3.2 | Skills: volume-writing skill guiding Shadow, consumer skill for coding agents, `shadow install` to place it | `skills/`, `packages/cli` | T3.1 | ✅ |
 | T3.3 | `@shadow/agent`: Shadow — intent handling, research delegation, skill-guided chapter writing, reindex triggering | `packages/agent` | T2.1, T2.2, T2.4 | ✅ `b408513` |
-| T3.4 | `@shadow/api`: Bun HTTP server, volume CRUD, SSE streaming of Shadow's turns | `packages/api` | T3.3 | ⬜ |
+| T3.4 | `@shadow/api`: Bun HTTP server, volume CRUD, SSE streaming of Shadow's turns | `packages/api` | T3.3 | ✅ `bbefee7` |
 | T3.5 | `@shadow/web`: React SPA — volume list, create, chat, chapter + index-tree viewer. Implements the D10 design language exactly; the semantic colour rule makes evidence legible in the UI. | `packages/web` | T3.4 | ✅ `6dd1be1` |
-| T3.6 | `@shadow/evidence`: add `chapter` to `ClaimRestatedEvent` so a restatement can be scoped to its chapter without cross-referencing (found by T3.5) | `packages/evidence` | T2.5 | ⬜ |
+| T3.6 | `@shadow/evidence`: add `chapter` to `ClaimRestatedEvent` so a restatement can be scoped to its chapter without cross-referencing (found by T3.5) | `packages/evidence` | T2.5 | ✅ `43fe60b` |
+| T3.7 | Point the API at `SHADOW_HOME` — it read `SHADOW_ROOT`, so any override split the API's corpus from the CLI's. Found by running both halves together. | `packages/api` | T3.4 | ✅ `a24c05a` |
 
 T3.1→T3.2 and T3.3→T3.4→T3.5 are two mostly independent chains; the CLI chain runs parallel
 with the agent chain.
 
-**Wave 3 review checkpoint.** Gate: can the operator walk the critical path by hand?
+**Wave 3 review checkpoint.** ✅ Passed, by actually running it rather than asserting it.
+Live smoke test: `POST /api/volumes` → `PUT` a chapter → the audit ran (Tier 0 plus a real
+Tier 2 model call on subscription auth) → reindex → `shadow find` returned the chapter with
+`next_steps` naming its real `node_id`. That run is what surfaced T3.7: the two halves of the
+product were reading different environment variables and only agreed by accident of a shared
+default.
 
 ## Wave 4 — Measure and prove
 

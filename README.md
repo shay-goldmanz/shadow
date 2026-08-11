@@ -40,6 +40,34 @@ directly via Bun.
 | [`docs/EVIDENCE.md`](docs/EVIDENCE.md) | chain-of-evidence schema, checks, and metrics |
 | [`docs/API.md`](docs/API.md) | HTTP contract between the interface and the pillars |
 
+## Running it
+
+Shadow runs on the operator's Claude subscription — there is no API key
+anywhere. Log in once with `claude` (the Claude Code CLI) and the stack
+inherits those credentials.
+
+```sh
+bun install
+
+# the operator's interface: API on :4301, SPA on :4300
+bun run --cwd packages/api start
+bun run --cwd packages/web dev
+```
+
+Volumes live in `~/.shadow` by default; set `SHADOW_HOME` to point elsewhere.
+The API and the CLI read the same variable, so they always share one corpus.
+
+Once a volume exists, any coding agent consumes it through the CLI:
+
+```sh
+bun run packages/cli/src/bin.ts find "design a one pager"
+bun run packages/cli/src/bin.ts read <node_id> --with-parents
+bun run packages/cli/src/bin.ts install --target /path/to/other/repo
+```
+
+`install` drops a skill into the target repo's `.claude/skills/` so its agent
+reaches for `shadow` unprompted rather than improvising.
+
 ## Getting started
 
 Requires Bun 1.3.14+.
