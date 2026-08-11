@@ -42,8 +42,19 @@ The layers everything else stands on. No feature work until these are green.
 
 T1.2 and T1.3 run in parallel once T1.1 lands — different packages, no shared files.
 
-**Wave 1 review checkpoint.** Fable reviews the seams; Opus plans revisions; Sonnet applies.
-Gate: are `VolumeStore` and the model ports the right shape to build on?
+**Wave 1 review checkpoint.** ✅ Done. Fable reviewed all four foundation packages read-only and
+verified every finding by execution. Three findings were holes in guarantees the architecture
+called *structural*: operator claims never checked their source was a session transcript (the
+D19 loophole), source records could be minted rather than witnessed, and evidence built paths
+from unvalidated JSON. Plus a measured 66-second fuzzy-anchor in a "milliseconds" path, an
+`inputHash` collision, and a frontmatter round-trip that could write unreadable chapters.
+Resolved into D22 and D23; fixes tracked below.
+
+| # | Fix task | Owns | State |
+|---|---|---|---|
+| R1 | Evidence hardening: session-transcript provenance (C-1), bounded fuzzy anchoring (C-2), path re-validation (C-3), injective `inputHash`, D22 orphan split, D23 witnessed origination | `packages/evidence` | ⏳ |
+| R2 | Fail-closed structured-generation guardrail + offline tests; reserved frontmatter keys; drop legacy `volume.json`; corpus-index tests | `packages/model`, `packages/core` | ⏳ |
+| R3 | Share `nfc-ws-v1` with evidence; deliver the D16 end-to-end property; body-read deadline; refuse non-2xx | `packages/research` | ✅ |
 
 ## Wave 2 — Capability
 
