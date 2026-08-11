@@ -41,7 +41,27 @@
  *   - `snapshot.normalization`        <- `NORMALIZATION_ALGORITHM` ("nfc-ws-v1")
  *   - `snapshot.chars`                <- `SnapshotDigests.chars`
  *
- * T2.1b (or whatever binds this into `@shadow/evidence`) must still add:
+ * ## T2.1b — the research brief port and tool-agents
+ *
+ * `brief.ts` defines `ResearchBriefPort`, the seam `@shadow/agent` (Shadow,
+ * T3.3) depends on: give it a `ResearchBrief`, get back a `ResearchResult`
+ * whose `findings` are already bound to `sources` written into the
+ * evidence ledger. `WebResearchToolAgent` (`web-research-tool-agent.ts`) is
+ * the reference implementation — an `@shadow/model` agentic session armed
+ * with exactly three custom tools (`retrieval-tools.ts`:
+ * `search`/`fetch`/`submit_findings`), each a closure over this package's
+ * `RetrievalTransport` and `@shadow/evidence`'s `EvidenceStore`. See
+ * `web-research-tool-agent.ts`'s module doc for how that makes reaching the
+ * network any other way structurally hard, not just discouraged.
+ *
+ * `transcript-source.ts`'s `recordSessionTranscriptSource` is the *other*
+ * legitimate origin of a source record (D19/D23) — a session transcript,
+ * for `@shadow/agent` to cite when recording what the operator actually
+ * said.
+ *
+ * The gaps T2.1a's own doc comment (below) lists are exactly what
+ * `retrieval-tools.ts`'s `fetch` tool closes, by calling
+ * `EvidenceStore.putSourceFromRetrieval` itself:
  *   - `id` (ULID), `schemaVersion` — identity is the evidence ledger's job
  *   - `title`, `author`, `publishedAt` — not derivable from bytes alone;
  *     needs either page metadata parsing or a research-brief-level source
@@ -64,6 +84,13 @@
  * checking it before calling `putSource`.
  */
 
+export type {
+  Citation,
+  Finding,
+  ResearchBrief,
+  ResearchBriefPort,
+  ResearchResult,
+} from "./brief.ts";
 export { extractMainContent } from "./content.ts";
 export type {
   CreateRetrievalTransportOptions,
@@ -74,10 +101,15 @@ export {
   FixtureCorpusError,
   FixtureMissError,
   LiveSearchUnavailableError,
+  NoFindingsProducedError,
   PayloadTooLargeError,
+  ResearchAgentBusyError,
+  ResearchTurnFailedError,
   RetrievalNetworkError,
   RetrievalTimeoutError,
   ShadowResearchError,
+  SourceBudgetExceededError,
+  UnboundCitationError,
   UnsuccessfulHttpStatusError,
   UnsupportedContentTypeError,
 } from "./errors.ts";
@@ -93,6 +125,12 @@ export {
 } from "./live-transport.ts";
 export { RecordTransport } from "./record-transport.ts";
 export { ReplayTransport } from "./replay-transport.ts";
+export type { FetchedSourceEntry } from "./research-run.ts";
+export { ResearchRun, validateFindings } from "./research-run.ts";
+export type { ResearchToolsDeps } from "./retrieval-tools.ts";
+export { buildResearchTools, MAX_TOOL_RESULT_CHARS } from "./retrieval-tools.ts";
+export type { RecordSessionTranscriptSourceOptions } from "./transcript-source.ts";
+export { recordSessionTranscriptSource } from "./transcript-source.ts";
 export type {
   FetchedPage,
   FetchLike,
@@ -107,3 +145,8 @@ export type {
   SearchResponse,
   TransportKind,
 } from "./types.ts";
+export type {
+  ResearchSessionTuning,
+  WebResearchToolAgentDeps,
+} from "./web-research-tool-agent.ts";
+export { DEFAULT_RESEARCH_AGENT_ID, WebResearchToolAgent } from "./web-research-tool-agent.ts";
