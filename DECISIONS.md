@@ -158,3 +158,49 @@ linker oxlint follows workspace symlinks and errors unless `ignorePatterns` excl
 
 **Consequence to watch.** No TS 7 programmatic API also rules out ts-morph and custom
 transformers. Nothing in the planned architecture needs them.
+
+---
+
+## D9 — Evidence is a pillar, not a feature
+
+**Context.** The operator added an acceptance criterion mid-build: a Science One–like chain of
+evidence, so no volume content is hallucinated. Google Research's Science One framework
+defines the chain of evidence as two properties — **completeness** ("every claim in a research
+artifact must carry a recorded evidence chain") and **correctness** ("each chain must
+genuinely support the claim it is attached to") — enforced by a *CoE Audit* of four integrity
+checks, and it deliberately specifies properties rather than implementation.
+
+**Decision.** Add a tenth package, `@shadow/evidence`, owning the source/evidence/claim data
+model, the append-only evidence ledger, and the audit. `@shadow/research` produces evidence
+into it; `@shadow/agent` may only write chapter content that cites it; `@shadow/evaluation`
+measures it. Chapters are unpublishable until they pass the audit.
+
+**Why.** Grounding is a cross-cutting invariant over research, writing, and indexing. If it
+lived inside the research package it would be advisory, and Shadow could still write
+ungrounded prose. As a separate pillar with its own store, it becomes a gate every chapter
+must pass. Making it a package also makes it independently testable offline — the audit runs
+against stored snapshots with no network.
+
+**How the four Science One checks map to our domain:**
+
+| Science One | Shadow |
+|---|---|
+| Reference verification — bibliography cross-checked against academic APIs | **Source integrity** — every cited source was actually retrieved, and its stored snapshot's content hash still matches. Kills fabricated citations structurally: you cannot cite what was never fetched. |
+| Score verification — re-run code, compare reported numbers | **Span entailment** — the cited excerpt is checked to actually support the claim, via an LLM judge over the stored snapshot. |
+| Specification violation — does the code solve the task | **Claim completeness** — every claim-bearing sentence in a chapter carries an evidence tag; orphan claims fail the audit. |
+| Method–code alignment — LLM judge, paper vs implementation | **Index alignment** — index node summaries introduce no claim absent from the chapter body. |
+
+**Why the fourth check is ours and matters.** The index is generated content too, and it is
+what a consuming agent retrieves and reasons over first. An ungrounded node summary would
+poison retrieval while the chapter beneath it stayed clean. Auditing the index is the piece a
+naive port of Science One would miss.
+
+**Following Science One on repair:** claims that outrun their evidence are *restated
+conservatively against the source, not deleted*. Silent deletion would hide the failure from
+the operator; the point is that they see where their volume is thin.
+
+**Cost.** An LLM judging pass per chapter edit, and snapshot storage for every source. Both
+are bounded — snapshots are text, and entailment runs only over claims whose evidence changed.
+
+**Guardrail.** Research tool-agents are the *only* code permitted to originate a source
+record, and they can only do so from an actual retrieval. Shadow cannot mint a citation.

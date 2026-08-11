@@ -21,3 +21,5 @@ Shadow helps the operator to distill his beliefs and experience into curated vol
 - CLI is used in agentic reasoning over the volume
 - Writing volumes is done and guided via skills
 - The entire stack runs on the operator's AI subscriptions, NOT on api keys
+- A ScientistOne-like chain of evidence is applied to Shadow's research (https://research.google/blog/science-one-framework-a-verifiable-autonomous-research-framework-via-chain-of-evidence/), so every volume he
+  creates or edits is grounded in traceable sources and not hallucinated
