@@ -733,6 +733,67 @@ tightly coupled at exactly one point. Worth it.
 
 ---
 
+## D24 — Integrity resolution is exact-only; fuzzy anchoring is for drift alone
+
+**Context.** The Wave 2 review demonstrated, by execution, that a **fabricated claim passes the
+entire audit**. A snapshot saying *"standardized every sidebar measurement on an 8 px grid"*,
+cited by a claim whose `selector.exact` says *"4 px"* (edit distance 2), produced: C2 passed
+with only an `anchored-fuzzy` warning, the numeric sub-check validated the claim's "4" against
+the fabricated quote's own "4", and C3 judged entailment against the fabricated string. Every
+blocking check green, on a claim its own source contradicts.
+
+**The cause is a contradiction I left in the spec.** D22 says *"if the quote is not in the
+exact bytes we stored, the citation was fabricated or the snapshot was tampered with"* — while
+`EVIDENCE.md`'s resolution algorithm offers a fuzzy step, and C2 used it. But fuzzy resolution
+is only ever *coherent* against text that has drifted. A snapshot is immutable and
+content-addressed: there is no legitimate way for a quote to be nearly-but-not-quite present in
+it. The cooperative write path already requires an exact `indexOf` at bind time, so
+fuzzy-in-a-pinned-snapshot has exactly one cause — fabrication.
+
+**Decision, two parts:**
+
+1. **C2 resolves exact-only.** Fuzzy anchoring applies solely to re-anchoring against
+   *refetched* text on the drift path. An unresolvable quote in a pinned snapshot blocks, per
+   D22, with no fuzzy escape hatch.
+2. **The judge sees stored bytes, never writer-supplied text.** C3 and the numeric sub-check
+   must consume the **resolved snapshot slice**, not `selector.exact`. Today they read the
+   claim's own copy of the quote, so a fabricated quote is checked against itself — the check
+   is circular and cannot fail.
+
+Either part alone closes the hole. Both together make it structural: there is no path by which
+text that is not in the store reaches a judge.
+
+**Why this is the most important correction in the project so far.** The entire chain of
+evidence rests on one claim — *Shadow cannot write what it cannot cite*. A circular check
+makes that claim decorative. The lesson generalizes: **a verifier must never be handed the
+thing it is verifying**, and I specified exactly that without noticing.
+
+**Cost.** Slightly stricter authoring: a quote must match the snapshot byte-for-byte. That is
+the point.
+
+---
+
+## D25 — Everything claim-bearing is audited, including list items
+
+**Context.** The review found that unmarked prose inside list items and blockquotes is excluded
+from sentence segmentation entirely, so a hallucinated bullet — `- Linear caps row height at
+32px` — is invisible to C1b's check-worthiness sweep, invisible to C1a (no marker), and
+**never enters `narrativeRatio`'s numerator or denominator**.
+
+That last part is what makes it serious. D19's defense was never perfect classification; it was
+that *abuse is visible*. Here it is not visible: the exemption budget cannot see the exempted
+text. And design-guidance chapters — the genre Shadow exists to write — are the most
+bullet-heavy prose there is.
+
+**Decision.** `EVIDENCE.md` authorized excluding list *scaffolding*; the implementation excluded
+list *content*. Only the marker (`- `, `1. `) is scaffolding. List-item text is segmented and
+swept like any other prose. Anything still excluded must at minimum count toward the narrative
+budget, so the exemption stays visible.
+
+**Cost.** More sentences to classify per chapter, batched into the existing judge call.
+
+---
+
 ## D12 — The CLI is composable, and steers its caller in-band
 
 **Context.** The CLI's consumer is a language model with a token budget, not a human.
