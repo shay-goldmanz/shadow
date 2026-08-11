@@ -204,3 +204,59 @@ are bounded — snapshots are text, and entailment runs only over claims whose e
 
 **Guardrail.** Research tool-agents are the *only* code permitted to originate a source
 record, and they can only do so from an actual retrieval. Shadow cannot mint a citation.
+
+---
+
+## D10 — Design language: quiet, archival, pastel-on-paper
+
+**Context.** The operator asked for a clean, minimal, professional UI in the neighbourhood of
+Notion and Linear's design language — but our own, not a copy.
+
+**Decision.** A defined token set, committed before the SPA is built, so the look is a spec
+rather than an accumulation of choices.
+
+**Positioning.** Linear is high-contrast, dark-first, saturated indigo, dense and fast —
+it reads as *velocity*. Notion is near-monochrome warm grey, generous whitespace, near-zero
+chrome — it reads as *neutral surface*. Shadow is neither: it is an archive of considered
+belief, so it should read as **quiet and deliberate**. We take Linear's structural
+discipline (tight alignment, restrained borders, purposeful density) and Notion's calm
+content-first typography, then diverge on colour: warm paper neutrals rather than cool grey,
+with desaturated pastel accents that carry meaning instead of decorating.
+
+**Palette.** Warm paper ground, ink-navy text, muted sage as primary, dusty clay as the
+counterweight. Accents are desaturated enough to sit under body text without competing.
+
+| Token | Light | Dark | Use |
+|---|---|---|---|
+| `--bg` | `#FBFAF7` warm paper | `#14161A` | page ground |
+| `--surface` | `#FFFFFF` | `#1B1E23` | cards, panels |
+| `--surface-sunken` | `#F4F2ED` | `#101216` | wells, code, tree gutter |
+| `--border` | `#E6E2D9` | `#2A2E35` | hairlines, 1px only |
+| `--text` | `#1F2429` ink navy | `#E8E6E1` | body |
+| `--text-muted` | `#6B7280` | `#9AA0A8` | metadata, timestamps |
+| `--accent` | `#7C9885` muted sage | `#8FAE97` | primary action, active nav |
+| `--accent-soft` | `#E8EFE9` | `#232B26` | selected row, active tab fill |
+| `--clay` | `#C08A72` dusty clay | `#CE9A83` | citations, evidence links |
+| `--warn` | `#C9A227` | `#D9B540` | unaudited / thin evidence |
+| `--danger` | `#B4685E` | `#C87C71` | failed audit |
+
+**Semantic colour rule.** Colour is never decorative here. Sage means *this is yours /
+active*. Clay means *this is sourced* — it is the citation colour throughout, so evidence is
+visually traceable at a glance. Amber means *not yet grounded*. Red means *audit failed*.
+That mapping is the most distinctive thing about the UI and it falls directly out of D9.
+
+**Typography.** One serif, one sans, one mono. Chapter bodies set in a serif (the volume is
+prose meant to be read, not scanned); UI chrome in a system sans; identifiers and CLI output
+in mono. Body 16px/1.65, measure capped at ~68ch. This serif/sans split is a deliberate
+departure from both references, and it is what makes a volume feel like a *volume*.
+
+**Form.** Radius 6px (8px on cards). Borders over shadows — at most one soft shadow, on
+overlays only. Spacing on a 4px scale. Motion under 150ms, easing only, no bounce; respect
+`prefers-reduced-motion`.
+
+**Why.** Fixing this now means the SPA task is implementation, not design-by-subagent. The
+semantic colour rule also does real work: it makes the chain of evidence legible in the
+interface instead of buried in a data model.
+
+**Cost.** Two typefaces to load. Both themes must be maintained from day one — cheaper now
+than retrofitting dark mode later.
