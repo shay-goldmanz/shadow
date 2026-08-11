@@ -63,7 +63,7 @@ The pillars that do real work. This is where the acceptance criteria are won or 
 | # | Task | Owns | Depends on | State |
 |---|---|---|---|---|
 | T2.1a | `@shadow/research`: retrieval transport — live web + fixture record/replay (D2). No evidence coupling. | `packages/research` | T1.1 | ✅ `e5f0c85` |
-| T2.1b | `@shadow/research`: research-brief port and tool-agents that fetch and snapshot sources into the evidence ledger | `packages/research` | T2.1a, T1.2, T1.3 | ⬜ |
+| T2.1b | `@shadow/research`: research-brief port and tool-agents that fetch and snapshot sources into the evidence ledger | `packages/research` | T2.1a, T1.2, T1.3 | ✅ |
 | T2.2 | `@shadow/indexing`: `Indexer` — structural tree from headings + `when_to_use`/`not_for` frontmatter vocabulary; stable node identity; O(changed subtree) rebuild. **Zero LLM calls** (D11). | `packages/indexing` | T1.1 | ✅ `5b04a5d` |
 | T2.3 | `@shadow/indexing`: `Navigator` — agent-as-locator over the chapter index (D11a), `1/√(N+1)·Σ` rollup, ancestor-closure expansion, passages in document order, grade step ≤3 rounds. Also adopt core's corpus index slot and `chapterRelativePath`. | `packages/indexing` | T2.2, T1.4 | ✅ `1cb457a` |
 | T2.4 | `@shadow/evidence`: CoE Audit — source integrity, span entailment, claim completeness (checks 1–3 of D9), plus C5 chapter relevance as a non-blocking warning (D15) | `packages/evidence` | T1.3, T1.2 | ⬜ |
@@ -126,6 +126,9 @@ A few good e2e tests over coverage; unit tests only where correctness is subtle.
 5b. **Never rewrite history.** No `reset --hard`, no amending another agent's commit, no
    rebase. A history correction on a shared branch dropped a second agent's files back to
    untracked once already. If a commit came out wrong, fix it forward with a new commit.
+5c. **Never delete a file you did not create.** An agent ran `rm -f` on an untracked
+   root-level file belonging to nobody's task; untracked means git could not recover it.
+   Deleting is not part of any task here unless the task says so explicitly.
 6. **Commit green work before you run out of budget.** Subagents can be killed mid-task by a
    session limit. A task that dies with everything uncommitted loses all of it; one that has
    been committing incrementally loses only the last step. If a task must stop early, it
