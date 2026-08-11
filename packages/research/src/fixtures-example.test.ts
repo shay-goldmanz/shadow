@@ -13,7 +13,8 @@
 
 import { describe, expect, test } from "bun:test";
 import { fileURLToPath } from "node:url";
-import { extractMainContent, normalizeNfcWs } from "./content.ts";
+import { normalizeNfcWs } from "@shadow/evidence";
+import { extractMainContent } from "./content.ts";
 import { FixtureCorpus } from "./fixture-corpus.ts";
 import { ReplayTransport } from "./replay-transport.ts";
 

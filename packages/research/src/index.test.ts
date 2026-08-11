@@ -10,9 +10,10 @@ import { describe, expect, test } from "bun:test";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { computeSnapshotDigests, NORMALIZATION_ALGORITHM } from "@shadow/evidence";
 import {
-  computeSnapshotDigests,
   createRetrievalTransport,
+  extractMainContent,
   type FetchLike,
   type FetchResponseLike,
   FixtureMissError,
@@ -61,8 +62,8 @@ describe("@shadow/research public surface", () => {
         FixtureMissError,
       );
 
-      const digests = computeSnapshotDigests(replayed.bytes, html);
-      expect(digests.normalization).toBe("nfc-ws-v1");
+      const digests = computeSnapshotDigests(replayed.bytes, extractMainContent(html));
+      expect(NORMALIZATION_ALGORITHM).toBe("nfc-ws-v1");
       expect(digests.normalizedText).toContain("Public surface works.");
       expect(digests.normalizedText).not.toContain("Home");
       expect(digests.payloadSha256).toMatch(/^sha256:[0-9a-f]{64}$/);

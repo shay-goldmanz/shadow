@@ -3,25 +3,42 @@
  *
  * Live web fetching plus deterministic fixture record/replay, behind one
  * port (`RetrievalTransport`). This is deliberately narrow: it gets bytes
- * off the web (or a recorded fixture standing in for the web) and
- * normalizes them into the two digests `docs/DECISIONS.md` D16 requires.
- * It does **not** know about the evidence ledger, claims, or the model
- * package — see `docs/ARCHITECTURE.md`'s invariant for this pillar
- * ("the only pillar that may originate a source record, and only from a
- * real retrieval") and `docs/PLAN.md` T2.1b, which is the next task that
- * turns a `FetchedPage` into an evidence source record.
+ * off the web (or a recorded fixture standing in for the web) and extracts
+ * main content from HTML (`extractMainContent`) — the one part of
+ * `nfc-ws-v1` that needs an HTML parser and so belongs to the transport
+ * (`docs/EVIDENCE.md` amendment 4). It does **not** know about the
+ * evidence ledger, claims, or the model package — see
+ * `docs/ARCHITECTURE.md`'s invariant for this pillar ("the only pillar
+ * that may originate a source record, and only from a real retrieval")
+ * and `docs/PLAN.md` T2.1b, which is the next task that turns a
+ * `FetchedPage` into an evidence source record.
+ *
+ * **Normalization and digests are `@shadow/evidence`'s, not ours.** Steps
+ * 2-5 of `nfc-ws-v1` (`normalizeNfcWs`, `computeSnapshotDigests`,
+ * `SnapshotDigests`, `NORMALIZATION_ALGORITHM`) are owned exclusively by
+ * `@shadow/evidence`, which this package depends on and imports from
+ * directly — they are **not** re-exported here. This is deliberate: two
+ * packages independently exporting an identically-named
+ * `computeSnapshotDigests` is exactly the drift-and-collision hazard this
+ * dependency exists to close. T2.1b should do
+ * `extractMainContent` from `@shadow/research` and
+ * `normalizeNfcWs`/`computeSnapshotDigests` from `@shadow/evidence` — two
+ * distinct imports, no aliasing needed.
  *
  * ## Field mapping into `docs/EVIDENCE.md`'s source record
  *
  * This package already produces:
  *   - `retrieval.retrievedAt`   <- `FetchedPage.retrievedAt` / `SearchResponse.retrievedAt`
  *   - `retrieval.transport`     <- `FetchedPage.transport` ("live" | "fixture")
- *   - `retrieval.httpStatus`    <- `FetchedPage.httpStatus`
+ *   - `retrieval.httpStatus`    <- `FetchedPage.httpStatus` (2xx only by default — see `LiveTransportOptions.allowNon2xx`)
  *   - `retrieval.contentType`   <- `FetchedPage.contentType`
  *   - `url` / `finalUrl`        <- `FetchedPage.requestedUrl` / `.finalUrl`
+ *
+ * Combined with `@shadow/evidence`'s `computeSnapshotDigests(bytes,
+ * extractMainContent(html))`:
  *   - `snapshot.payloadSha256`        <- `SnapshotDigests.payloadSha256`
  *   - `snapshot.normalizedTextSha256` <- `SnapshotDigests.normalizedTextSha256`
- *   - `snapshot.normalization`        <- `SnapshotDigests.normalization` ("nfc-ws-v1")
+ *   - `snapshot.normalization`        <- `NORMALIZATION_ALGORITHM` ("nfc-ws-v1")
  *   - `snapshot.chars`                <- `SnapshotDigests.chars`
  *
  * T2.1b (or whatever binds this into `@shadow/evidence`) must still add:
@@ -36,15 +53,18 @@
  *   - `snapshot.archived` (optional Memento capture) — out of scope here
  *   - `authority.tier`, `authority.rationale`, `volatility` — editorial
  *     judgment, not something a transport can determine
+ *
+ * **Non-2xx contract.** `LiveTransport.fetchPage` refuses non-2xx
+ * responses by default, throwing `UnsuccessfulHttpStatusError` — a 404 or
+ * 500 error page never becomes a `FetchedPage`, so it can never be
+ * recorded as a fixture or promoted to a source record by accident. A
+ * caller that genuinely wants the error body (e.g. a link-rot checker)
+ * must opt in with `LiveTransportOptions.allowNon2xx: true`, in which case
+ * `FetchedPage.httpStatus` may be anything and T2.1b is responsible for
+ * checking it before calling `putSource`.
  */
 
-export {
-  computeSnapshotDigests,
-  extractMainContent,
-  NORMALIZATION_ALGORITHM,
-  normalizeNfcWs,
-  type SnapshotDigests,
-} from "./content.ts";
+export { extractMainContent } from "./content.ts";
 export type {
   CreateRetrievalTransportOptions,
   TransportMode,
@@ -58,6 +78,7 @@ export {
   RetrievalNetworkError,
   RetrievalTimeoutError,
   ShadowResearchError,
+  UnsuccessfulHttpStatusError,
   UnsupportedContentTypeError,
 } from "./errors.ts";
 export { FixtureCorpus } from "./fixture-corpus.ts";
