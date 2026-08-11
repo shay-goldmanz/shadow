@@ -1,0 +1,6 @@
+# happy-dom must be registered before React's module evaluation, and Bun's CJS
+# interop hoists react-dom ahead of a same-file side-effect import — so this has
+# to be a preload, not an import. It lives at the root because CI runs
+# `bun test` from here; a package-scoped bunfig only applies with --cwd.
+[test]
+preload = ["./packages/web/src/test/dom-setup.ts"]
