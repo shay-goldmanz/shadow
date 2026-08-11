@@ -35,9 +35,13 @@ export interface StructuredGenerationResult<Output> {
 
 export interface StructuredGenerationPort {
   /**
-   * @throws {StructuredGenerationError} on a schema-validation failure, a
-   *   transport/CLI error, or (per D5's guardrail) resolved credentials
-   *   that are not the operator's subscription.
+   * @throws {StructuredGenerationError} on a schema-validation failure or a
+   *   transport/CLI error.
+   * @throws {SubscriptionAuthError} per D5's guardrail — resolved
+   *   credentials that are not the operator's subscription, or (fail
+   *   closed) no confirmation of the operator's subscription was ever
+   *   observed at all. Mirrors Port 2's `AgenticSession.stream` contract
+   *   (`../ports/agentic-session.ts`).
    */
   generate<Output>(
     request: StructuredGenerationRequest<Output>,
