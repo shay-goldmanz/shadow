@@ -36,7 +36,7 @@ The layers everything else stands on. No feature work until these are green.
 | # | Task | Owns | Depends on | State |
 |---|---|---|---|---|
 | T1.1 | `@shadow/core`: Volume/Chapter domain model, `VolumeStore` port + filesystem impl, slug rules, frontmatter parsing. Unit tested. | `packages/core` | — | ✅ `5e7aa03` |
-| T1.2 | `@shadow/model`: structured-generation port + agentic-session port, the two adapters from D5, session reuse, **no-API-key guardrail test** | `packages/model` | T1.1 | ⬜ |
+| T1.2 | `@shadow/model`: structured-generation port + agentic-session port, the two adapters from D5, session reuse, **no-API-key guardrail test** | `packages/model` | T1.1 | ✅ `b784228` |
 | T1.3 | `@shadow/evidence`: package scaffold + domain model (Source, Snapshot, EvidenceSpan, Claim, Ledger) + append-only store + Tier 0 checks. Spec: `docs/EVIDENCE.md`. | `packages/evidence` | T1.1 | ⬜ |
 | T1.4 | `@shadow/core`: close the two gaps T2.2 found — corpus-level index slot, volume routing frontmatter, chapter relative-path accessor | `packages/core` | T1.1 | ⬜ |
 
@@ -51,7 +51,8 @@ The pillars that do real work. This is where the acceptance criteria are won or 
 
 | # | Task | Owns | Depends on | State |
 |---|---|---|---|---|
-| T2.1 | `@shadow/research`: research-brief port, retrieval transport (live web + fixture recorder per D2), tool-agents that fetch and snapshot sources into the evidence ledger | `packages/research` | T1.2, T1.3 | ⬜ |
+| T2.1a | `@shadow/research`: retrieval transport — live web + fixture record/replay (D2). No evidence coupling. | `packages/research` | T1.1 | ⬜ |
+| T2.1b | `@shadow/research`: research-brief port and tool-agents that fetch and snapshot sources into the evidence ledger | `packages/research` | T2.1a, T1.2, T1.3 | ⬜ |
 | T2.2 | `@shadow/indexing`: `Indexer` — structural tree from headings + `when_to_use`/`not_for` frontmatter vocabulary; stable node identity; O(changed subtree) rebuild. **Zero LLM calls** (D11). | `packages/indexing` | T1.1 | ✅ `5b04a5d` |
 | T2.3 | `@shadow/indexing`: `Navigator` — BM25 locator, `1/√(N+1)·Σ` rollup, ancestor-closure expansion, passages in document order, grade step ≤3 rounds (D11) | `packages/indexing` | T2.2 | ⬜ |
 | T2.4 | `@shadow/evidence`: CoE Audit — source integrity, span entailment, claim completeness (checks 1–3 of D9), plus C5 chapter relevance as a non-blocking warning (D15) | `packages/evidence` | T1.3, T1.2 | ⬜ |
