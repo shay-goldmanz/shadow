@@ -73,6 +73,25 @@ export class FileMissLog implements MissLogStore {
     await appendFile(this.path, `${JSON.stringify(entry)}\n`, "utf8");
   }
 
+  /**
+   * T2.8b (found by end-to-end testing): this used to parse inside a
+   * `.map()`, so one malformed line threw and destroyed every entry in the
+   * file — good ones before and after it — because `readAll` never got to
+   * return at all. That is unacceptable for a log this package's own docs
+   * call "the operator's authoring backlog" (D14): a single crash-mid-write
+   * or a hand-edit gone wrong should never erase every miss recorded
+   * around it.
+   *
+   * **Decision: surface, don't silently skip.** Each line is parsed
+   * independently now — a malformed one is excluded from the returned
+   * entries (so it cannot take the rest of the file down), but it is
+   * reported via `console.error` rather than swallowed silently. Silent
+   * data loss is exactly what put this bug here in the first place: a
+   * corrupt line that vanishes without a trace looks identical to a miss
+   * that was simply never logged, and the operator has no way to tell the
+   * difference. `MissLogEntry`/`MissLogStore`'s public shape is unchanged
+   * — this stays a drop-in fix, not a breaking one.
+   */
   async readAll(): Promise<readonly MissLogEntry[]> {
     let raw: string;
     try {
@@ -83,11 +102,24 @@ export class FileMissLog implements MissLogStore {
       }
       throw error;
     }
-    return raw
-      .split("\n")
-      .map((line) => line.trim())
-      .filter((line) => line.length > 0)
-      .map((line) => JSON.parse(line) as MissLogEntry);
+
+    const entries: MissLogEntry[] = [];
+    const lines = raw.split("\n");
+    for (const [index, rawLine] of lines.entries()) {
+      const line = rawLine.trim();
+      if (line.length === 0) {
+        continue;
+      }
+      try {
+        entries.push(JSON.parse(line) as MissLogEntry);
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        console.error(
+          `FileMissLog: skipping malformed line ${index + 1} in ${this.path} (${message})`,
+        );
+      }
+    }
+    return entries;
   }
 }
 

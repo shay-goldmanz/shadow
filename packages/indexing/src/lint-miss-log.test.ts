@@ -1,5 +1,5 @@
-import { describe, expect, test } from "bun:test";
-import { mkdtemp, rm } from "node:fs/promises";
+import { afterEach, beforeEach, describe, expect, type Mock, spyOn, test } from "bun:test";
+import { appendFile, mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { FileMissLog, InMemoryMissLog, type MissLogEntry } from "./lint-miss-log.ts";
@@ -84,6 +84,52 @@ describe("FileMissLog", () => {
       expect(lines).toHaveLength(2);
       expect(JSON.parse(lines[0] as string).task).toBe("first");
       expect(JSON.parse(lines[1] as string).task).toBe("second");
+    });
+  });
+
+  describe("T2.8b: resilience to a malformed line", () => {
+    let errorSpy: Mock<typeof console.error>;
+
+    beforeEach(() => {
+      errorSpy = spyOn(console, "error").mockImplementation(() => {});
+    });
+
+    afterEach(() => {
+      errorSpy.mockRestore();
+    });
+
+    test("a single corrupt line does not destroy the entries before or after it", async () => {
+      await withTmpFile(async (path) => {
+        const log = new FileMissLog(path);
+        await log.append(entry("before the corruption", "C1"));
+        // Simulate a crash mid-write / hand-edit gone wrong: an invalid
+        // JSON line appended directly, bypassing `append`.
+        await appendFile(path, "{not valid json\n", "utf8");
+        await log.append(entry("after the corruption", "C2"));
+
+        const all = await log.readAll();
+        expect(all).toHaveLength(2);
+        expect(all[0]?.task).toBe("before the corruption");
+        expect(all[1]?.task).toBe("after the corruption");
+      });
+    });
+
+    test("the malformed line is surfaced (console.error), not silently swallowed", async () => {
+      await withTmpFile(async (path) => {
+        await appendFile(path, "not json at all\n", "utf8");
+        await new FileMissLog(path).readAll();
+        expect(errorSpy).toHaveBeenCalledTimes(1);
+        const [message] = errorSpy.mock.calls[0] ?? [];
+        expect(String(message)).toContain("malformed line");
+      });
+    });
+
+    test("a log that is corrupt on every line returns no entries but does not throw", async () => {
+      await withTmpFile(async (path) => {
+        await appendFile(path, "{bad\nalso bad\n", "utf8");
+        expect(await new FileMissLog(path).readAll()).toEqual([]);
+        expect(errorSpy).toHaveBeenCalledTimes(2);
+      });
     });
   });
 });
