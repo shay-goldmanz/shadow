@@ -56,6 +56,8 @@ export function preservationBound(originalLength: number): number {
 export interface RepairDecision {
   readonly claimId: ClaimId;
   readonly label: string;
+  /** The chapter being repaired (T3.6). Supplied by the caller — never inferred or defaulted, since a `Claim` does not carry its own chapter. */
+  readonly chapter: string;
   readonly from: string;
   readonly to: string;
   readonly reason: string;
@@ -69,11 +71,14 @@ export interface RepairDecision {
  * Apply the preservation-bound guardrail to one proposed restatement. Pure
  * — no model, no I/O. `claim.text` (the sentence as written, what the
  * operator actually reads) is what gets restated, not `decontextualized`
- * (that field exists purely for judging outside the paragraph).
+ * (that field exists purely for judging outside the paragraph). `chapter`
+ * is the chapter actually being repaired (T3.6) — the caller's
+ * responsibility, since a `Claim` does not carry it.
  */
 export function applyPreservationBound(
   claim: Pick<Claim, "id" | "label" | "text">,
   proposal: RestatementProposal,
+  chapter: string,
 ): RepairDecision {
   const from = claim.text;
   const levenshtein = levenshteinDistance(from, proposal.to);
@@ -81,6 +86,7 @@ export function applyPreservationBound(
   return {
     claimId: claim.id,
     label: claim.label,
+    chapter,
     from,
     to: proposal.to,
     reason: proposal.reason,
@@ -99,6 +105,7 @@ export function toLedgerEvent(
     ts,
     event: "claim.restated",
     claimId: decision.claimId,
+    chapter: decision.chapter,
     from: decision.from,
     to: decision.to,
     reason: decision.reason,
@@ -132,11 +139,16 @@ export function buildRestatementRequests(
  * (non-repairable claims are simply absent from the result). Callers apply
  * `"applied"` decisions to the claim/chapter text and log every decision —
  * applied or escalated alike — via `toLedgerEvent`.
+ *
+ * `chapter` is the chapter actually being repaired (T3.6) — `claims` alone
+ * doesn't carry it (a `Claim` is chapter-agnostic), so the caller, which
+ * already knows which chapter it is publishing, supplies it explicitly.
  */
 export async function runRepairLoop(
   claims: readonly Claim[],
   restater: ClaimRestater,
   evidenceExcerptsFor: (claim: Claim) => readonly string[],
+  chapter: string,
 ): Promise<readonly RepairDecision[]> {
   const repairable = claims.filter((claim) => isRepairable(claim.verification.status));
   if (repairable.length === 0) return [];
@@ -154,7 +166,7 @@ export async function runRepairLoop(
     if (!proposal) {
       throw new Error(`Missing restatement proposal for claim "${claim.label}"`);
     }
-    return applyPreservationBound(claim, proposal);
+    return applyPreservationBound(claim, proposal, chapter);
   });
 }
 

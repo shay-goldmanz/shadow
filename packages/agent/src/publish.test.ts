@@ -189,7 +189,11 @@ describe("publishChapter — conservative restatement (D9/D21)", () => {
       const ledger = await evidenceStore.readLedger(volume);
       const restatedEvents = ledger.filter((e) => e.event === "claim.restated");
       expect(restatedEvents).toHaveLength(1);
-      expect(restatedEvents[0]).toMatchObject({ outcome: "applied", to: restated });
+      expect(restatedEvents[0]).toMatchObject({
+        outcome: "applied",
+        to: restated,
+        chapter: "partial-chapter",
+      });
     });
   });
 
@@ -244,7 +248,164 @@ describe("publishChapter — conservative restatement (D9/D21)", () => {
       const ledger = await evidenceStore.readLedger(volume);
       const restatedEvents = ledger.filter((e) => e.event === "claim.restated");
       expect(restatedEvents).toHaveLength(1);
-      expect(restatedEvents[0]).toMatchObject({ outcome: "escalated", from: original });
+      expect(restatedEvents[0]).toMatchObject({
+        outcome: "escalated",
+        from: original,
+        chapter: "escalated-chapter",
+      });
+    });
+  });
+});
+
+describe("publishChapter — claim.restated is scoped to its chapter (T3.6)", () => {
+  test("filtering a volume-wide ledger by chapter returns only that chapter's restatements", async () => {
+    await withVolumeHarness(async ({ evidenceStore, volumeStore, volume }) => {
+      const restatedText = "Restated within the preservation bound for this fixture.";
+
+      async function publishOnePartialClaimChapter(slug: string, claimText: string) {
+        const { chapter } = await draftSimpleChapter({ evidenceStore, volumeStore }, volume, {
+          slug,
+          claimText,
+          quote: "we settled on borders instead of shadows",
+        });
+        await publishChapter(
+          {
+            volumeStore,
+            evidenceStore,
+            indexer: freshIndexer(),
+            checkWorthinessClassifier: alwaysNarrativeClassifier,
+            entailmentRelevanceJudge: scriptedEntailmentJudge((input) => ({
+              entailment: {
+                status: input.decontextualized === claimText ? "partial" : "supported",
+                rationale: "test fixture",
+              },
+              relevance: { relevance: "on-topic", rationale: "test fixture" },
+            })),
+            claimRestater: scriptedClaimRestater(() => ({
+              to: restatedText,
+              reason: "test fixture restatement",
+            })),
+          },
+          volume,
+          chapter.slug,
+        );
+        return chapter;
+      }
+
+      const chapterA = await publishOnePartialClaimChapter(
+        "ledger-scope-a",
+        "Chapter A never uses shadows.",
+      );
+      const chapterB = await publishOnePartialClaimChapter(
+        "ledger-scope-b",
+        "Chapter B never uses shadows.",
+      );
+
+      const ledger = await evidenceStore.readLedger(volume);
+      const restatedEvents = ledger.filter((e) => e.event === "claim.restated");
+      expect(restatedEvents).toHaveLength(2);
+
+      const forA = restatedEvents.filter((e) => e.chapter === chapterA.slug);
+      const forB = restatedEvents.filter((e) => e.chapter === chapterB.slug);
+      expect(forA).toHaveLength(1);
+      expect(forB).toHaveLength(1);
+      expect(forA[0]?.from).toBe("Chapter A never uses shadows.");
+      expect(forB[0]?.from).toBe("Chapter B never uses shadows.");
+    });
+  });
+
+  test("a restatement survives its claim's label being retired from the chapter", async () => {
+    await withVolumeHarness(async ({ evidenceStore, volumeStore, volume }) => {
+      const original = "Linear never uses shadows.";
+      const restated = "Linear's documentation emphasises borders over shadows.";
+
+      const { chapter } = await draftSimpleChapter({ evidenceStore, volumeStore }, volume, {
+        slug: "retired-label-chapter",
+        claimText: original,
+        quote: "we settled on borders instead of shadows",
+      });
+
+      await publishChapter(
+        {
+          volumeStore,
+          evidenceStore,
+          indexer: freshIndexer(),
+          checkWorthinessClassifier: alwaysNarrativeClassifier,
+          entailmentRelevanceJudge: scriptedEntailmentJudge((input) => ({
+            entailment: {
+              status: input.decontextualized === original ? "partial" : "supported",
+              rationale: "test fixture",
+            },
+            relevance: { relevance: "on-topic", rationale: "test fixture" },
+          })),
+          claimRestater: scriptedClaimRestater(() => ({
+            to: restated,
+            reason: "overclaim: source states a preference, not an absolute",
+          })),
+        },
+        volume,
+        chapter.slug,
+      );
+
+      // The operator now edits the chapter and removes the `c1` claim
+      // entirely (D18: the label is never reused after this). Re-drafting
+      // over the same slug with a claim set that no longer includes "c1"
+      // is exactly what `putClaims` uses to detect and retire it.
+      const source = await evidenceStore.putSourceFromRetrieval(
+        volume,
+        {
+          requestedUrl: "https://example.test/retired-label-chapter-2",
+          finalUrl: "https://example.test/retired-label-chapter-2",
+          httpStatus: 200,
+          contentType: "text/plain",
+          bytes: new TextEncoder().encode("a completely different topic"),
+          extractedText: "a completely different topic",
+          retrievedAt: "2026-08-11T00:00:00.000Z",
+          transport: "fixture",
+        },
+        {
+          title: "Test source 2",
+          agent: "test",
+          authority: { tier: "secondary", rationale: "test" },
+          volatility: "unknown",
+        },
+      );
+      await draftChapter({ evidenceStore, volumeStore }, volume, {
+        slug: "retired-label-chapter",
+        title: "Chapter retired-label-chapter",
+        body: "This chapter is now about something else entirely.[^c2]",
+        frontmatter: { when_to_use: "testing publish" },
+        claims: [
+          {
+            label: "c2",
+            kind: "sourced",
+            text: "This chapter is now about something else entirely.",
+            evidence: [{ sourceId: source.id, quote: "a completely different topic" }],
+          },
+        ],
+      });
+
+      // The claim list no longer mentions "c1" — cross-referencing the
+      // chapter's *current* claims would miss the earlier restatement.
+      const sidecar = await evidenceStore.getClaims(volume, toChapterSlug("retired-label-chapter"));
+      const currentLabels = new Set(sidecar?.claims.map((c) => c.label) ?? []);
+      expect(currentLabels.has("c1")).toBe(false);
+
+      const retired = await evidenceStore.getRetiredLabels(
+        volume,
+        toChapterSlug("retired-label-chapter"),
+      );
+      expect(retired.has("c1")).toBe(true);
+
+      // Filtering the ledger by `chapter` still finds the restatement, even
+      // though its label is gone from the sidecar — the edge case T3.6
+      // exists to fix.
+      const ledger = await evidenceStore.readLedger(volume);
+      const restatedForChapter = ledger.filter(
+        (e) => e.event === "claim.restated" && e.chapter === "retired-label-chapter",
+      );
+      expect(restatedForChapter).toHaveLength(1);
+      expect(restatedForChapter[0]).toMatchObject({ outcome: "applied", to: restated });
     });
   });
 });

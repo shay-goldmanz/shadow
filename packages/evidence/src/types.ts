@@ -240,6 +240,16 @@ export interface ClaimRestatedEvent {
   readonly ts: string;
   readonly event: "claim.restated";
   readonly claimId: ClaimId;
+  /**
+   * The chapter this restatement happened in (T3.6, `docs/API.md` "`claim.restated`
+   * carries its chapter"). The ledger is volume-wide but a restatement belongs to one
+   * chapter, matching `AuditCompletedEvent.chapter` — same field name and type.
+   * Required: a label deleted from a chapter still has ledger history (D18 labels are
+   * never reused), so this is the only reliable way to scope the ledger to a chapter
+   * without cross-referencing the chapter's *current* claim list, which is wrong at
+   * that edge.
+   */
+  readonly chapter: string;
   readonly from: string;
   readonly to: string;
   readonly reason: string;

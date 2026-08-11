@@ -49,10 +49,14 @@ describe("isRepairable / REPAIRABLE_STATUSES", () => {
 describe("applyPreservationBound", () => {
   test("a conservative restatement within bound is applied", () => {
     const claim = makeClaim({ label: "lin-shadows", text: "Linear never uses shadows." });
-    const decision = applyPreservationBound(claim, {
-      to: "Linear's documentation emphasises borders over shadows.",
-      reason: "overclaim: source states a preference, not an absolute",
-    });
+    const decision = applyPreservationBound(
+      claim,
+      {
+        to: "Linear's documentation emphasises borders over shadows.",
+        reason: "overclaim: source states a preference, not an absolute",
+      },
+      "how-linear-designs-ui",
+    );
     expect(decision.outcome).toBe("applied");
     expect(decision.from).toBe("Linear never uses shadows.");
     expect(decision.levenshtein).toBeGreaterThan(0);
@@ -61,29 +65,58 @@ describe("applyPreservationBound", () => {
 
   test("a restatement exceeding the preservation bound is rejected and escalated", () => {
     const claim = makeClaim({ label: "lin-shadows", text: "Linear never uses shadows." });
-    const decision = applyPreservationBound(claim, {
-      to: "The retrieved document instead discusses an entirely unrelated topic about typography, spacing systems, onboarding flows, and how the design team runs its weekly critique sessions across every product surface.",
-      reason: "attempted full replacement",
-    });
+    const decision = applyPreservationBound(
+      claim,
+      {
+        to: "The retrieved document instead discusses an entirely unrelated topic about typography, spacing systems, onboarding flows, and how the design team runs its weekly critique sessions across every product surface.",
+        reason: "attempted full replacement",
+      },
+      "how-linear-designs-ui",
+    );
     expect(decision.outcome).toBe("escalated");
     // The original is left untouched — `from` records what it was, not what it becomes.
     expect(decision.from).toBe("Linear never uses shadows.");
     expect(decision.levenshtein).toBeGreaterThan(decision.bound);
   });
 
+  test("carries the chapter it was repaired in, unchanged through to the ledger event", () => {
+    const claim = makeClaim({ label: "lin-shadows", text: "Linear never uses shadows." });
+    const decision = applyPreservationBound(
+      claim,
+      {
+        to: "Linear's documentation emphasises borders over shadows.",
+        reason: "overclaim: source states a preference, not an absolute",
+      },
+      "how-linear-designs-ui",
+    );
+    expect(decision.chapter).toBe("how-linear-designs-ui");
+    const event = toLedgerEvent(decision, "2026-08-11T00:00:00Z");
+    expect(event.chapter).toBe("how-linear-designs-ui");
+  });
+
   test("logs the distance either way", () => {
     const claim = makeClaim({ label: "x", text: "Short original." });
-    const applied = applyPreservationBound(claim, { to: "Short original, tweaked.", reason: "r" });
-    const escalated = applyPreservationBound(claim, {
-      to: "A completely different sentence about something else entirely, replacing the original wholesale.",
-      reason: "r",
-    });
+    const applied = applyPreservationBound(
+      claim,
+      { to: "Short original, tweaked.", reason: "r" },
+      "some-chapter",
+    );
+    const escalated = applyPreservationBound(
+      claim,
+      {
+        to: "A completely different sentence about something else entirely, replacing the original wholesale.",
+        reason: "r",
+      },
+      "some-chapter",
+    );
     const appliedEvent = toLedgerEvent(applied, "2026-08-11T00:00:00Z");
     const escalatedEvent = toLedgerEvent(escalated, "2026-08-11T00:00:00Z");
     expect(appliedEvent.outcome).toBe("applied");
     expect(appliedEvent.levenshtein).toBe(applied.levenshtein);
+    expect(appliedEvent.chapter).toBe("some-chapter");
     expect(escalatedEvent.outcome).toBe("escalated");
     expect(escalatedEvent.levenshtein).toBe(escalated.levenshtein);
+    expect(escalatedEvent.chapter).toBe("some-chapter");
   });
 });
 
@@ -103,15 +136,19 @@ describe("buildRestatementRequests / runRepairLoop", () => {
       { to: "Notion often uses generous whitespace.", reason: "softened absolute claim" },
     ]);
 
-    const decisions = await runRepairLoop([partial, supported], restater, () => [
-      "the source discusses whitespace generally",
-    ]);
+    const decisions = await runRepairLoop(
+      [partial, supported],
+      restater,
+      () => ["the source discusses whitespace generally"],
+      "how-notion-designs-ui",
+    );
 
     expect(restater.calls).toHaveLength(1);
     expect(restater.calls[0]).toHaveLength(1);
     expect(decisions).toHaveLength(1);
     expect(decisions[0]?.label).toBe("partial-claim");
     expect(decisions[0]?.outcome).toBe("applied");
+    expect(decisions[0]?.chapter).toBe("how-notion-designs-ui");
   });
 
   test("no repairable claims means the restater is never invoked", async () => {
@@ -120,7 +157,7 @@ describe("buildRestatementRequests / runRepairLoop", () => {
       verification: makeVerification({ status: "supported" }),
     });
     const restater = new FakeRestater([]);
-    const decisions = await runRepairLoop([supported], restater, () => []);
+    const decisions = await runRepairLoop([supported], restater, () => [], "some-chapter");
     expect(decisions).toEqual([]);
     expect(restater.calls).toHaveLength(0);
   });

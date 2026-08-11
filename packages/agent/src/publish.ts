@@ -171,8 +171,11 @@ export async function publishChapter(
     isRepairable(claim.verification.status),
   );
   if (repairable.length > 0) {
-    const decisions = await runRepairLoop(result.sidecar.claims, deps.claimRestater, (claim) =>
-      claim.evidence.map((span) => span.selector.exact),
+    const decisions = await runRepairLoop(
+      result.sidecar.claims,
+      deps.claimRestater,
+      (claim) => claim.evidence.map((span) => span.selector.exact),
+      chapter,
     );
     repairs.push(...decisions);
     for (const decision of decisions) {
