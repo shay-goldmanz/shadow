@@ -80,7 +80,7 @@ actually catch an injected hallucination? Both must be shown, not asserted.
 | # | Task | Owns | Depends on | State |
 |---|---|---|---|---|
 | T3.1 | `@shadow/cli`: `discover`, `navigate`, `read` commands; composable Unix-citizen surface with in-band `next_steps` steering (D12) | `packages/cli` | T1.1, T2.3 | ✅ `0b43c98` |
-| T3.2 | Skills: volume-writing skill guiding Shadow, consumer skill for coding agents, `shadow install` to place it | `skills/`, `packages/cli` | T3.1 | ⬜ |
+| T3.2 | Skills: volume-writing skill guiding Shadow, consumer skill for coding agents, `shadow install` to place it | `skills/`, `packages/cli` | T3.1 | ✅ |
 | T3.3 | `@shadow/agent`: Shadow — intent handling, research delegation, skill-guided chapter writing, reindex triggering | `packages/agent` | T2.1, T2.2, T2.4 | ⬜ |
 | T3.4 | `@shadow/api`: Bun HTTP server, volume CRUD, SSE streaming of Shadow's turns | `packages/api` | T3.3 | ⬜ |
 | T3.5 | `@shadow/web`: React SPA — volume list, create, chat, chapter + index-tree viewer. Implements the D10 design language exactly; the semantic colour rule makes evidence legible in the UI. | `packages/web` | T3.4 | ⬜ |
