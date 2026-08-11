@@ -11,8 +11,10 @@
   },
   "dependencies": {
     "@shadow/core": "workspace:*",
-    "@shadow/model": "workspace:*",
+    "@shadow/evidence": "workspace:*",
     "@shadow/indexing": "workspace:*",
-    "@shadow/research": "workspace:*"
+    "@shadow/model": "workspace:*",
+    "@shadow/research": "workspace:*",
+    "zod": "^4.4.3"
   }
 }
