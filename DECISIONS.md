@@ -115,3 +115,46 @@ node summarization into as few sessions as correctness allows.
 than in actual work.
 
 **Cost.** Session state to manage. Contained inside the model package.
+
+---
+
+## D7 — No build step: Bun runs TypeScript source directly
+
+**Context.** TypeScript 7.0.2 is GA (package `typescript@7`, binary `tsc` — the `tsgo` binary
+and `@typescript/native-preview` are both gone). Bun 1.3.14 executes TypeScript natively.
+
+**Decision.** Internal packages set `exports` to their `.ts` source. No `dist/`, no compile
+step, no project references. `tsc` runs purely as a type-checker under `noEmit`, fanned out
+with `bun --filter '*' typecheck`.
+
+**Why.** Nothing here publishes to npm, so declaration emit buys nothing and costs a build
+graph. It also removes the stale-`dist` class of bug entirely — every run reads the source
+the tests type-checked. TS 7 forbids `composite: true` with `noEmit: true`, so the choice is
+genuinely either/or; without a publishing requirement, no-build wins.
+
+**Cost.** If a package ever needs publishing, it moves to composite emit on its own. The
+`exports` field is the only thing that changes for consumers.
+
+---
+
+## D8 — oxlint for linting, Biome for formatting, `bun test` for tests
+
+**Context.** TypeScript 7.0 ships **no programmatic API** (slated for 7.1). typescript-eslint
+is consequently broken on TS 7 and the maintainers have deferred support.
+
+**Decision.** `oxlint` + `oxlint-tsgolint` for linting including type-aware rules; Biome with
+its linter disabled for formatting and import sorting; `bun test` for all tests.
+
+**Why.** This is forced, not preferred — the conventional ESLint stack cannot run on our
+compiler. oxlint's type-aware mode delegates to `tsgolint`, which wraps the same Go compiler
+core as TS 7, so it is natively compatible and versioned against it. `bun test` already
+covers what we need for both unit and e2e work (coverage, watch, JUnit, `--isolate`,
+`--no-orphans` for server-spawning e2e), and adding Vitest would drag in a parallel Vite
+toolchain for no gain.
+
+**Cost.** Two tools instead of one, and a known sharp edge: under Bun's default isolated
+linker oxlint follows workspace symlinks and errors unless `ignorePatterns` excludes
+`node_modules`. Encoded in `.oxlintrc.json` from the start.
+
+**Consequence to watch.** No TS 7 programmatic API also rules out ts-morph and custom
+transformers. Nothing in the planned architecture needs them.
