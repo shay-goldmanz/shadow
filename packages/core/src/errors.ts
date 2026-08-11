@@ -70,3 +70,19 @@ export class ChapterParseError extends ShadowCoreError {
     super(`Failed to parse chapter "${chapterSlug}": ${reason}`);
   }
 }
+
+/**
+ * An on-disk `VOLUME.md` document could not be parsed as frontmatter +
+ * Markdown. Volumes are hand-editable by the operator (D4), so a malformed
+ * file is an expected failure mode, not a crash.
+ */
+export class VolumeParseError extends ShadowCoreError {
+  override readonly name = "VolumeParseError";
+
+  constructor(
+    public readonly volumeSlug: string,
+    public readonly reason: string,
+  ) {
+    super(`Failed to parse volume "${volumeSlug}": ${reason}`);
+  }
+}

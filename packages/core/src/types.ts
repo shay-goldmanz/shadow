@@ -7,6 +7,16 @@ export interface Volume {
   readonly slug: VolumeSlug;
   readonly title: string;
   readonly description: string;
+  /**
+   * All frontmatter fields other than `title`, `createdAt`, `updatedAt` —
+   * the volume-level counterpart of `Chapter.frontmatter`. Round-trips
+   * losslessly through `VOLUME.md`, including keys this package doesn't
+   * own — in particular the `when_to_use` / `not_for` / `keywords` routing
+   * signals `@shadow/indexing` attaches for volume-level routing
+   * (`docs/INDEXING.md`). This package never inspects, validates, or drops
+   * keys it doesn't own, for the same reason it doesn't for chapters.
+   */
+  readonly frontmatter: Readonly<Record<string, unknown>>;
   readonly createdAt: Date;
   readonly updatedAt: Date;
 }
@@ -17,12 +27,21 @@ export interface VolumeInput {
   readonly title: string;
   /** Defaults to `""` if omitted. */
   readonly description?: string;
+  /** Defaults to `{}` if omitted. */
+  readonly frontmatter?: Readonly<Record<string, unknown>>;
 }
 
 /** Input to `VolumeStore.updateVolume`. Omitted fields are left unchanged. */
 export interface VolumeUpdate {
   readonly title?: string;
   readonly description?: string;
+  /**
+   * When given, replaces the volume's frontmatter wholesale (same
+   * upsert-not-merge semantics as `ChapterInput.frontmatter` in
+   * `putChapter`) — callers that want to preserve existing keys must spread
+   * them in themselves. Omit to leave the existing frontmatter unchanged.
+   */
+  readonly frontmatter?: Readonly<Record<string, unknown>>;
 }
 
 /**

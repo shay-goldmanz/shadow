@@ -14,6 +14,7 @@ export {
   ShadowCoreError,
   VolumeAlreadyExistsError,
   VolumeNotFoundError,
+  VolumeParseError,
 } from "./errors.ts";
 export { FileSystemVolumeStore } from "./filesystem-volume-store.ts";
 export type { ChapterSlug, VolumeSlug } from "./slug.ts";

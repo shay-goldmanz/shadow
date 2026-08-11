@@ -8,9 +8,15 @@ import { VolumeLayout } from "./layout.ts";
 import type { ChapterSlug, VolumeSlug } from "./slug.ts";
 import { isValidChapterSlug, isValidVolumeSlug, toChapterSlug, toVolumeSlug } from "./slug.ts";
 import type { Chapter, ChapterInput, Volume, VolumeInput, VolumeUpdate } from "./types.ts";
+import { parseVolumeDocument, serializeVolumeDocument } from "./volume-frontmatter.ts";
 import type { VolumeStore } from "./volume-store.ts";
 
-/** On-disk shape of `volume.json`. Dates are ISO strings; everything else matches `Volume`. */
+/**
+ * Legacy on-disk shape of `volume.json`, from before `VOLUME.md` existed.
+ * Dates are ISO strings; everything else matches `Volume` minus
+ * `frontmatter`, which legacy volumes don't have (treated as `{}` on read).
+ * Still read for backward compatibility; never written by this version.
+ */
 interface VolumeRecord {
   slug: string;
   title: string;
@@ -51,8 +57,7 @@ export class FileSystemVolumeStore implements VolumeStore {
   // ---- volumes --------------------------------------------------------
 
   async createVolume(input: VolumeInput): Promise<Volume> {
-    const metaPath = this.layout.volumeMetaPath(input.slug);
-    if (await Bun.file(metaPath).exists()) {
+    if (await this.volumeRecordExists(input.slug)) {
       throw new VolumeAlreadyExistsError(input.slug);
     }
     const now = new Date();
@@ -60,6 +65,7 @@ export class FileSystemVolumeStore implements VolumeStore {
       slug: input.slug,
       title: input.title,
       description: input.description ?? "",
+      frontmatter: input.frontmatter ?? {},
       createdAt: now,
       updatedAt: now,
     };
@@ -99,6 +105,7 @@ export class FileSystemVolumeStore implements VolumeStore {
       ...existing,
       title: patch.title ?? existing.title,
       description: patch.description ?? existing.description,
+      frontmatter: patch.frontmatter ?? existing.frontmatter,
       updatedAt: new Date(),
     };
     await this.writeVolumeRecord(updated);
@@ -191,7 +198,23 @@ export class FileSystemVolumeStore implements VolumeStore {
     await Bun.write(this.layout.indexPath(volume), `${JSON.stringify(index, null, 2)}\n`);
   }
 
-  // ---- evidence path resolution (narrow port for @shadow/evidence) ------
+  // ---- corpus-level index (opaque to this package) -----------------------
+
+  async readCorpusIndex<T = unknown>(): Promise<T | undefined> {
+    const file = Bun.file(this.layout.corpusIndexPath());
+    if (!(await file.exists())) {
+      return undefined;
+    }
+    // Trust boundary: same as readIndex — opaque JSON, shape asserted by
+    // the caller (@shadow/indexing).
+    return (await file.json()) as T;
+  }
+
+  async writeCorpusIndex(index: unknown): Promise<void> {
+    await Bun.write(this.layout.corpusIndexPath(), `${JSON.stringify(index, null, 2)}\n`);
+  }
+
+  // ---- path resolution (narrow port for @shadow/evidence and others) ----
 
   evidenceDir(volume: VolumeSlug): string {
     return this.layout.evidenceDir(volume);
@@ -204,37 +227,54 @@ export class FileSystemVolumeStore implements VolumeStore {
     return dir;
   }
 
+  chapterRelativePath(volume: VolumeSlug, chapter: ChapterSlug): string {
+    return this.layout.chapterRelativePath(volume, chapter);
+  }
+
   // ---- internals ----------------------------------------------------------
 
+  /** Existence check across both the canonical (`VOLUME.md`) and legacy (`volume.json`) formats. */
+  private async volumeRecordExists(slug: VolumeSlug): Promise<boolean> {
+    if (await Bun.file(this.layout.volumeDocPath(slug)).exists()) {
+      return true;
+    }
+    return Bun.file(this.layout.volumeMetaPath(slug)).exists();
+  }
+
   private async readVolumeRecord(slug: VolumeSlug): Promise<Volume> {
-    const file = Bun.file(this.layout.volumeMetaPath(slug));
-    if (!(await file.exists())) {
+    const docFile = Bun.file(this.layout.volumeDocPath(slug));
+    if (await docFile.exists()) {
+      return parseVolumeDocument(slug, await docFile.text());
+    }
+
+    // Backward compatibility: a volume written before VOLUME.md existed has
+    // only volume.json, with no frontmatter concept — treated as `{}`.
+    const legacyFile = Bun.file(this.layout.volumeMetaPath(slug));
+    if (!(await legacyFile.exists())) {
       throw new VolumeNotFoundError(slug);
     }
-    // Trust boundary: volume.json is written only by writeVolumeRecord below,
-    // so this shape is trusted rather than schema-validated at read time.
-    const record = (await file.json()) as VolumeRecord;
+    // Trust boundary: volume.json was written only by this package's own
+    // (now-retired) writer, so this shape is trusted rather than
+    // schema-validated at read time — same posture as the VOLUME.md path.
+    const record = (await legacyFile.json()) as VolumeRecord;
     return {
       slug: toVolumeSlug(record.slug),
       title: record.title,
       description: record.description,
+      frontmatter: {},
       createdAt: new Date(record.createdAt),
       updatedAt: new Date(record.updatedAt),
     };
   }
 
   private async writeVolumeRecord(volume: Volume): Promise<void> {
-    const record: VolumeRecord = {
-      slug: volume.slug,
-      title: volume.title,
-      description: volume.description,
-      createdAt: volume.createdAt.toISOString(),
-      updatedAt: volume.updatedAt.toISOString(),
-    };
-    await Bun.write(
-      this.layout.volumeMetaPath(volume.slug),
-      `${JSON.stringify(record, null, 2)}\n`,
-    );
+    await Bun.write(this.layout.volumeDocPath(volume.slug), serializeVolumeDocument(volume));
+    // Migration cleanup: once VOLUME.md is written, a volume.json left over
+    // from before this format existed is stale and would otherwise sit
+    // there unread. Best-effort removal — `force: true` no-ops if it was
+    // never there, so this never fails create/update on a volume that was
+    // already on the new format.
+    await rm(this.layout.volumeMetaPath(volume.slug), { force: true });
   }
 
   private async readChapterDocument(volume: VolumeSlug, chapter: ChapterSlug): Promise<Chapter> {

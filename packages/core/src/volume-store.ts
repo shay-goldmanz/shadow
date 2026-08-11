@@ -27,6 +27,20 @@ export interface VolumePathResolver {
    * @throws {VolumeNotFoundError} if `volume` has no volume on disk.
    */
   ensureEvidenceDir(volume: VolumeSlug): Promise<string>;
+
+  /**
+   * Repo-relative path to a chapter's Markdown file, e.g.
+   * `volumes/<volume-slug>/chapters/<chapter-slug>.md` — the on-disk
+   * layout convention consumers need to populate an index's informational
+   * `file` field (`docs/INDEXING.md`) without hardcoding or re-deriving it
+   * themselves. Pure path arithmetic, like `evidenceDir`: no I/O, never
+   * fails on a nonexistent volume/chapter, and re-validates both slugs at
+   * the join site the same way every other path-building method in this
+   * package does.
+   *
+   * @throws {InvalidSlugError} if either slug is a forged brand that fails re-validation.
+   */
+  chapterRelativePath(volume: VolumeSlug, chapter: ChapterSlug): string;
 }
 
 /**
@@ -98,4 +112,23 @@ export interface VolumeStore extends VolumePathResolver {
    * @throws {VolumeNotFoundError} if `volume` has no volume on disk.
    */
   writeIndex(volume: VolumeSlug, index: unknown): Promise<void>;
+
+  /**
+   * Read the corpus-wide index document, spanning every volume this store
+   * knows about — the root-level counterpart of `readIndex`
+   * (`docs/INDEXING.md`'s single corpus `index.json`). This package does
+   * not know its shape; `T` is asserted by the caller (`@shadow/indexing`
+   * owns the schema). Returns `undefined` if none has been written yet,
+   * which is not an error. Independent of any per-volume `index.json`:
+   * neither read nor write here touches those.
+   */
+  readCorpusIndex<T = unknown>(): Promise<T | undefined>;
+
+  /**
+   * Overwrite the corpus-wide index document with an opaque JSON value.
+   * Independent of `writeIndex` — this package makes no attempt to keep a
+   * per-volume index and the corpus index in sync; that is the caller's
+   * job.
+   */
+  writeCorpusIndex(index: unknown): Promise<void>;
 }
