@@ -61,27 +61,31 @@ describe("runMisses", () => {
 });
 
 describe("shadow misses via the CLI dispatcher — survives a malformed line", () => {
-  test("a corrupt line in misses.jsonl does not crash the process: run() still returns a clean error envelope", async () => {
+  test("a corrupt line in misses.jsonl loses only that line, not the whole backlog", async () => {
     await withStore(async (store, root) => {
-      // Seed one valid entry, then hand-corrupt the file the way a crash
-      // mid-write or a manual edit could.
-      await createMissLog(root).append(toFindMissEntry({ query: "q", reason: "no-match" }));
+      // Seed valid entries either side of a hand-corrupted line, the way a
+      // crash mid-write or a manual edit could produce.
+      const log = createMissLog(root);
+      await log.append(toFindMissEntry({ query: "before", reason: "no-match" }));
       await mkdir(root, { recursive: true });
       await appendFile(`${root}/misses.jsonl`, "{ not valid json\n", "utf8");
+      await log.append(toFindMissEntry({ query: "after", reason: "no-match" }));
 
       const cap = capture();
       const code = await run(["misses"], { store, root, write: cap.write, writeErr: cap.writeErr });
 
-      // FileMissLog.readAll() has no per-line recovery (see this task's
-      // report) — it rejects on the bad line. What matters here is that
-      // the CLI process itself never throws an uncaught exception or
-      // prints a raw stack trace: `run()` still resolves, exits non-zero,
-      // and stderr is a well-formed JSON error envelope with next_steps.
-      expect(code).not.toBe(0);
-      expect(cap.stdout).toEqual([]);
-      const parsed = JSON.parse(cap.stderr.join(""));
-      expect(typeof parsed.error.name).toBe("string");
-      expect(parsed.next_steps.length).toBeGreaterThan(0);
+      // `FileMissLog.readAll()` recovers per line, so one bad line no longer
+      // destroys the backlog. That matters because the miss log IS the
+      // operator's authoring backlog (D14) and is append-only — losing all
+      // of it to a single truncated write is the wrong failure mode for a
+      // file whose whole job is to accumulate.
+      expect(code).toBe(0);
+      const parsed = JSON.parse(cap.stdout.join("")) as {
+        misses: { task: string }[];
+        count: number;
+      };
+      expect(parsed.count).toBe(2);
+      expect(parsed.misses.map((m) => m.task)).toEqual(["before", "after"]);
     });
   });
 });
