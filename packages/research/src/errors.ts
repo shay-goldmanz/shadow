@@ -262,3 +262,55 @@ export class ResearchAgentBusyError extends ShadowResearchError {
     );
   }
 }
+
+// ---------------------------------------------------------------------------
+// AgenticSearchProvider — subscription-backed live search
+// ---------------------------------------------------------------------------
+
+/**
+ * `AgenticSearchProvider`'s search session reported `isError: true` — a
+ * transport/process-level failure inside the model turn itself, distinct
+ * from `SearchResultParseError` (a *successful* turn whose text just isn't
+ * the required JSON shape).
+ */
+export class SearchSessionTurnFailedError extends ShadowResearchError {
+  override readonly name = "SearchSessionTurnFailedError";
+
+  constructor(
+    public readonly query: string,
+    public readonly stopReason: string | null,
+    public readonly text: string,
+  ) {
+    super(
+      `Search session turn for query ${JSON.stringify(query)} failed ` +
+        `(stopReason: ${JSON.stringify(stopReason)}): ${text || "(no text)"}`,
+    );
+  }
+}
+
+/**
+ * `AgenticSearchProvider`'s search session returned a final turn whose text
+ * could not be parsed as the required `{"results":[{"title","url","snippet?"}]}`
+ * JSON shape. Thrown rather than falling back to an empty result set — an
+ * empty `hits` array must only ever mean "the search genuinely found
+ * nothing," never "we couldn't understand what the model said." Silently
+ * returning empty here would be indistinguishable from a real empty corpus,
+ * which is exactly the false confidence this package refuses to manufacture
+ * elsewhere (see `FixtureMissError`'s doc for the same principle applied to
+ * replay).
+ */
+export class SearchResultParseError extends ShadowResearchError {
+  override readonly name = "SearchResultParseError";
+
+  constructor(
+    public readonly query: string,
+    public readonly rawText: string,
+    public readonly reason: string,
+  ) {
+    super(
+      `Search session for query ${JSON.stringify(query)} returned output that could not be ` +
+        `parsed as the required JSON results shape: ${reason}. Raw model output: ` +
+        JSON.stringify(rawText),
+    );
+  }
+}

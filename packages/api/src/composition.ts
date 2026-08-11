@@ -28,7 +28,11 @@ import {
 } from "@shadow/evidence";
 import { FileMissLog, StructuralIndexer } from "@shadow/indexing";
 import { createModel } from "@shadow/model";
-import { createRetrievalTransport, WebResearchToolAgent } from "@shadow/research";
+import {
+  AgenticSearchProvider,
+  createRetrievalTransport,
+  WebResearchToolAgent,
+} from "@shadow/research";
 import { ConversationRegistry } from "./conversation-registry.ts";
 import type { ApiDeps } from "./deps.ts";
 
@@ -56,7 +60,17 @@ export function buildRealApiDeps(options: BuildRealApiDepsOptions = {}): ApiDeps
   const entailmentRelevanceJudge = new BatchedEntailmentRelevanceJudge(structuredGeneration);
   const claimRestater = new BatchedClaimRestater(structuredGeneration);
 
-  const transport = createRetrievalTransport({ mode: "live" });
+  // `AgenticSearchProvider` is a deliberately separate, narrow session from
+  // `researchBriefPort`'s own (see that class's module doc, and
+  // `agentic-search-provider.ts`'s) — it is the one thing in this wiring
+  // that is allowed to reach Claude Code's built-in `WebSearch`, running on
+  // the operator's subscription (D5) since there is no search-provider API
+  // key to use instead. It plugs in *underneath* `RetrievalTransport` as a
+  // `SearchProvider`, not as a tool `researchBriefPort`'s own session can
+  // call, so that session's `WebSearch`/`WebFetch`/`Bash` denial (D23,
+  // D2's determinism) stays intact.
+  const searchProvider = new AgenticSearchProvider({ sessions: agenticSession });
+  const transport = createRetrievalTransport({ mode: "live", live: { search: searchProvider } });
   const researchBriefPort = new WebResearchToolAgent({
     transport,
     evidenceStore,

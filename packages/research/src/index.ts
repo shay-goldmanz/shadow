@@ -13,6 +13,16 @@
  * and `docs/PLAN.md` T2.1b, which is the next task that turns a
  * `FetchedPage` into an evidence source record.
  *
+ * **Live search.** `LiveTransport.search()` needs a `SearchProvider`
+ * (`LiveTransportOptions.search`) to do anything — this package ships one,
+ * `AgenticSearchProvider` (`agentic-search-provider.ts`), backed by
+ * `@shadow/model`'s agentic session port running Claude Code's built-in
+ * `WebSearch` on the operator's subscription (D5), since there is no
+ * search-provider API key to use instead (`docs/ACCEPTANCE.md`). It is a
+ * distinct, narrow session from `WebResearchToolAgent`'s own — see that
+ * class's doc for why the two must never share a session, and
+ * `agentic-search-provider.ts`'s doc for the full design.
+ *
  * **Normalization and digests are `@shadow/evidence`'s, not ours.** Steps
  * 2-5 of `nfc-ws-v1` (`normalizeNfcWs`, `computeSnapshotDigests`,
  * `SnapshotDigests`, `NORMALIZATION_ALGORITHM`) are owned exclusively by
@@ -85,6 +95,15 @@
  */
 
 export type {
+  AgenticSearchProviderDeps,
+  SearchProviderSessionTuning,
+} from "./agentic-search-provider.ts";
+export {
+  AgenticSearchProvider,
+  DEFAULT_SEARCH_MAX_RESULTS,
+  parseSearchResults,
+} from "./agentic-search-provider.ts";
+export type {
   Citation,
   Finding,
   ResearchBrief,
@@ -107,6 +126,8 @@ export {
   ResearchTurnFailedError,
   RetrievalNetworkError,
   RetrievalTimeoutError,
+  SearchResultParseError,
+  SearchSessionTurnFailedError,
   ShadowResearchError,
   SourceBudgetExceededError,
   UnboundCitationError,
