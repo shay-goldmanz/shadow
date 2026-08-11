@@ -48,10 +48,15 @@ inherits those credentials.
 
 ```sh
 bun install
+bun run dev          # API on :4301, interface on :4300 — open http://localhost:4300
+```
 
-# the operator's interface: API on :4301, SPA on :4300
-bun run --cwd packages/api start
-bun run --cwd packages/web dev
+Or start the two halves separately:
+
+```sh
+bun run --cwd packages/api start   # :4301
+bun run --cwd packages/web serve   # :4300, proxies /api to the API
+bun run --cwd packages/web dev     # :4300 against a fake client, no backend needed
 ```
 
 Volumes live in `~/.shadow` by default; set `SHADOW_HOME` to point elsewhere.

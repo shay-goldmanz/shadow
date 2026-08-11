@@ -10,7 +10,8 @@
     "test": "bun test",
     "lint": "oxlint --type-aware",
     "format": "biome format --write .",
-    "check": "bun run typecheck && bun run lint && bun test"
+    "check": "bun run typecheck && bun run lint && bun test",
+    "dev": "bun run --cwd packages/api start & bun run --cwd packages/web serve"
   },
   "devDependencies": {
     "@biomejs/biome": "^2.5.7",
