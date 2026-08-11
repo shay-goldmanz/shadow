@@ -5,7 +5,7 @@ and reason over. This document defines the pillars, the seams between them, and 
 invariants each seam enforces.
 
 See `ACCEPTANCE.md` for what must be true, `DECISIONS.md` for why each choice was made, and
-`docs/INDEXING.md` for the indexing contract.
+`INDEXING.md` for the indexing contract.
 
 ## The shape of the system
 
