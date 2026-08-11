@@ -53,7 +53,7 @@ Resolved into D22 and D23; fixes tracked below.
 | # | Fix task | Owns | State |
 |---|---|---|---|
 | R1 | Evidence hardening: session-transcript provenance (C-1), bounded fuzzy anchoring (C-2), path re-validation (C-3), injective `inputHash`, D22 orphan split, D23 witnessed origination | `packages/evidence` | ⏳ |
-| R2 | Fail-closed structured-generation guardrail + offline tests; reserved frontmatter keys; drop legacy `volume.json`; corpus-index tests | `packages/model`, `packages/core` | ⏳ |
+| R2 | Fail-closed structured-generation guardrail + offline tests; reserved frontmatter keys; drop legacy `volume.json`; corpus-index tests | `packages/model`, `packages/core` | ✅ `d8fb80d` |
 | R3 | Share `nfc-ws-v1` with evidence; deliver the D16 end-to-end property; body-read deadline; refuse non-2xx | `packages/research` | ✅ |
 
 ## Wave 2 — Capability
