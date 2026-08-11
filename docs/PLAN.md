@@ -53,7 +53,7 @@ The pillars that do real work. This is where the acceptance criteria are won or 
 | T2.1 | `@shadow/research`: research-brief port, retrieval transport (live web + fixture recorder per D2), tool-agents that fetch and snapshot sources into the evidence ledger | `packages/research` | T1.2, T1.3 | ⬜ |
 | T2.2 | `@shadow/indexing`: `Indexer` — structural tree from headings + `when_to_use`/`not_for` frontmatter vocabulary; stable node identity; O(changed subtree) rebuild. **Zero LLM calls** (D11). | `packages/indexing` | T1.1 | ⬜ |
 | T2.3 | `@shadow/indexing`: `Navigator` — BM25 locator, `1/√(N+1)·Σ` rollup, ancestor-closure expansion, passages in document order, grade step ≤3 rounds (D11) | `packages/indexing` | T2.2 | ⬜ |
-| T2.4 | `@shadow/evidence`: CoE Audit — source integrity, span entailment, claim completeness (checks 1–3 of D9) | `packages/evidence` | T1.3, T1.2 | ⬜ |
+| T2.4 | `@shadow/evidence`: CoE Audit — source integrity, span entailment, claim completeness (checks 1–3 of D9), plus C5 chapter relevance as a non-blocking warning (D15) | `packages/evidence` | T1.3, T1.2 | ⬜ |
 | T2.5 | `@shadow/evidence`: index-alignment check (check 4 of D9) + conservative-restatement repair | `packages/evidence` | T2.4, T2.2 | ⬜ |
 | T2.6 | `@shadow/indexing`: `shadow lint` self-critique — discriminability, self-retrieval coverage, orphans, contradictions, miss log (D14) | `packages/indexing` | T2.3 | ⬜ |
 
@@ -81,7 +81,7 @@ with the agent chain.
 
 | # | Task | Owns | Depends on | State |
 |---|---|---|---|---|
-| T4.1 | `@shadow/evaluation`: fixed corpus, golden query set, retrieval metrics, **baseline recorded** | `packages/evaluation` | T2.3 | ⬜ |
+| T4.1 | `@shadow/evaluation`: fixed corpus, golden query set, retrieval metrics, `holes_ratio` (D17), **baseline recorded** | `packages/evaluation` | T2.3 | ⬜ |
 | T4.2 | Baseline comparison: naive flat/keyword retrieval vs the tree navigator, to substantiate "or better" | `packages/evaluation` | T4.1 | ⬜ |
 | T4.3 | Groundedness metrics: attribution rate, citation precision, injected-hallucination catch rate | `packages/evaluation` | T2.5 | ⬜ |
 | T4.4 | E2E: the critical path — create volume → research Linear/Notion/Epoch → two chapters → indexed → CLI finds it. Fixture-backed. | `tests/e2e` | T3.5 | ⬜ |

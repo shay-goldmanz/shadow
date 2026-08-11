@@ -432,6 +432,112 @@ to distill next, which is how Shadow closes its own loop instead of waiting to b
 
 ---
 
+## D15 — Grounded is not the same as relevant, and D9's repair made it worse
+
+**Context.** D9 defined the CoE Audit as four grounding checks. Research into production
+groundedness systems shows that grounding is only one of *two* axes, and a system measuring
+one while optimizing against it will drift.
+
+The argument, from Bedrock Guardrails' worked example:
+
+> Source: *"London is the capital of UK. Tokyo is the capital of Japan."*
+> Query: *"What is the capital of Japan?"*
+> - *"The capital of Japan is London"* → relevant, ungrounded
+> - *"The capital of UK is London"* → **grounded, true, and irrelevant**
+
+Azure names the split cleanly: **groundedness is precision** (contains nothing outside the
+source), **completeness is recall** (misses nothing critical).
+
+**The flaw this exposes in D9.** Every check in D9 measures grounding only. So a Shadow
+chapter can pass the entire audit while drifting off the subject the operator actually asked
+about — and D9's repair rule makes this *more* likely, not less. "Restate conservatively
+against the source" is precisely the move that converts a slightly-unsupported claim into a
+well-cited answer to a question nobody asked. I built a repair loop that optimizes the metric
+I was measuring, in the direction of the failure I was not.
+
+**Decision.** Add a fifth check — **C5, chapter relevance**: does each claim serve the
+chapter's stated subject and its `when_to_use`? It is non-blocking, surfaced as a warning
+rather than a failure, and batched into the same judge session as the entailment check so it
+costs almost nothing extra.
+
+**Why non-blocking.** Relevance is a judgment call about the operator's intent, and the
+operator is the authority on that. The audit's job is to *show* them drift, not to overrule
+them. Blocking on grounding is right — fabrication is never what they wanted. Blocking on
+relevance would be the tool second-guessing the author.
+
+**Cost.** One more dimension in an already-open judge call. Effectively free.
+
+---
+
+## D16 — Content drift, not link rot, is the failure mode worth detecting
+
+**Context.** D9 has research tool-agents snapshot every source and hash it, so citations can
+be verified later. The obvious implementation — one hash over the fetched bytes — turns out to
+be close to useless.
+
+Klein et al. (*PLOS ONE*, doi:10.1371/journal.pone.0167475) measured that **content drift
+affects roughly 3 in 4 URI references**, against about 1 in 5 for outright reference rot. The
+page usually still resolves; it just no longer says what was cited. A citation checker that
+tests for HTTP 200 is measuring the wrong thing.
+
+And a single hash over raw bytes is worse than nothing here: it churns on every ad rotation,
+session token, and rendered timestamp, so it fires constantly and gets ignored.
+
+**Decision.** Two digests per snapshot, with distinct jobs:
+
+| Digest | Over | Job |
+|---|---|---|
+| `payload_sha256` | raw fetched bytes | exact-reproduction identity; never used for alerting |
+| `normalized_text_sha256` | after boilerplate strip, NFC normalization, whitespace collapse | **the re-verification trigger** — changes only when the prose changes |
+
+Only the normalized digest raises a staleness alarm. This split is not novel — WARC already
+distinguishes `WARC-Block-Digest` from `WARC-Payload-Digest` for the same reason.
+
+**Also adopted, because they are standards rather than inventions:**
+- **W3C Web Annotation selectors** for evidence spans: a `TextQuoteSelector` (`exact`,
+  `prefix`, `suffix`) as durable identity, with a `TextPositionSelector` nested under
+  `refinedBy` as the fast-but-fragile hint. Durable outer, brittle inner, one object.
+- **Robust Links** (`data-originalurl`, `data-versionurl`, `data-versiondate`) on rendered
+  citations, so a reader can reach the snapshot, revisit the original, or find a temporally
+  near capture if the snapshot itself dies.
+- **RFC 6920 `ni:` URIs** so snapshot identifiers are self-describing rather than opaque.
+- **Character offsets, not byte offsets**, for evidence spans, documented explicitly.
+  Providers disagree — Gemini/Vertex use bytes, Anthropic and OpenAI use characters — and the
+  mismatch silently mis-aligns non-ASCII text. Note this differs from `docs/INDEXING.md`,
+  which uses byte spans into *our own* Markdown files; that is a separate concern and stays
+  as it is.
+
+**Anchoring outcome is itself recorded.** Whether a citation resolved cleanly, resolved
+fuzzily (with distance), or **orphaned** goes into the ledger. Hypothesis treats orphaning as
+a first-class state that is shown rather than hidden, and that is right: "this citation still
+resolves" is a claim that decays, so it needs a recorded value rather than an assumption. If
+the cited text is deleted outright, no algorithm recovers it — say so plainly.
+
+**Cost.** Two hashes and a normalization pass per snapshot. Trivial next to the fetch.
+
+**Caveat carried forward.** Specific fuzzy-matching constants (context length, score weights,
+timeouts) could not be verified against primary sources. They ship as tunable configuration
+with documented defaults, not as received wisdom.
+
+---
+
+## D17 — The evaluation reports what it could not judge
+
+**Context.** T4.1 establishes a measured retrieval baseline against a golden set.
+
+**Decision.** Every evaluation run also reports **`holes_ratio`** — the fraction of retrieved
+items for which the golden set holds no relevance judgment.
+
+**Why.** Without it, a golden set silently drifts into scoring only the slice it already has
+labels for, and the resulting number looks like coverage when it is selection. Azure's
+retrieval evaluator emits exactly this and almost nobody tracks it. Given that D11a's whole
+"or better" claim rests on measurement, the honest bound on that measurement has to travel
+with it.
+
+**Cost.** One more number. It will sometimes be embarrassing, which is the point.
+
+---
+
 ## D12 — The CLI is composable, and steers its caller in-band
 
 **Context.** The CLI's consumer is a language model with a token budget, not a human.
