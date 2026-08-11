@@ -1,21 +1,32 @@
 /**
- * Content extraction and the `nfc-ws-v1` normalization algorithm
+ * Content extraction — step 1 of the `nfc-ws-v1` normalization algorithm
  * (`docs/EVIDENCE.md`, "Normalization and anchoring"; `docs/DECISIONS.md`
  * D16). Pure functions: no filesystem, no network, no LLM — everything
  * here is unit-testable on plain strings.
  *
- * The five-step algorithm, split across two functions:
+ * Steps 2-5 (Unicode NFC normalize, whitespace collapse, trim, and the two
+ * digests) are owned exclusively by `@shadow/evidence` (`docs/EVIDENCE.md`
+ * amendment 4) — this package imports `normalizeNfcWs` and
+ * `computeSnapshotDigests` from there rather than reimplementing them, so
+ * the two packages can never drift apart on what `"nfc-ws-v1"` means. See
+ * `content.test.ts` for the end-to-end D16 property test that exercises
+ * this module's extraction together with evidence's digest computation.
  *
- *   1. extract main content (readability-style)      -> extractMainContent
- *   2. Unicode NFC normalize                          \
- *   3. collapse whitespace runs; line endings to \n    > normalizeNfcWs
- *   4. trim                                           /
- *   5. UTF-8 encode; SHA-256                          -> hashing.ts / computeSnapshotDigests
+ * **Known limitation against D16's claim.** D16's justification for the
+ * two-digest split is that a raw digest "churns on every ad rotation,
+ * session token, and rendered timestamp". This module's extraction only
+ * strips `<script>`, `<style>`, `<head>`, `<nav>`, `<footer>`, `<aside>`,
+ * and HTML comments — boilerplate *outside* those containers (an ad `<div>`
+ * or cookie-banner sitting directly in `<body>`, a "related articles"
+ * widget, a rendered timestamp printed inline in an article's own markup)
+ * is not recognized as boilerplate and survives into the normalized text,
+ * so it **will** still churn `normalizedTextSha256`. A real
+ * readability/boilerplate-removal algorithm (content-density heuristics,
+ * DOM-depth scoring) could catch more of this, but is not deterministic
+ * and dependency-free in the way this module deliberately stays — see the
+ * `extractMainContent` doc comment below. This is a real, accepted gap,
+ * not a claim that extraction solves D16's churn problem in general.
  */
-
-import { formatHash, sha256Hex } from "./hashing.ts";
-
-export const NORMALIZATION_ALGORITHM = "nfc-ws-v1" as const;
 
 // ---------------------------------------------------------------------------
 // step 1: extraction
@@ -32,8 +43,9 @@ export const NORMALIZATION_ALGORITHM = "nfc-ws-v1" as const;
  *   1. HTML comments (`<!-- ... -->`)
  *   2. `<script>` and `<style>` elements, tag and content both
  *   3. `<head>` and its content (metadata, not page content)
- *   4. `<nav>` and `<footer>` elements, tag and content both — the
- *      boilerplate `docs/EVIDENCE.md` names explicitly
+ *   4. `<nav>`, `<footer>`, and `<aside>` elements, tag and content both —
+ *      the boilerplate/complementary-content containers `docs/EVIDENCE.md`
+ *      and HTML5 semantics name explicitly
  *   5. every remaining tag (replaced with a single space, so adjacent
  *      block elements don't glue their text together — e.g.
  *      `<p>Hello</p><p>World</p>` becomes `Hello World`, not `HelloWorld`)
@@ -41,14 +53,25 @@ export const NORMALIZATION_ALGORITHM = "nfc-ws-v1" as const;
  * What it keeps: all remaining text content, in the order it appears in
  * the document, with named and numeric HTML entities decoded.
  *
+ * **What it does NOT catch (see the module doc for the D16 implication):**
+ * an ad block, cookie banner, "related articles" widget, or rendered
+ * timestamp that is *not* wrapped in `<nav>`, `<footer>`, or `<aside>` —
+ * e.g. `<div class="ad-slot">…</div>` sitting directly in `<body>` or
+ * inside `<main>` next to real content. Recognizing those would require
+ * either a fixed (and inevitably incomplete) list of class-name/id
+ * conventions, or content-density heuristics — both add non-determinism
+ * or false positives that would themselves threaten the content hash this
+ * feeds. Staying deterministic and dependency-free was chosen over
+ * completeness.
+ *
  * Known limitation, accepted deliberately: the regex-based stripping of
- * `<head>`, `<nav>`, `<footer>`, `<script>`, and `<style>` is non-greedy
- * and does not handle *nested* elements of the same tag name (which is
- * not valid HTML for any of these five tags anyway) or unbalanced/broken
- * markup. A real parser would handle those; a real parser is also a
- * dependency and a much larger determinism surface. This is fine for the
- * fixture corpus and for real pages, which are well-formed in exactly the
- * way that matters here.
+ * `<head>`, `<nav>`, `<footer>`, `<aside>`, `<script>`, and `<style>` is
+ * non-greedy and does not handle *nested* elements of the same tag name
+ * (which is not valid HTML for any of these six tags anyway) or
+ * unbalanced/broken markup. A real parser would handle those; a real
+ * parser is also a dependency and a much larger determinism surface. This
+ * is fine for the fixture corpus and for real pages, which are
+ * well-formed in exactly the way that matters here.
  */
 export function extractMainContent(html: string): string {
   let text = html;
@@ -62,8 +85,8 @@ export function extractMainContent(html: string): string {
   // 3. head, tag + content
   text = text.replace(/<head\b[^>]*>[\s\S]*?<\/head>/gi, " ");
 
-  // 4. nav/footer, tag + content
-  text = text.replace(/<(nav|footer)\b[^>]*>[\s\S]*?<\/\1>/gi, " ");
+  // 4. nav/footer/aside, tag + content
+  text = text.replace(/<(nav|footer|aside)\b[^>]*>[\s\S]*?<\/\1>/gi, " ");
 
   // 5. every remaining tag -> single space
   text = text.replace(/<[^>]+>/g, " ");
@@ -109,60 +132,8 @@ function decodeHtmlEntities(text: string): string {
 }
 
 // ---------------------------------------------------------------------------
-// steps 2-4: normalize
+// steps 2-5 (normalize + digest) live in @shadow/evidence — see the module
+// doc above and `docs/EVIDENCE.md` amendment 4. Import `normalizeNfcWs`,
+// `computeSnapshotDigests`, `SnapshotDigests`, and `NORMALIZATION_ALGORITHM`
+// from "@shadow/evidence" rather than looking for them here.
 // ---------------------------------------------------------------------------
-
-/**
- * `nfc-ws-v1` steps 2-4: Unicode NFC normalize, collapse whitespace runs
- * (including line endings) to a single space, trim.
- *
- * The CRLF/CR -> LF replacement is applied explicitly, ahead of the
- * whitespace-collapse regex, purely for fidelity to `docs/EVIDENCE.md`'s
- * listed steps ("collapse whitespace runs to a single space; line endings
- * to \n") — the collapse regex (`\s+`) already matches `\r`, `\n`, and
- * `\r\n` alike, so CRLF- and LF-sourced text collapse to an identical
- * single space either way. There is no literal `\n` left in the output:
- * every whitespace run, including multi-line ones, becomes one `" "`.
- */
-export function normalizeNfcWs(text: string): string {
-  return text
-    .normalize("NFC")
-    .replace(/\r\n|\r/g, "\n")
-    .replace(/\s+/g, " ")
-    .trim();
-}
-
-// ---------------------------------------------------------------------------
-// step 5 (partial): digests over raw bytes and normalized text
-// ---------------------------------------------------------------------------
-
-export interface SnapshotDigests {
-  /** Over the raw fetched bytes — exact-reproduction identity, forensic only, never alerts (D16). */
-  readonly payloadSha256: string;
-  /** The text this digest was computed over (steps 1-4 applied). */
-  readonly normalizedText: string;
-  /** Over the normalized text — the sole staleness/re-verification trigger (D16). */
-  readonly normalizedTextSha256: string;
-  readonly normalization: typeof NORMALIZATION_ALGORITHM;
-  readonly chars: number;
-}
-
-/**
- * Run the full `nfc-ws-v1` pipeline: extract main content from `html`,
- * normalize it, and hash both the raw payload bytes and the normalized
- * text. This is the function whose output the D16 property test exercises
- * directly — see `content.test.ts`.
- */
-export function computeSnapshotDigests(payloadBytes: Uint8Array, html: string): SnapshotDigests {
-  const payloadSha256 = formatHash(sha256Hex(payloadBytes));
-  const extracted = extractMainContent(html);
-  const normalizedText = normalizeNfcWs(extracted);
-  const normalizedTextSha256 = formatHash(sha256Hex(normalizedText));
-  return {
-    payloadSha256,
-    normalizedText,
-    normalizedTextSha256,
-    normalization: NORMALIZATION_ALGORITHM,
-    chars: normalizedText.length,
-  };
-}
