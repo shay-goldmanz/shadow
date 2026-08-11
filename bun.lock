@@ -54,6 +54,13 @@
         "@shadow/indexing": "workspace:*",
       },
     },
+    "packages/evidence": {
+      "name": "@shadow/evidence",
+      "version": "0.0.0",
+      "dependencies": {
+        "@shadow/core": "workspace:*",
+      },
+    },
     "packages/indexing": {
       "name": "@shadow/indexing",
       "version": "0.0.0",
@@ -75,10 +82,6 @@
     "packages/research": {
       "name": "@shadow/research",
       "version": "0.0.0",
-      "dependencies": {
-        "@shadow/core": "workspace:*",
-        "@shadow/model": "workspace:*",
-      },
     },
     "packages/web": {
       "name": "@shadow/web",
@@ -195,6 +198,8 @@
     "@shadow/core": ["@shadow/core@workspace:packages/core"],
 
     "@shadow/evaluation": ["@shadow/evaluation@workspace:packages/evaluation"],
+
+    "@shadow/evidence": ["@shadow/evidence@workspace:packages/evidence"],
 
     "@shadow/indexing": ["@shadow/indexing@workspace:packages/indexing"],
 
