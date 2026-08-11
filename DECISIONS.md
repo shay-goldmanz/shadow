@@ -260,3 +260,101 @@ interface instead of buried in a data model.
 
 **Cost.** Two typefaces to load. Both themes must be maintained from day one — cheaper now
 than retrofitting dark mode later.
+
+---
+
+## D11 — Indexing: cheap scorer locates, tree expands
+
+**Context.** Acceptance requires a "PageIndex-like-or-better strategy". The naive reading is
+PageIndex's headline pitch: build an LLM-generated table-of-contents tree, then have an LLM
+descend it from the root. Research into PageIndex's own production behaviour and its
+competitors says that reading is wrong on both halves.
+
+**What the evidence actually shows.**
+
+1. **Strict top-down descent keeps losing, in three independent systems.** RAPTOR tested
+   tree-traversal against collapsed search *over its own tree* and shipped collapsed.
+   LazyGraphRAG ranks communities bottom-up by their best chunks' rank. And PageIndex's
+   own documented production retrieval runs a cheap embedding value function *in parallel
+   with* LLM tree search rather than relying on descent — it does not do the thing the pitch
+   describes.
+2. **Depth is a cost knob, not a quality knob.** GraphRAG's claim-based validation over
+   47,075 extracted claims found *no statistically significant quality difference* between
+   hierarchy levels whose token costs spanned 43×.
+3. **The differentiator for hierarchical systems is economics, not retrieval accuracy.**
+   LazyGraphRAG reaches comparable quality at a fraction of the cost with a *zero-LLM* index,
+   which is the sharpest challenge to building an LLM-generated one at all.
+
+**Decision.** Invert the usual pipeline. A cheap deterministic scorer does the **locating**;
+the tree does the **expanding**.
+
+```
+1. LOCATE     BM25 over chapter text → scored candidate nodes
+2. AGGREGATE  NodeScore(v) = 1/√(N+1) · Σ score(chunks under v), rolled up to volumes
+3. EXPAND     hand the agent the ancestor closure of each hit: heading path,
+              siblings, parent routing signals — structure around the hit
+4. NAVIGATE   the agent reasons over that pruned tree (~1–3k tokens, not the whole index)
+5. GRADE      sufficient | need-more(refined query) | not-in-corpus, ≤3 rounds
+```
+
+The `1/√(N+1)·Σ` aggregator is PageIndex's own published formula — it rewards nodes with
+*many* relevant chunks with diminishing returns, where a plain mean would treat one hit and
+ten hits identically. We adopt it directly with BM25 scores substituted for embeddings, which
+also removes any need for an embedding API.
+
+**Two further rules from the evidence:**
+- **Route to the shallowest node that answers.** Depth costs tokens and buys no measured
+  quality. Do not descend for its own sake.
+- **Return passages in document order, not whole chapters.** CRAG's decompose-then-recompose
+  was their single largest ablation: a mostly-irrelevant chapter can still contribute its one
+  good paragraph.
+
+**Decision — the index costs zero LLM calls.** Structure comes from Markdown headings.
+Routing signals (`when_to_use`, `not_for`) come from chapter frontmatter, authored by Shadow
+*at write time* as part of the skill-guided writing it is already doing. There is no separate
+LLM indexing pass.
+
+**Why this is defensible as "or better".** Our position is one no reference system occupies:
+a free index, a traversal that costs nothing metered because it runs in the calling agent's
+own context, and O(changed subtree) updates on edit. PageIndex spends LLM calls at both ends;
+LazyGraphRAG spends at neither but gives up authored structure and provenance. We keep the
+structure — which is what supplies bounds, citations, and operator intent — and pay for
+neither end.
+
+This works *because* we control authoring. Shadow writes the chapters, so routing signals are
+a by-product of writing rather than something inferred afterwards from someone else's PDF.
+
+**Honesty about the claim.** "Or better" is an economic argument, and it is currently a
+hypothesis. T4.1/T4.2 exist to substantiate it: baseline first, then the comparison against
+naive flat retrieval, measured on a golden set. If the numbers do not support it, this
+decision gets revised rather than the criterion reinterpreted.
+
+**Interaction with D9.** Authored routing signals are generated content and can therefore
+hallucinate — `when_to_use` could promise something the chapter does not deliver, poisoning
+retrieval while the prose beneath stays clean. The index-alignment check (D9, check 4) applies
+to frontmatter, not just to summaries.
+
+**Cost.** A BM25 implementation to own, and retrieval quality now depends on frontmatter
+quality. The latter is a real risk and is exactly what T4.1's golden set must measure.
+
+---
+
+## D12 — The CLI is composable, and steers its caller in-band
+
+**Context.** The CLI's consumer is a language model with a token budget, not a human.
+
+**Decision.** Two design rules, both taken from measured results.
+
+**Composable over rigid.** HuggingFace's open-Deep-Research scores 55% on GAIA with code
+actions; switching the *same agent* to rigid JSON tool calls drops it to 33%, while also
+taking ~30% more steps. So `shadow` is a real Unix citizen — pipeable, scriptable,
+composable — rather than a single monolithic JSON endpoint. This is independent support for
+the acceptance criteria's CLI-first framing over an MCP-only surface.
+
+**In-band steering via `next_steps`.** PageIndex's MCP tools embed a `next_steps` block in
+nearly every *tool result*, telling the calling agent what to do next. That is the right
+place for it: we do not own the consuming agent's system prompt, but we do own our output.
+`shadow` results carry a `next_steps` block, and errors carry one too. It is how the CLI
+teaches an agent to use it without us controlling that agent.
+
+**Cost.** A few tokens per result. Trivial against the cost of an agent taking a wrong turn.

@@ -51,8 +51,8 @@ The pillars that do real work. This is where the acceptance criteria are won or 
 | # | Task | Owns | Depends on | State |
 |---|---|---|---|---|
 | T2.1 | `@shadow/research`: research-brief port, retrieval transport (live web + fixture recorder per D2), tool-agents that fetch and snapshot sources into the evidence ledger | `packages/research` | T1.2, T1.3 | ⬜ |
-| T2.2 | `@shadow/indexing`: `Indexer` — build the PageIndex-like tree over a volume; node schema, summaries, incremental rebuild on edit | `packages/indexing` | T1.2 | ⬜ |
-| T2.3 | `@shadow/indexing`: `Navigator` — reasoning-based traversal to select nodes, with retrieval trace | `packages/indexing` | T2.2 | ⬜ |
+| T2.2 | `@shadow/indexing`: `Indexer` — structural tree from headings + `when_to_use`/`not_for` frontmatter vocabulary; stable node identity; O(changed subtree) rebuild. **Zero LLM calls** (D11). | `packages/indexing` | T1.1 | ⬜ |
+| T2.3 | `@shadow/indexing`: `Navigator` — BM25 locator, `1/√(N+1)·Σ` rollup, ancestor-closure expansion, passages in document order, grade step ≤3 rounds (D11) | `packages/indexing` | T2.2 | ⬜ |
 | T2.4 | `@shadow/evidence`: CoE Audit — source integrity, span entailment, claim completeness (checks 1–3 of D9) | `packages/evidence` | T1.3, T1.2 | ⬜ |
 | T2.5 | `@shadow/evidence`: index-alignment check (check 4 of D9) + conservative-restatement repair | `packages/evidence` | T2.4, T2.2 | ⬜ |
 
@@ -65,7 +65,7 @@ actually catch an injected hallucination? Both must be shown, not asserted.
 
 | # | Task | Owns | Depends on | State |
 |---|---|---|---|---|
-| T3.1 | `@shadow/cli`: `discover`, `navigate`, `read` commands; terse JSON output tuned for token cost | `packages/cli` | T1.1, T2.3 | ⬜ |
+| T3.1 | `@shadow/cli`: `discover`, `navigate`, `read` commands; composable Unix-citizen surface with in-band `next_steps` steering (D12) | `packages/cli` | T1.1, T2.3 | ⬜ |
 | T3.2 | Skills: volume-writing skill guiding Shadow, consumer skill for coding agents, `shadow install` to place it | `skills/`, `packages/cli` | T3.1 | ⬜ |
 | T3.3 | `@shadow/agent`: Shadow — intent handling, research delegation, skill-guided chapter writing, reindex triggering | `packages/agent` | T2.1, T2.2, T2.4 | ⬜ |
 | T3.4 | `@shadow/api`: Bun HTTP server, volume CRUD, SSE streaming of Shadow's turns | `packages/api` | T3.3 | ⬜ |
