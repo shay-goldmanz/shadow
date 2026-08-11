@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
-import { NodeNotFoundError } from "@shadow/indexing";
 import { VolumeNotFoundError } from "@shadow/core";
+import { NodeNotFoundError } from "@shadow/indexing";
 import {
   IndexMissingError,
   NodeLookupError,
@@ -55,6 +55,20 @@ describe("every ShadowCliError", () => {
     expect(new VolumeLookupError(new VolumeNotFoundError("v")).exitCode).toBe(3);
     expect(new NodeLookupError(new NodeNotFoundError("n")).exitCode).toBe(3);
     expect(new UnexpectedCliError(new Error("e")).exitCode).toBe(1);
+  });
+});
+
+describe("UsageError message formatting", () => {
+  test("includes the command name when one is known", () => {
+    expect(new UsageError("chapters", "missing <volume> argument").message).toBe(
+      "shadow chapters: missing <volume> argument",
+    );
+  });
+
+  test("omits the redundant space/colon when there is no specific command (e.g. an unrecognized top-level command)", () => {
+    expect(new UsageError("", 'unknown command "bogus"').message).toBe(
+      'shadow: unknown command "bogus"',
+    );
   });
 });
 

@@ -50,9 +50,13 @@ export class UsageError extends ShadowCliError {
     reason: string,
     usage?: string,
   ) {
-    super(`shadow ${command}: ${reason}`);
+    super(command ? `shadow ${command}: ${reason}` : `shadow: ${reason}`);
     this.nextSteps = [
-      usage ? `Correct usage: ${usage}` : `Run \`shadow ${command}\` with the required arguments.`,
+      usage
+        ? `Correct usage: ${usage}`
+        : command
+          ? `Run \`shadow ${command}\` with the required arguments.`
+          : "Run `shadow` with a recognized command.",
       "Run `shadow` with no arguments to see the full command surface.",
     ];
   }

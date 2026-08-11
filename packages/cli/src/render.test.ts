@@ -12,7 +12,7 @@ describe("renderSuccess", () => {
   test("pretty mode indents", () => {
     const out = renderSuccess({ a: 1 }, { pretty: true });
     expect(out).toContain("\n");
-    expect(out).toContain("  \"a\": 1");
+    expect(out).toContain('  "a": 1');
   });
 
   test("compact output still parses as valid JSON", () => {
