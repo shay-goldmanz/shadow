@@ -17,7 +17,7 @@ baseline.
 |---|---|
 | 0 — Groundwork | ✅ complete |
 | 1 — Foundation | ✅ complete — 386 tests passing |
-| 2 — Capability | ⏳ in progress |
+| 2 — Capability | ✅ complete (bar T2.7) — 733 tests passing |
 | 3 — Surfaces | ⬜ not started |
 | 4 — Measure and prove | ⬜ not started |
 
@@ -66,8 +66,8 @@ The pillars that do real work. This is where the acceptance criteria are won or 
 | T2.1b | `@shadow/research`: research-brief port and tool-agents that fetch and snapshot sources into the evidence ledger | `packages/research` | T2.1a, T1.2, T1.3 | ✅ |
 | T2.2 | `@shadow/indexing`: `Indexer` — structural tree from headings + `when_to_use`/`not_for` frontmatter vocabulary; stable node identity; O(changed subtree) rebuild. **Zero LLM calls** (D11). | `packages/indexing` | T1.1 | ✅ `5b04a5d` |
 | T2.3 | `@shadow/indexing`: `Navigator` — agent-as-locator over the chapter index (D11a), `1/√(N+1)·Σ` rollup, ancestor-closure expansion, passages in document order, grade step ≤3 rounds. Also adopt core's corpus index slot and `chapterRelativePath`. | `packages/indexing` | T2.2, T1.4 | ✅ `1cb457a` |
-| T2.4 | `@shadow/evidence`: CoE Audit — source integrity, span entailment, claim completeness (checks 1–3 of D9), plus C5 chapter relevance as a non-blocking warning (D15) | `packages/evidence` | T1.3, T1.2 | ⬜ |
-| T2.5 | `@shadow/evidence`: index-alignment check (check 4 of D9) + conservative-restatement repair | `packages/evidence` | T2.4, T2.2 | ⬜ |
+| T2.4 | `@shadow/evidence`: CoE Audit — source integrity, span entailment, claim completeness (checks 1–3 of D9), plus C5 chapter relevance as a non-blocking warning (D15) | `packages/evidence` | T1.3, T1.2 | ✅ |
+| T2.5 | `@shadow/evidence`: index-alignment check (check 4 of D9) + conservative-restatement repair | `packages/evidence` | T2.4, T2.2 | ✅ |
 | T2.6 | `@shadow/indexing`: `shadow lint` self-critique — discriminability, self-retrieval coverage, orphans, contradictions, miss log (D14) | `packages/indexing` | T2.3 | ✅ |
 | T2.7 | Reconcile the two miss logs: the CLI wrote its own at `<SHADOW_HOME>/misses.jsonl`, T2.6 built a `MissLogStore` port and left the path to the CLI. Wire the CLI to `FileMissLog`. | `packages/cli` | T2.6, T3.1 | ⬜ |
 

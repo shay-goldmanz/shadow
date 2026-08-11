@@ -340,9 +340,18 @@ highest-confidence result is 98.1% numerical provenance from *deterministic* 5%-
 comparison with no model at all. It catches transcription errors entailment judges wave
 through. Allowlist the known false-positive classes: version numbers, dates, hex values.
 
-**Verdict:** a chapter passes iff C1a, C1b and C2 pass fully and C3 has zero `unsupported`.
-`partial`, `conflicted` and `off-topic` do **not** block — they route to restatement and
-surface as warnings.
+**Verdict:** a chapter passes iff C1a, C1b, C2 **and C4** pass fully and C3 has zero
+`unsupported`. `partial`, `conflicted` and `off-topic` do **not** block — they route to
+restatement and surface as warnings.
+
+**C4 blocks, and the earlier omission of it here was an error.** An unaligned `when_to_use`
+is generated content asserting something the chapter does not support — the same defect as an
+unsupported claim, differing only in where it sits. It is also worse in effect: routing
+metadata is what a consuming agent reads *first*, so a false promise there poisons retrieval
+while the prose beneath stays clean. That is precisely why D9 added index alignment as a check
+a naive port of Science One would miss, and it would be incoherent to add it and then not
+enforce it. C5 remains the only non-blocking check, because relevance is the operator's
+judgment to make (D15).
 
 ## Tiers: what runs when
 
