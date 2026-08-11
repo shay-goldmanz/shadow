@@ -675,6 +675,64 @@ buried.
 
 ---
 
+## D22 — Orphan semantics: fabrication blocks, drift warns
+
+**Context.** The Wave 1 review found `docs/EVIDENCE.md` contradicting itself. C2 says *"every
+`selector.exact` **resolves** in its pinned snapshot"* and treats failure as blocking. D16 says
+*"**Orphan is a state, not an error.** It renders as a warning, never a failure."* The
+implementation had to pick, and picked blocking — meaning a source drifting under a published
+chapter fails that chapter's next audit outright, which is exactly the aging-corpus failure
+D16 wanted surfaced rather than fatal.
+
+**The contradiction was mine, and both halves were right about different things.** Resolving:
+
+| Situation | Verdict | Why |
+|---|---|---|
+| `selector.exact` does not resolve **in the pinned snapshot** | **Blocking failure** | Snapshots are immutable and content-addressed. If the quote is not in the exact bytes we stored, the citation was fabricated or the snapshot was tampered with. Neither is survivable. |
+| The **live source has drifted** — `normalizedTextSha256` no longer matches | **Warning**, claim marked stale, refetch queued | The operator did nothing wrong and the world moved. Failing here would make every published volume rot into failure over time. |
+
+**Why this is the right cut.** Pinning is what makes the distinction possible: because the
+cited snapshot never changes, an unresolvable selector against it can only mean fabrication or
+corruption. Drift is a separate, expected fact about the world, detected by a different
+mechanism (D16's normalized digest) and carrying different weight.
+
+**Cost.** Two distinct code paths where the implementation had one.
+
+---
+
+## D23 — Source records cannot be minted, only witnessed
+
+**Context.** `ARCHITECTURE.md` promises fabricated citations are *"structurally impossible
+rather than merely discouraged"*, and D9 says research tool-agents are the only code permitted
+to originate a source record. The review found this is currently **convention, not structure**:
+`EvidenceStore.putSource` is public API taking a fully-formed record, on a package
+`@shadow/agent` will also depend on. Any caller can mint a record claiming
+`transport: "live"` with a self-consistent snapshot, and the integrity check passes — because
+it verifies *self-consistency*, not *provenance*.
+
+The review found the same family of hole in D19's operator claims: nothing verified that an
+`operator` claim's cited source was actually a session transcript, so Shadow could point a
+"the operator said this" claim at any fetched web page containing the sentence.
+
+**Decision.** Origination takes a **witness**, not a record. `putSource` accepts either a
+`FetchedPage` produced by `@shadow/research`'s transport, or a session-transcript handle — and
+derives the source record itself. There is no public path that accepts a hand-assembled
+`SourceRecord`.
+
+And `transport` becomes load-bearing rather than descriptive: operator-claim verification must
+resolve the cited source and require `transport === "session"`.
+
+**Why.** A guarantee that depends on every caller behaving is not a guarantee. The whole
+argument for this design is that Shadow *cannot* fabricate, and that has to be enforced by the
+type system and the API shape, not by the writer's good manners. Making the two legitimate
+origins — a real retrieval and a real transcript — the only constructors is what makes the
+claim true.
+
+**Cost.** A narrower, slightly less convenient API, and research and evidence become more
+tightly coupled at exactly one point. Worth it.
+
+---
+
 ## D12 — The CLI is composable, and steers its caller in-band
 
 **Context.** The CLI's consumer is a language model with a token budget, not a human.

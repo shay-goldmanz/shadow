@@ -110,7 +110,32 @@ are better and are now normative:
    in the previous sidecar disappears.
 4. **`nfc-ws-v1` step 1 (readability extraction) belongs to `@shadow/research`, not here.** It
    needs HTML parsing, which is the transport's concern. `@shadow/evidence` implements steps
-   2–5 over already-extracted text. The two packages meet at the extracted-text boundary.
+   2–5 over already-extracted text and **owns them exclusively** — `@shadow/research` imports
+   them rather than reimplementing, so the two can never drift. Drift here would silently
+   invalidate every citation in the corpus at once.
+
+## Amendments from the Wave 1 review
+
+5. **Orphan semantics split in two (D22).** This document said both "every selector must
+   resolve" and "orphan is a state, not an error". Correct rule: failure to resolve **in the
+   pinned snapshot** is blocking — snapshots are immutable, so the quote was fabricated or the
+   snapshot was tampered with. **Live-source drift** is a warning that marks the claim stale
+   and queues a refetch.
+6. **Source records are witnessed, not minted (D23).** `putSource` takes a `FetchedPage` or a
+   session-transcript handle and derives the record. There is no public path accepting a
+   hand-assembled `SourceRecord`.
+7. **Operator-claim verification must check provenance, not just text.** Resolve the cited
+   source and require `transport === "session"`. Exact-matching the quote alone lets an
+   `operator` claim point at any web page that happens to contain the sentence — which defeats
+   the entire purpose of D19.
+8. **`inputHash` must encode its parts injectively.** Joining with a single space collides:
+   `("Linear uses", "grid")` and `("Linear", "uses grid")` hash identically, so a claim whose
+   meaning changed would skip re-judging. Length-prefix or use a non-occurring separator.
+9. **Fuzzy anchoring must be bounded.** Unpruned Levenshtein over every start position and
+   window length was measured at **66 seconds for one orphaned selector** in a 66k-character
+   snapshot — inside a Tier 0 path specified as "milliseconds, always". The orphan case is the
+   common case as sources age. Band the distance computation, abandon early, or pre-filter on
+   a k-gram of `exact` before attempting fuzzy at all.
 
 ## On-disk layout
 
