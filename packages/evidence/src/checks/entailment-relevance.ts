@@ -22,8 +22,28 @@
  * evidence, judged or memoized alike — it's a pure function of
  * `decontextualized` and the cited spans, costs nothing, and is a watched
  * metric precisely because burying it defeats the point (`extractiveness.ts`).
+ *
+ * **The judge reads resolved snapshot bytes, never `selector.exact` (D24,
+ * Wave 2 review, C-1).** `candidatesFor` used to hand the judge each span's
+ * `selector.exact` directly — the writer's own copy of the quote. That makes
+ * C3 circular: a fabricated quote is checked against itself and cannot fail.
+ * `candidatesFor` now resolves each span against the pinned snapshot via
+ * `resolveEvidenceText` (`./source-integrity.ts`, exact-only per D24) and
+ * sends *that* text instead; a span that fails to resolve is simply dropped
+ * from the candidate list rather than falling back to the claim's own
+ * unverified copy — C2 (Tier 0, blocking) is what reports why it didn't
+ * resolve, so this file doesn't need to duplicate that judgment, only
+ * refuse to launder unresolved text into a judge prompt.
+ *
+ * **`operator` claims never enter the batch (Wave 2 review, minor item).**
+ * `docs/EVIDENCE.md` is explicit that operator claims "verify at Tier 0 —
+ * exact substring match against the session snapshot. No model, no cost."
+ * `judgeEntailmentAndRelevance`'s `toJudge` filter excludes `kind ===
+ * "operator"` outright, before the memoization check even runs, so a fresh
+ * operator claim doesn't cost a model call it was never spec'd to cost.
  */
 
+import type { AnchoringConfig } from "../anchoring.ts";
 import type { Sha256Digest } from "../digest.ts";
 import { meanExtractiveness } from "../extractiveness.ts";
 import type {
@@ -32,6 +52,7 @@ import type {
   EntailmentRelevanceVerdict,
 } from "../ports.ts";
 import type { Claim, ClaimSidecar, Verification } from "../types.ts";
+import { type EvidenceLookup, resolveEvidenceText } from "./source-integrity.ts";
 import type { CheckIssue, CheckOutcome } from "./types.ts";
 
 export interface EntailmentRelevanceBundle {
@@ -41,6 +62,9 @@ export interface EntailmentRelevanceBundle {
   readonly judge: EntailmentRelevanceJudge;
   /** Every current claim's freshly-computed `inputHash`, keyed by label — Tier 0's `computeInputHashes` output; this *is* the memoization filter. */
   readonly currentInputHashes: Readonly<Record<string, Sha256Digest>>;
+  /** Resolves each evidence span against its pinned snapshot (D24) — the same lookup C2 (`source-integrity.ts`) uses, so the judge reads exactly the bytes C2 verified rather than the claim's own copy of the quote. */
+  readonly lookup: EvidenceLookup;
+  readonly anchoringConfig?: AnchoringConfig;
   readonly classifiedBy?: string;
 }
 
@@ -53,9 +77,26 @@ export interface EntailmentRelevanceResult {
   readonly meanExtractiveness: number | undefined;
 }
 
-function candidatesFor(claim: Claim): EntailmentRelevanceInput["candidates"] {
+/**
+ * Candidates for the judge: for `sourced`/`operator` claims, each evidence
+ * span's *resolved* stored text (never `selector.exact` — D24). A span that
+ * doesn't resolve against its pinned snapshot is dropped, not laundered
+ * through as the claim's own unverified copy; C2 is what blocks the chapter
+ * for that span, so the judge simply never sees it.
+ */
+function candidatesFor(
+  claim: Claim,
+  lookup: EvidenceLookup,
+  config: AnchoringConfig | undefined,
+): EntailmentRelevanceInput["candidates"] {
   if (claim.kind === "derived") return [];
-  return claim.evidence.map((span) => ({ exact: span.selector.exact, sourceId: span.sourceId }));
+  const candidates: EntailmentRelevanceInput["candidates"][number][] = [];
+  for (const span of claim.evidence) {
+    const resolvedText = resolveEvidenceText(span, lookup, config);
+    if (resolvedText === undefined) continue;
+    candidates.push({ exact: resolvedText, sourceId: span.sourceId });
+  }
+  return candidates;
 }
 
 function supportingClaimsFor(
@@ -72,11 +113,17 @@ function supportingClaimsFor(
 export async function judgeEntailmentAndRelevance(
   bundle: EntailmentRelevanceBundle,
 ): Promise<EntailmentRelevanceResult> {
-  const { sidecar, chapterSubject, whenToUse, judge, currentInputHashes } = bundle;
+  const { sidecar, chapterSubject, whenToUse, judge, currentInputHashes, lookup, anchoringConfig } =
+    bundle;
   const classifiedBy = bundle.classifiedBy ?? "llm-judge/claude@shadow-model";
   const claimsByLabel = new Map(sidecar.claims.map((c) => [c.label, c] as const));
 
   const toJudge = sidecar.claims.filter((claim) => {
+    // `operator` claims verify at Tier 0 — exact substring match against
+    // the session transcript, no model, no cost (docs/EVIDENCE.md; Wave 2
+    // review, minor item). Batching them into C3 anyway costs a model call
+    // for a verdict Tier 0 already settled with certainty.
+    if (claim.kind === "operator") return false;
     const currentHash = currentInputHashes[claim.label];
     const memoized =
       claim.verification.status !== "unchecked" && claim.verification.inputHash === currentHash;
@@ -89,7 +136,7 @@ export async function judgeEntailmentAndRelevance(
     const requests: EntailmentRelevanceInput[] = toJudge.map((claim) => ({
       claimId: claim.id,
       decontextualized: claim.decontextualized,
-      candidates: candidatesFor(claim),
+      candidates: candidatesFor(claim, lookup, anchoringConfig),
       supportingClaims: supportingClaimsFor(claim, claimsByLabel),
       chapterSubject,
       whenToUse,

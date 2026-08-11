@@ -83,14 +83,27 @@ describe("checkIndexAlignment (C4)", () => {
 });
 
 describe("computeRoutingMetadataHash", () => {
-  test("is stable for identical input and changes when input changes", () => {
-    const a = computeRoutingMetadataHash(["Use this for spacing.", "Also covers grids."]);
-    const b = computeRoutingMetadataHash(["Use this for spacing.", "Also covers grids."]);
-    const c = computeRoutingMetadataHash([
-      "Use this for spacing and collaboration.",
-      "Also covers grids.",
-    ]);
+  test("is stable for identical input and changes when the node summaries change", () => {
+    const claims = ["Linear uses a 4px grid."];
+    const a = computeRoutingMetadataHash(["Use this for spacing.", "Also covers grids."], claims);
+    const b = computeRoutingMetadataHash(["Use this for spacing.", "Also covers grids."], claims);
+    const c = computeRoutingMetadataHash(
+      ["Use this for spacing and collaboration.", "Also covers grids."],
+      claims,
+    );
     expect(a).toBe(b);
     expect(a).not.toBe(c);
+  });
+
+  // ---- I-3 (Wave 2 review): the memo key must also depend on chapterClaims ----
+
+  test("changes when chapterClaims changes, even though the node summaries do not (I-3)", () => {
+    const nodeSummaries = ["Use this for spacing systems."];
+    const a = computeRoutingMetadataHash(nodeSummaries, ["Linear uses a 4px grid."]);
+    // Same routing metadata text, but the claim underneath it was restated —
+    // deleting or rewording a claim that supported this when_to_use must
+    // change the memoization key, or C4 would replay a stale pass.
+    const b = computeRoutingMetadataHash(nodeSummaries, ["Linear uses an 8px grid."]);
+    expect(a).not.toBe(b);
   });
 });

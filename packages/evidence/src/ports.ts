@@ -66,6 +66,7 @@ export interface CheckWorthinessClassifier {
 // ---- C3 — span entailment --------------------------------------------------
 
 export interface EntailmentCandidate {
+  /** The resolved snapshot text for this evidence span — see `EntailmentInput.candidates`'s doc (D24). Named `exact` for continuity with `TextQuoteSelector.exact`, but this is the *resolved* text, not the writer-supplied selector field of that name. */
   readonly exact: string;
   readonly sourceId: SourceId;
 }
@@ -73,7 +74,18 @@ export interface EntailmentCandidate {
 export interface EntailmentInput {
   readonly claimId: ClaimId;
   readonly decontextualized: string;
-  /** For `sourced`/`operator`: the resolved evidence spans. For `derived`: empty — see `supportingClaims`. */
+  /**
+   * For `sourced`/`operator`: each evidence span's *resolved* text — the
+   * slice of the pinned snapshot the span's selector actually resolves to,
+   * never the claim's own writer-supplied `selector.exact` (D24, Wave 2
+   * review, C-1: handing a verifier the thing it is verifying makes the
+   * check circular and unable to fail). Produced by
+   * `checks/entailment-relevance.ts`'s `candidatesFor` via
+   * `checks/source-integrity.ts`'s `resolveEvidenceText`, the same
+   * exact-only resolution C2 uses. A span that doesn't resolve is simply
+   * absent here, not backfilled with unverified text. For `derived`: empty
+   * — see `supportingClaims`.
+   */
   readonly candidates: readonly EntailmentCandidate[];
   /** For `derived` claims: the decontextualized text of each claim in `supports[]`. */
   readonly supportingClaims?: readonly string[];

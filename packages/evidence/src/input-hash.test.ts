@@ -83,9 +83,29 @@ describe("computeInputHash", () => {
   });
 
   test("changes when supports[] changes for a derived claim", () => {
+    // I-1 (Wave 2 review): `supports` carries each supporting claim's own
+    // `inputHash`, not its bare label — see input-hash.ts's module doc.
+    // These stand in for two such hashes.
     const base = { decontextualized: "Both treat spacing as a system constraint.", evidence: [] };
-    const a = computeInputHash({ ...base, supports: ["lin-4px"] });
-    const b = computeInputHash({ ...base, supports: ["lin-4px", "notion-ws"] });
+    const a = computeInputHash({ ...base, supports: [HASH_A] });
+    const b = computeInputHash({ ...base, supports: [HASH_A, HASH_B] });
+    expect(a).not.toBe(b);
+  });
+
+  // ---- I-1 (Wave 2 review): supports[] must hash each target's own inputHash, not its label ----
+
+  test("supports[] hashing the same label twice with different underlying inputHashes does not collide (I-1)", () => {
+    // Two hypothetical derived claims, both supported by a claim labeled
+    // "lin-4px" — but in one case that supporting claim currently means
+    // "4px" (hash A) and in the other it has since been re-cited to mean
+    // "8px" (hash B). If `supports` carried the label instead of the target
+    // claim's own inputHash, these would be indistinguishable — exactly the
+    // silent-skip bug the review reproduced (claim B's text changed, claim
+    // A's inputHash stayed put because it only ever saw the unchanged
+    // label "lin-4px").
+    const base = { decontextualized: "Both treat spacing as a system constraint.", evidence: [] };
+    const a = computeInputHash({ ...base, supports: [HASH_A] });
+    const b = computeInputHash({ ...base, supports: [HASH_B] });
     expect(a).not.toBe(b);
   });
 

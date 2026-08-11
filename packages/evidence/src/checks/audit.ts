@@ -51,19 +51,58 @@ export const TIER0_CHECKS: readonly EvidenceCheck<Tier0AuditInput>[] = [
   },
 ];
 
-/** Every current claim's `inputHash`, keyed by label — the memoization key Tier 2 diffs against `verification.inputHash` to decide what needs re-judging. */
+/**
+ * Every current claim's `inputHash`, keyed by label — the memoization key
+ * Tier 2 diffs against `verification.inputHash` to decide what needs
+ * re-judging.
+ *
+ * **Computed bottom-up over the `supports[]` graph (I-1, Wave 2 review).**
+ * A `derived` claim's `inputHash` folds in each of its `supports[]`
+ * targets' *own* `inputHash`, not their bare label — see `input-hash.ts`'s
+ * module doc for why hashing labels made a supporting claim's meaning
+ * changing invisible to memoization. Resolving `hashFor` recursively (with
+ * memoization via `hashes`, computed here regardless) means the effect
+ * cascades transitively: if claim B's text changes, claim A (derived,
+ * built on B) gets a new `inputHash` even though nothing about A's own
+ * `text`/`evidence`/`supports[]` labels changed, and if some claim C is
+ * `derived` from A, C's hash changes too. `visiting` guards against
+ * infinite recursion on a malformed cycle in `supports[]` — C1a
+ * (`structural-completeness.ts`) is what blocks a chapter with one; this
+ * function just has to not hang if it's ever called before C1a has.
+ */
 export function computeInputHashes(sidecar: ClaimSidecar): Readonly<Record<string, Sha256Digest>> {
+  const byLabel = new Map(sidecar.claims.map((c) => [c.label, c] as const));
   const hashes: Record<string, Sha256Digest> = {};
-  for (const claim of sidecar.claims) {
-    hashes[claim.label] = computeInputHash({
+  const visiting = new Set<string>();
+
+  function hashFor(label: string): Sha256Digest | undefined {
+    const cached = hashes[label];
+    if (cached) return cached;
+    const claim = byLabel.get(label);
+    if (!claim) return undefined;
+    if (visiting.has(label)) {
+      // A cycle in supports[] — C1a blocks the chapter for this, but stay
+      // terminating rather than recursing forever if this ever runs first.
+      return undefined;
+    }
+    visiting.add(label);
+    const supportHashes = claim.supports
+      .map((target) => hashFor(target))
+      .filter((h): h is Sha256Digest => h !== undefined);
+    const hash = computeInputHash({
       decontextualized: claim.decontextualized,
       evidence: claim.evidence.map((e) => ({
         exact: e.selector.exact,
         snapshotHash: e.snapshotHash,
       })),
-      supports: claim.supports,
+      supports: supportHashes,
     });
+    visiting.delete(label);
+    hashes[label] = hash;
+    return hash;
   }
+
+  for (const claim of sidecar.claims) hashFor(claim.label);
   return hashes;
 }
 

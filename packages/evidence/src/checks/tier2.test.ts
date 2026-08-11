@@ -368,4 +368,80 @@ describe("runFullAudit", () => {
     expect(thirdIndexPort.calls).toHaveLength(1);
     expect(third.verdict.passed).toBe(false);
   });
+
+  // ---- I-3 (Wave 2 review): C4's memo key must also depend on chapterClaims ----
+
+  test("I-3: C4 re-runs when chapterClaims change even though routing metadata (frontmatter) does not", async () => {
+    const { chapterBody, sidecar, lookup } = buildFixture();
+
+    const checkWorthinessPort = new FakeStructuredGenerationPort([
+      { verdicts: [{ checkRequired: false, rationale: "connective prose" }] },
+    ]);
+    const entailmentPort = new FakeStructuredGenerationPort([
+      {
+        verdicts: [
+          {
+            entailment: { status: "supported", rationale: "r" },
+            relevance: { relevance: "on-topic", rationale: "r" },
+          },
+        ],
+      },
+    ]);
+    const indexPort = new FakeStructuredGenerationPort([
+      { verdicts: [{ aligned: true, unsupportedAssertions: [] }] },
+    ]);
+
+    const first = await runFullAudit({
+      chapterBody,
+      chapterSubject: "How Linear designs its UI",
+      sidecar,
+      lookup,
+      checkWorthinessClassifier: new BatchedCheckWorthinessClassifier(checkWorthinessPort),
+      entailmentRelevanceJudge: new BatchedEntailmentRelevanceJudge(entailmentPort),
+      indexNodeSummaries: ["Use this chapter for Linear's 4px spacing system."],
+      indexAlignmentChecker: new BatchedIndexAlignmentChecker(indexPort),
+    });
+
+    expect(indexPort.calls).toHaveLength(1);
+    expect(first.outcomes.find((o) => o.checkId === "C4")?.passed).toBe(true);
+
+    // Second audit: the SAME routing metadata (frontmatter untouched) — the
+    // operator deleted the claim that supported it, without touching
+    // `when_to_use`. If C4's memo key depended only on the node-summary
+    // text, this would incorrectly replay the *first* run's stale
+    // "aligned: true" pass on what is now an unsupported promise.
+    const emptySidecar = { ...first.sidecar, claims: [] };
+    const secondCheckWorthinessPort = new FakeStructuredGenerationPort([]);
+    const secondEntailmentPort = new FakeStructuredGenerationPort([]);
+    const secondIndexPort = new FakeStructuredGenerationPort([
+      {
+        verdicts: [
+          {
+            aligned: false,
+            unsupportedAssertions: ["promises a 4px spacing system the chapter no longer claims"],
+          },
+        ],
+      },
+    ]);
+
+    const second = await runFullAudit({
+      chapterBody,
+      chapterSubject: "How Linear designs its UI",
+      sidecar: emptySidecar,
+      lookup,
+      checkWorthinessClassifier: new BatchedCheckWorthinessClassifier(secondCheckWorthinessPort),
+      entailmentRelevanceJudge: new BatchedEntailmentRelevanceJudge(secondEntailmentPort),
+      indexNodeSummaries: ["Use this chapter for Linear's 4px spacing system."],
+      indexAlignmentChecker: new BatchedIndexAlignmentChecker(secondIndexPort),
+      previousRoutingMetadataHash: first.record.routingMetadataHash,
+      previousIndexAlignmentOutcome: first.outcomes.find((o) => o.checkId === "C4"),
+    });
+
+    // C4 must actually re-run — not replay the memoized "aligned: true" —
+    // because the claims underneath the summary changed even though the
+    // summary text itself did not.
+    expect(secondIndexPort.calls).toHaveLength(1);
+    expect(second.outcomes.find((o) => o.checkId === "C4")?.passed).toBe(false);
+    expect(second.verdict.passed).toBe(false);
+  });
 });

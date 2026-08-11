@@ -151,7 +151,11 @@ export type {
   SourceIntegrityData,
   SourceIntegrityInput,
 } from "./checks/source-integrity.ts";
-export { checkSourceIntegrity, sourceIntegrityCheck } from "./checks/source-integrity.ts";
+export {
+  checkSourceIntegrity,
+  resolveEvidenceText,
+  sourceIntegrityCheck,
+} from "./checks/source-integrity.ts";
 export type { StructuralCompletenessInput } from "./checks/structural-completeness.ts";
 export {
   checkStructuralCompleteness,

@@ -100,6 +100,14 @@ export interface ResolveOptions {
    * *exactly* or fail outright — a near-but-not-exact quote is exactly the
    * loophole that check exists to close, so it must never be laundered
    * into a passing `anchored-fuzzy`.
+   *
+   * **C2's source-integrity resolution also sets this `false` (D24, Wave 2
+   * review).** A pinned, content-addressed snapshot is immutable, so there
+   * is no legitimate "nearly but not quite present" case for a quote cited
+   * against it — a near-miss there means fabrication or tampering, not
+   * drift. Fuzzy resolution stays available here for the separate
+   * drift/re-anchoring path against *refetched* text, where it is the only
+   * place it was ever coherent.
    */
   readonly allowFuzzy?: boolean;
   readonly config?: AnchoringConfig;

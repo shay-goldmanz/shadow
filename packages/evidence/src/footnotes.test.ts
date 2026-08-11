@@ -56,4 +56,41 @@ describe("parseFootnoteMarkers", () => {
     expect(markers).toEqual([]);
     expect(malformed).toEqual([]);
   });
+
+  // ---- Wave 2 review (minor): fenced code is masked before scanning ----
+
+  test("a literal [^label]-shaped token inside a fenced code block is not treated as a marker", () => {
+    const body = [
+      "A claim.[^lin-4px]",
+      "",
+      "```markdown",
+      "Mark a citation like this: [^example].",
+      "```",
+      "",
+      "[^lin-4px]: Linear.",
+    ].join("\n");
+    const { markers, malformed } = parseFootnoteMarkers(body);
+    expect(markers).toHaveLength(1);
+    expect(markers[0]?.label).toBe("lin-4px");
+    expect(malformed).toEqual([]);
+  });
+
+  test("a real marker's offset is unaffected by an earlier fenced block", () => {
+    const body = ["```ts", "const x = 1;", "```", "", "A real claim.[^real]"].join("\n");
+    const { markers } = parseFootnoteMarkers(body);
+    expect(markers).toHaveLength(1);
+    expect(markers[0]?.raw).toBe("[^real]");
+    expect(body.slice(markers[0]?.index ?? -1, (markers[0]?.index ?? -1) + 7)).toBe("[^real]");
+  });
+
+  test("~ and = prefixed marker-shaped tokens inside a fence are also masked", () => {
+    const body = [
+      "```markdown",
+      "[^=derived-example] and [^~operator-example] are also valid.",
+      "```",
+    ].join("\n");
+    const { markers, malformed } = parseFootnoteMarkers(body);
+    expect(markers).toEqual([]);
+    expect(malformed).toEqual([]);
+  });
 });

@@ -34,7 +34,7 @@ describe("splitSentences", () => {
 });
 
 describe("segmentChapterBody", () => {
-  test("excludes headings, list items, code fences, and blockquotes", () => {
+  test("excludes headings and code fences; segments list-item content as prose; blockquote content is form-excluded but still counted (D25)", () => {
     const body = [
       "# A heading that ends with a period.",
       "",
@@ -52,11 +52,43 @@ describe("segmentChapterBody", () => {
       "Final paragraph sentence.",
     ].join("\n");
 
-    const sentences = segmentChapterBody(body).map((s) => s.text);
-    expect(sentences).toEqual([
+    const sentences = segmentChapterBody(body);
+
+    // The heading and the code-fence content never appear anywhere.
+    expect(sentences.some((s) => s.text.includes("heading"))).toBe(false);
+    expect(sentences.some((s) => s.text.includes("not a sentence"))).toBe(false);
+
+    // D25: list-item text is segmented like ordinary prose — only the `- `
+    // marker is scaffolding, not the sentence it introduces.
+    expect(sentences.map((s) => s.text)).toEqual([
       "Some real prose here.",
       "It has two sentences.",
+      "A list item that looks like a claim.",
+      "Another one.",
+      "A quoted line that should not count.",
       "Final paragraph sentence.",
+    ]);
+
+    // D25: the blockquote line is still excluded from the audited sweep
+    // (no writer can hide an assertion inside a marked-false-forever
+    // quote)...
+    const listSentences = sentences.filter((s) => s.text.includes("list item"));
+    expect(listSentences.every((s) => !s.formExcluded)).toBe(true);
+    const blockquoteSentence = sentences.find((s) => s.text.includes("quoted line"));
+    expect(blockquoteSentence?.formExcluded).toBe(true);
+    // ...but it's still present in the segmentation output (not silently
+    // dropped) so a caller can fold it into the narrative budget.
+    expect(sentences).toContainEqual(
+      expect.objectContaining({ text: "A quoted line that should not count.", formExcluded: true }),
+    );
+  });
+
+  test("a footnoted list item is detected as marked, just like a footnoted paragraph sentence (D25)", () => {
+    const body = "- Linear caps row height at 32px.[^lin-32]\n- Notion uses variable row height.";
+    const sentences = segmentChapterBody(body);
+    expect(sentences.map((s) => ({ text: s.text, marked: s.marked }))).toEqual([
+      { text: "Linear caps row height at 32px.[^lin-32]", marked: true },
+      { text: "Notion uses variable row height.", marked: false },
     ]);
   });
 

@@ -27,6 +27,17 @@
  * make that decision itself, since the "did anything change" question needs
  * the *previous* audit record, which lives in `checks/tier2.ts`'s
  * orchestration, not here.
+ *
+ * **The memoization key folds in `chapterClaims`, not just the routing-
+ * metadata text (I-3, Wave 2 review).** C4's actual verdict depends on
+ * *both* the node-summary fragments and the chapter claims they're checked
+ * against — `checkIndexAlignment`'s `fragments` pairs each summary with
+ * `chapterClaims`. Hashing only the summaries meant deleting or restating a
+ * claim that supported a `when_to_use`, while leaving frontmatter untouched,
+ * left `computeRoutingMetadataHash`'s key unchanged — so C4 replayed a stale
+ * *pass* on a blocking check even though the claims underneath the summary
+ * had moved. Folding `chapterClaims` in closes that: any claim edit that
+ * changes what C4 would judge also changes the key.
  */
 
 import { type Sha256Digest, sha256Of } from "../digest.ts";
@@ -39,9 +50,17 @@ export interface IndexAlignmentBundle {
   readonly checker: IndexAlignmentChecker;
 }
 
-/** Hash of the routing-metadata text C4 is about to judge — the all-or-nothing memoization key (see module doc). */
-export function computeRoutingMetadataHash(nodeSummaries: readonly string[]): Sha256Digest {
-  return sha256Of(JSON.stringify(nodeSummaries));
+/**
+ * Hash of the routing-metadata text *and* the chapter claims it is judged
+ * against — the all-or-nothing memoization key (see module doc's I-3 note).
+ * Both arguments are what `checkIndexAlignment`'s verdict actually depends
+ * on, so both must be in the key or a claim-only edit goes undetected.
+ */
+export function computeRoutingMetadataHash(
+  nodeSummaries: readonly string[],
+  chapterClaims: readonly string[],
+): Sha256Digest {
+  return sha256Of(JSON.stringify([nodeSummaries, chapterClaims]));
 }
 
 /** Run C4 over one chapter's index routing metadata, in one batched call. */

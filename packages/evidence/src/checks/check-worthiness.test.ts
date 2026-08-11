@@ -147,4 +147,56 @@ describe("checkCheckWorthiness (C1b)", () => {
     expect(secondClassifier.calls[0]).toHaveLength(1);
     expect(secondClassifier.calls[0]?.[0]?.sentence).toBe("A brand new sentence appears here.");
   });
+
+  // ---- D25 (Wave 2 review, C-2): unmarked bullets no longer escape the sweep or the budget ----
+
+  test("a hallucinated uncited bullet is caught as an orphan claim, exactly like an uncited paragraph sentence", async () => {
+    const chapterBody =
+      "Linear and Notion both take opinionated stances on layout.\n\n" +
+      "- Linear caps row height at 32px.\n" +
+      "- This is just a stylistic preference, not a factual claim.";
+    const classifier = new RecordingClassifier((input) => ({
+      checkRequired: input.sentence.includes("caps row height"),
+      rationale: "specific factual claim vs. connective bullet",
+    }));
+
+    const { outcome } = await checkCheckWorthiness({
+      chapterBody,
+      chapterSubject: "How design tools handle density",
+      classifier,
+    });
+
+    expect(outcome.passed).toBe(false);
+    expect(
+      outcome.issues.some((i) => i.code === "orphan-claim" && i.message.includes("32px")),
+    ).toBe(true);
+  });
+
+  test("blockquote content is never classified, but still inflates narrativeRatio so the exemption stays visible (D25)", async () => {
+    const chapterBody =
+      "One short sentence of real prose.\n\n" +
+      "> A long quoted passage that could hide anything. It has several sentences. Nobody ever classifies it.";
+    const classifier = new RecordingClassifier(() => ({
+      checkRequired: false,
+      rationale: "connective prose",
+    }));
+
+    const { outcome, narrative } = await checkCheckWorthiness({
+      chapterBody,
+      chapterSubject: "Design systems",
+      classifier,
+    });
+
+    // The classifier only ever sees the one real paragraph sentence — the
+    // three blockquote sentences never reach it.
+    expect(classifier.calls).toHaveLength(1);
+    expect(classifier.calls[0]).toHaveLength(1);
+    expect(classifier.calls[0]?.[0]?.sentence).toBe("One short sentence of real prose.");
+
+    // But the budget can see them: 1 classified narrative sentence + 3
+    // form-excluded (blockquote) sentences, out of 4 total.
+    expect(narrative.sentences).toBe(4);
+    expect(narrative.ratio).toBe(1);
+    expect(outcome.passed).toBe(true);
+  });
 });

@@ -16,9 +16,43 @@
  * time; a marker whose label doesn't match is reported as an issue rather
  * than silently dropped, since a malformed label is exactly the kind of
  * thing C1a needs to catch.
+ *
+ * **Fenced code blocks are masked before scanning (Wave 2 review, minor
+ * item).** `sentence-segmentation.ts` already excludes fenced code from
+ * prose segmentation, but this file used to scan the raw chapter body
+ * unconditionally — a literal `[^example]` inside a fenced code sample
+ * (documenting the footnote syntax itself, say) parsed as a real reference
+ * marker with no claim record, failing C1a as an `orphan-marker`.
+ * `maskFencedCode` blanks fenced-block content with same-length whitespace
+ * before the marker regex runs, so `FootnoteMarker.index`/`raw` offsets
+ * into the *original* text stay correct for anything found outside a fence.
  */
 
 export type FootnoteKind = "sourced" | "derived" | "operator";
+
+const FENCE_PATTERN = /^\s*(```|~~~)/;
+
+/**
+ * Replace the content of every fenced code block (```/~~~ delimited) with
+ * whitespace of the same length, line by line — preserving every other
+ * character's offset and the total string length so callers can keep using
+ * plain string indices into the original text. The fence delimiter lines
+ * themselves are left untouched (they essentially never contain a footnote
+ * marker, and keeping them intact is simpler than special-casing them).
+ */
+function maskFencedCode(text: string): string {
+  const lines = text.split("\n");
+  let inFence = false;
+  const masked = lines.map((line) => {
+    if (FENCE_PATTERN.test(line)) {
+      inFence = !inFence;
+      return line;
+    }
+    if (inFence) return " ".repeat(line.length);
+    return line;
+  });
+  return masked.join("\n");
+}
 
 /** D18's label shape: lowercase kebab-case. Exported for reuse by the structural completeness check. */
 export const KEBAB_LABEL_PATTERN = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
@@ -66,7 +100,12 @@ export function parseFootnoteMarkers(chapterBody: string): ParsedFootnotes {
   const markers: FootnoteMarker[] = [];
   const malformed: MalformedFootnote[] = [];
 
-  for (const match of chapterBody.matchAll(MARKER_PATTERN)) {
+  // Mask fenced code before scanning — see module doc. `maskFencedCode`
+  // preserves length and non-fence content exactly, so `match.index`/`raw`
+  // below still refer correctly into `chapterBody`.
+  const scanText = maskFencedCode(chapterBody);
+
+  for (const match of scanText.matchAll(MARKER_PATTERN)) {
     const index = match.index;
     const raw = match[0];
     const prefix = match[1];

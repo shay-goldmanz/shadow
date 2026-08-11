@@ -21,6 +21,7 @@
  * `checks/types.ts`'s module doc describes.
  */
 
+import type { AnchoringConfig } from "../anchoring.ts";
 import type { Sha256Digest } from "../digest.ts";
 import type {
   CheckWorthinessClassifier,
@@ -32,6 +33,7 @@ import { type AuditRecord, runTier0Audit, type Tier0AuditInput } from "./audit.t
 import { checkCheckWorthiness } from "./check-worthiness.ts";
 import { judgeEntailmentAndRelevance } from "./entailment-relevance.ts";
 import { checkIndexAlignment, computeRoutingMetadataHash } from "./index-alignment.ts";
+import type { EvidenceLookup } from "./source-integrity.ts";
 import type { AuditVerdict, CheckOutcome } from "./types.ts";
 import { verdictFromOutcomes } from "./types.ts";
 
@@ -45,6 +47,9 @@ export interface Tier2AuditInput {
   readonly entailmentRelevanceJudge: EntailmentRelevanceJudge;
   /** Every current claim's `inputHash` — Tier 0's `computeInputHashes` output. The C3/C5 memoization filter. */
   readonly currentInputHashes: Readonly<Record<string, Sha256Digest>>;
+  /** Resolves evidence spans against their pinned snapshots (D24) — threaded into C3's judging so it reads resolved stored bytes, never a claim's own `selector.exact`. The same lookup C2 uses. */
+  readonly lookup: EvidenceLookup;
+  readonly anchoringConfig?: AnchoringConfig;
   /** Index routing-metadata fragments (`when_to_use`, node summaries) to check with C4. Omit if this chapter has no index node yet. */
   readonly indexNodeSummaries?: readonly string[];
   readonly indexAlignmentChecker?: IndexAlignmentChecker;
@@ -83,19 +88,30 @@ export async function runTier2Audit(input: Tier2AuditInput): Promise<Tier2AuditR
       whenToUse: input.whenToUse,
       judge: input.entailmentRelevanceJudge,
       currentInputHashes: input.currentInputHashes,
+      lookup: input.lookup,
+      anchoringConfig: input.anchoringConfig,
       classifiedBy,
     });
 
   const outcomes: CheckOutcome[] = [c1bOutcome, c3Outcome, c5Outcome];
+
+  // I-3 (Wave 2 review): C4's memoization key must fold in `chapterClaims`,
+  // not just the routing-metadata text. C4's verdict depends on both — if a
+  // claim that supported a `when_to_use` is deleted or restated while the
+  // frontmatter itself is untouched, `chapterClaims` changes but the old
+  // `computeRoutingMetadataHash(nodeSummaries)`-only key would not, so C4
+  // would replay a stale *pass* on a blocking check. Computed unconditionally
+  // (not just inside the branch below) since it's needed to decide whether
+  // anything changed at all.
+  const chapterClaims = claims.map((c) => c.decontextualized);
 
   let routingMetadataHash = input.previousRoutingMetadataHash;
   if (input.indexNodeSummaries && input.indexNodeSummaries.length > 0) {
     if (!input.indexAlignmentChecker) {
       throw new Error("indexNodeSummaries was provided without an indexAlignmentChecker");
     }
-    const currentHash = computeRoutingMetadataHash(input.indexNodeSummaries);
+    const currentHash = computeRoutingMetadataHash(input.indexNodeSummaries, chapterClaims);
     if (currentHash !== input.previousRoutingMetadataHash) {
-      const chapterClaims = claims.map((c) => c.decontextualized);
       const c4Outcome = await checkIndexAlignment({
         fragments: input.indexNodeSummaries.map((nodeSummary) => ({ nodeSummary, chapterClaims })),
         checker: input.indexAlignmentChecker,
@@ -157,6 +173,8 @@ export async function runFullAudit(input: FullAuditInput): Promise<FullAuditResu
     checkWorthinessClassifier: input.checkWorthinessClassifier,
     entailmentRelevanceJudge: input.entailmentRelevanceJudge,
     currentInputHashes: tier0.inputHashes,
+    lookup: input.lookup,
+    anchoringConfig: input.anchoringConfig,
     indexNodeSummaries: input.indexNodeSummaries,
     indexAlignmentChecker: input.indexAlignmentChecker,
     previousRoutingMetadataHash: input.previousRoutingMetadataHash,

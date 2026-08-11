@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
-import { sha256Of } from "../digest.ts";
-import { computeInputHash } from "../input-hash.ts";
+import { type Sha256Digest, sha256Of } from "../digest.ts";
+import type { SourceId } from "../ids.ts";
 import type {
   EntailmentRelevanceInput,
   EntailmentRelevanceJudge,
@@ -11,9 +11,13 @@ import {
   makeEvidenceSpan,
   makeSelector,
   makeSidecar,
+  makeSource,
   makeVerification,
 } from "../test-helpers.ts";
+import type { SourceRecord } from "../types.ts";
+import { computeInputHashes } from "./audit.ts";
 import { judgeEntailmentAndRelevance } from "./entailment-relevance.ts";
+import type { EvidenceLookup } from "./source-integrity.ts";
 
 class RecordingJudge implements EntailmentRelevanceJudge {
   calls: EntailmentRelevanceInput[][] = [];
@@ -28,15 +32,35 @@ class RecordingJudge implements EntailmentRelevanceJudge {
   }
 }
 
-function hashFor(claim: ReturnType<typeof makeClaim>) {
-  return computeInputHash({
-    decontextualized: claim.decontextualized,
-    evidence: claim.evidence.map((e) => ({
-      exact: e.selector.exact,
-      snapshotHash: e.snapshotHash,
-    })),
-    supports: claim.supports,
+function lookupFrom(sources: SourceRecord[], snapshots: Record<string, string>): EvidenceLookup {
+  const byId = new Map(sources.map((s) => [s.id, s]));
+  return {
+    getSource: (id: SourceId) => byId.get(id),
+    getSnapshotText: (hash: Sha256Digest) => snapshots[hash],
+  };
+}
+
+/** No sources/snapshots at all — every evidence span in a test using this simply fails to resolve. Fine for tests that don't assert on `candidates` content (a `RecordingJudge`'s fixed responder ignores its input either way). */
+function emptyLookup(): EvidenceLookup {
+  return lookupFrom([], {});
+}
+
+/** A source + snapshot whose *entire* stored text is `text` — so a `selector.exact` of `text` resolves via a trivial exact match, and the resolved text equals `text` back. Lets tests that care about candidate *content* set up real resolution without a lot of ceremony. */
+function resolvableSource(text: string): {
+  readonly source: SourceRecord;
+  readonly hash: Sha256Digest;
+} {
+  const hash = sha256Of(text);
+  const source = makeSource({
+    snapshot: {
+      path: `snapshots/${hash}.txt`,
+      payloadSha256: sha256Of("raw"),
+      normalizedTextSha256: hash,
+      normalization: "nfc-ws-v1",
+      chars: text.length,
+    },
   });
+  return { source, hash };
 }
 
 describe("judgeEntailmentAndRelevance (C3 + C5)", () => {
@@ -75,17 +99,12 @@ describe("judgeEntailmentAndRelevance (C3 + C5)", () => {
       };
     });
 
-    const currentInputHashes = {
-      supported: hashFor(supported),
-      partial: hashFor(partial),
-      unsupported: hashFor(unsupported),
-    };
-
     const result = await judgeEntailmentAndRelevance({
       sidecar,
       chapterSubject: "UI systems",
       judge,
-      currentInputHashes,
+      currentInputHashes: computeInputHashes(sidecar),
+      lookup: emptyLookup(),
     });
 
     expect(judge.calls).toHaveLength(1);
@@ -136,17 +155,12 @@ describe("judgeEntailmentAndRelevance (C3 + C5)", () => {
       };
     });
 
-    const currentInputHashes = {
-      "base-1": hashFor(base1),
-      "base-2": hashFor(base2),
-      "derived-claim": hashFor(derived),
-    };
-
     const result = await judgeEntailmentAndRelevance({
       sidecar,
       chapterSubject: "UI systems",
       judge,
-      currentInputHashes,
+      currentInputHashes: computeInputHashes(sidecar),
+      lookup: emptyLookup(),
     });
 
     // derived candidates are empty; supportingClaims carries the two base claims' text.
@@ -182,7 +196,8 @@ describe("judgeEntailmentAndRelevance (C3 + C5)", () => {
       sidecar,
       chapterSubject: "How Linear designs its UI",
       judge,
-      currentInputHashes: { "off-topic-claim": hashFor(claim) },
+      currentInputHashes: computeInputHashes(sidecar),
+      lookup: emptyLookup(),
     });
 
     expect(result.c3Outcome.passed).toBe(true);
@@ -202,7 +217,9 @@ describe("judgeEntailmentAndRelevance (C3 + C5)", () => {
         makeEvidenceSpan({ selector: makeSelector({ exact: "every measurement is 4px" }) }),
       ],
     });
-    const hash = hashFor(claim);
+    const hash = computeInputHashes(makeSidecar({ claims: [claim] }))[
+      "stable-claim"
+    ] as Sha256Digest;
     const verifiedClaim = {
       ...claim,
       verification: makeVerification({
@@ -222,13 +239,14 @@ describe("judgeEntailmentAndRelevance (C3 + C5)", () => {
       chapterSubject: "UI systems",
       judge,
       currentInputHashes: { "stable-claim": hash },
+      lookup: emptyLookup(),
     });
 
     expect(judge.calls).toHaveLength(0);
     expect(result.claims[0]?.verification.status).toBe("supported");
   });
 
-  test("changing evidence triggers exactly the affected claim, not the whole batch", async () => {
+  test("changing one claim's evidence re-judges only that claim, not the whole batch", async () => {
     const stable = makeClaim({
       label: "stable",
       decontextualized: "Linear uses a 4px grid.",
@@ -236,17 +254,18 @@ describe("judgeEntailmentAndRelevance (C3 + C5)", () => {
         makeEvidenceSpan({ selector: makeSelector({ exact: "every measurement is 4px" }) }),
       ],
     });
-    const stableHash = hashFor(stable);
-    const verifiedStable = {
-      ...stable,
-      verification: makeVerification({ status: "supported", inputHash: stableHash }),
-    };
-
     const changed = makeClaim({
       label: "changed",
       decontextualized: "Notion leans on generous whitespace.",
       evidence: [makeEvidenceSpan({ selector: makeSelector({ exact: "an old citation" }) })],
     });
+    const freshHashes = computeInputHashes(makeSidecar({ claims: [stable, changed] }));
+    const stableHash = freshHashes.stable as Sha256Digest;
+
+    const verifiedStable = {
+      ...stable,
+      verification: makeVerification({ status: "supported", inputHash: stableHash }),
+    };
     // Stale verification: inputHash from before the evidence was updated.
     const staleVerifiedChanged = {
       ...changed,
@@ -267,7 +286,8 @@ describe("judgeEntailmentAndRelevance (C3 + C5)", () => {
       sidecar,
       chapterSubject: "UI systems",
       judge,
-      currentInputHashes: { stable: stableHash, changed: hashFor(changed) },
+      currentInputHashes: freshHashes,
+      lookup: emptyLookup(),
     });
 
     expect(judge.calls).toHaveLength(1);
@@ -297,11 +317,139 @@ describe("judgeEntailmentAndRelevance (C3 + C5)", () => {
       sidecar,
       chapterSubject: "UI systems",
       judge,
-      currentInputHashes: { "extractive-claim": hashFor(claim) },
+      currentInputHashes: computeInputHashes(sidecar),
+      lookup: emptyLookup(),
     });
 
     expect(result.extractiveness["extractive-claim"]).toBeCloseTo(1, 5);
     expect(result.meanExtractiveness).toBeCloseTo(1, 5);
     expect(result.c3Outcome.data).toMatchObject({ meanExtractiveness: expect.any(Number) });
+  });
+
+  // ---- D24 (Wave 2 review, C-1): the judge reads resolved bytes, never selector.exact ----
+
+  describe("candidatesFor resolves against the pinned snapshot (D24)", () => {
+    test("a resolvable span's candidate carries the resolved snapshot text", async () => {
+      const realText = "We standardized every sidebar measurement on an 8 px grid.";
+      const { source, hash } = resolvableSource(realText);
+      const claim = makeClaim({
+        label: "lin-8px",
+        decontextualized: "Linear standardized its sidebar measurements on an 8 px grid.",
+        evidence: [
+          makeEvidenceSpan({
+            sourceId: source.id,
+            snapshotHash: hash,
+            selector: makeSelector({ exact: realText }),
+          }),
+        ],
+      });
+      const sidecar = makeSidecar({ claims: [claim] });
+      const judge = new RecordingJudge(() => ({
+        entailment: { status: "supported", rationale: "matches" },
+        relevance: { relevance: "on-topic", rationale: "on subject" },
+      }));
+
+      await judgeEntailmentAndRelevance({
+        sidecar,
+        chapterSubject: "UI systems",
+        judge,
+        currentInputHashes: computeInputHashes(sidecar),
+        lookup: lookupFrom([source], { [hash]: realText }),
+      });
+
+      expect(judge.calls[0]?.[0]?.candidates).toEqual([{ exact: realText, sourceId: source.id }]);
+    });
+
+    test("a fabricated selector.exact is never handed to the judge — the unresolved span is dropped, not laundered through", async () => {
+      // The snapshot really says "8 px"; the claim's own selector.exact
+      // fabricates "4 px" (small edit distance — this is exactly the case
+      // that used to resolve as `anchored-fuzzy` and leak through).
+      const realText = "We standardized every sidebar measurement on an 8 px grid.";
+      const fabricated = "We standardized every sidebar measurement on an 4 px grid.";
+      const { source, hash } = resolvableSource(realText);
+      const claim = makeClaim({
+        label: "lin-4px-fabricated",
+        decontextualized: "Linear standardized its sidebar measurements on a 4 px grid.",
+        evidence: [
+          makeEvidenceSpan({
+            sourceId: source.id,
+            snapshotHash: hash,
+            selector: makeSelector({ exact: fabricated }),
+          }),
+        ],
+      });
+      const sidecar = makeSidecar({ claims: [claim] });
+
+      // A judge that *would* approve the fabricated text if it ever saw it —
+      // proving the candidate list genuinely never contains it, rather than
+      // relying on the judge to reject it.
+      const judge = new RecordingJudge((input) => ({
+        entailment: {
+          status: input.candidates.some((c) => c.exact.includes("4 px"))
+            ? "supported"
+            : "unsupported",
+          rationale: "test probe",
+        },
+        relevance: { relevance: "on-topic", rationale: "on subject" },
+      }));
+
+      const result = await judgeEntailmentAndRelevance({
+        sidecar,
+        chapterSubject: "UI systems",
+        judge,
+        currentInputHashes: computeInputHashes(sidecar),
+        lookup: lookupFrom([source], { [hash]: realText }),
+      });
+
+      expect(judge.calls[0]?.[0]?.candidates).toEqual([]);
+      // With no candidates, the judge (correctly, given nothing to go on)
+      // reports unsupported rather than rubber-stamping the fabrication.
+      expect(result.claims[0]?.verification.status).toBe("unsupported");
+    });
+  });
+
+  // ---- Minor (Wave 2 review): operator claims verify at Tier 0, never batched into C3 ----
+
+  test("a fresh operator claim is never sent to the judge — it verifies at Tier 0 only", async () => {
+    const operatorClaim = makeClaim({
+      label: "op-borders",
+      kind: "operator",
+      decontextualized: "The operator prefers borders over drop shadows for cards.",
+      evidence: [
+        makeEvidenceSpan({ selector: makeSelector({ exact: "prefer borders over shadows" }) }),
+      ],
+    });
+    const sourcedClaim = makeClaim({
+      label: "lin-4px",
+      decontextualized: "Linear uses a 4px grid.",
+      evidence: [
+        makeEvidenceSpan({ selector: makeSelector({ exact: "every measurement is 4px" }) }),
+      ],
+    });
+    const sidecar = makeSidecar({ claims: [operatorClaim, sourcedClaim] });
+
+    const judge = new RecordingJudge(() => ({
+      entailment: { status: "supported", rationale: "r" },
+      relevance: { relevance: "on-topic", rationale: "r" },
+    }));
+
+    const result = await judgeEntailmentAndRelevance({
+      sidecar,
+      chapterSubject: "UI systems",
+      judge,
+      currentInputHashes: computeInputHashes(sidecar),
+      lookup: emptyLookup(),
+    });
+
+    // Only the sourced claim reaches the judge; the operator claim never does.
+    expect(judge.calls).toHaveLength(1);
+    expect(judge.calls[0]).toHaveLength(1);
+    expect(judge.calls[0]?.[0]?.claimId).toBe(sourcedClaim.id);
+
+    // The operator claim's verification is untouched by C3/C5 — Tier 0's
+    // operator-verification check (a separate blocking check) is what
+    // actually verifies it.
+    const untouchedOperator = result.claims.find((c) => c.label === "op-borders");
+    expect(untouchedOperator?.verification.status).toBe("unchecked");
   });
 });

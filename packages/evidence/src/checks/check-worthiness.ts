@@ -27,6 +27,18 @@
  * (`types.ts`'s `NarrativeSentenceClassification` doc). A hash already
  * present in the previous audit's `narrative.classifications` is reused
  * without a model call; only new/changed hashes go into the batch.
+ *
+ * **`formExcluded` sentences (blockquotes) count toward the narrative
+ * budget without ever being classified (D25, Wave 2 review).**
+ * `segmentChapterBody` still excludes blockquote text from the sweep itself
+ * — never sent to the classifier below — but per D25 that exemption must
+ * stay *visible*: these sentences are folded into both `narrativeRatio`'s
+ * numerator (they behave exactly like a `checkRequired: false` narrative
+ * sentence — nobody is claiming them as evidence-bearing) and denominator
+ * (`sentences.length`, which already includes them since
+ * `segmentChapterBody` returns them). A chapter that dodges citations by
+ * stuffing content into blockquotes now visibly inflates its narrative
+ * ratio instead of the exemption silently vanishing from the metric.
  */
 
 import { type Sha256Digest, sha256Of } from "../digest.ts";
@@ -62,7 +74,11 @@ export async function checkCheckWorthiness(
 ): Promise<CheckWorthinessResult> {
   const classifiedBy = input.classifiedBy ?? "llm-judge/claude@shadow-model";
   const sentences = segmentChapterBody(input.chapterBody);
-  const unmarked = sentences.filter((s) => !s.marked);
+  // D25: `formExcluded` sentences (blockquotes) are never classified — the
+  // wholesale exclusion stands — but they still count toward the narrative
+  // budget below, via `sentences.length` (denominator) and the `narrativeCount`
+  // seed (numerator).
+  const unmarked = sentences.filter((s) => !s.marked && !s.formExcluded);
 
   const previousByHash = new Map<Sha256Digest, NarrativeSentenceClassification>(
     (input.previousNarrative?.classifications ?? []).map((c) => [c.sentenceHash, c]),
@@ -105,7 +121,9 @@ export async function checkCheckWorthiness(
 
   const issues: CheckIssue[] = [];
   const classifications: NarrativeSentenceClassification[] = [];
-  let narrativeCount = 0;
+  // D25: wholesale-excluded (blockquote) sentences count as narrative
+  // without ever being classified — see module doc.
+  let narrativeCount = sentences.filter((s) => s.formExcluded).length;
 
   unmarked.forEach((sentence, index) => {
     const result = results[index];
