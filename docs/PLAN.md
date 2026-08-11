@@ -51,10 +51,10 @@ The pillars that do real work. This is where the acceptance criteria are won or 
 
 | # | Task | Owns | Depends on | State |
 |---|---|---|---|---|
-| T2.1a | `@shadow/research`: retrieval transport — live web + fixture record/replay (D2). No evidence coupling. | `packages/research` | T1.1 | ⬜ |
+| T2.1a | `@shadow/research`: retrieval transport — live web + fixture record/replay (D2). No evidence coupling. | `packages/research` | T1.1 | ✅ `e5f0c85` |
 | T2.1b | `@shadow/research`: research-brief port and tool-agents that fetch and snapshot sources into the evidence ledger | `packages/research` | T2.1a, T1.2, T1.3 | ⬜ |
 | T2.2 | `@shadow/indexing`: `Indexer` — structural tree from headings + `when_to_use`/`not_for` frontmatter vocabulary; stable node identity; O(changed subtree) rebuild. **Zero LLM calls** (D11). | `packages/indexing` | T1.1 | ✅ `5b04a5d` |
-| T2.3 | `@shadow/indexing`: `Navigator` — BM25 locator, `1/√(N+1)·Σ` rollup, ancestor-closure expansion, passages in document order, grade step ≤3 rounds (D11) | `packages/indexing` | T2.2 | ⬜ |
+| T2.3 | `@shadow/indexing`: `Navigator` — agent-as-locator over the chapter index (D11a), `1/√(N+1)·Σ` rollup, ancestor-closure expansion, passages in document order, grade step ≤3 rounds. Also adopt core's corpus index slot and `chapterRelativePath`. | `packages/indexing` | T2.2, T1.4 | ⬜ |
 | T2.4 | `@shadow/evidence`: CoE Audit — source integrity, span entailment, claim completeness (checks 1–3 of D9), plus C5 chapter relevance as a non-blocking warning (D15) | `packages/evidence` | T1.3, T1.2 | ⬜ |
 | T2.5 | `@shadow/evidence`: index-alignment check (check 4 of D9) + conservative-restatement repair | `packages/evidence` | T2.4, T2.2 | ⬜ |
 | T2.6 | `@shadow/indexing`: `shadow lint` self-critique — discriminability, self-retrieval coverage, orphans, contradictions, miss log (D14) | `packages/indexing` | T2.3 | ⬜ |
