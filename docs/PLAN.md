@@ -38,7 +38,7 @@ The layers everything else stands on. No feature work until these are green.
 | T1.1 | `@shadow/core`: Volume/Chapter domain model, `VolumeStore` port + filesystem impl, slug rules, frontmatter parsing. Unit tested. | `packages/core` | — | ✅ `5e7aa03` |
 | T1.2 | `@shadow/model`: structured-generation port + agentic-session port, the two adapters from D5, session reuse, **no-API-key guardrail test** | `packages/model` | T1.1 | ✅ `b784228` |
 | T1.3 | `@shadow/evidence`: package scaffold + domain model (Source, Snapshot, EvidenceSpan, Claim, Ledger) + append-only store + Tier 0 checks. Spec: `docs/EVIDENCE.md`. | `packages/evidence` | T1.1 | ⬜ |
-| T1.4 | `@shadow/core`: close the two gaps T2.2 found — corpus-level index slot, volume routing frontmatter, chapter relative-path accessor | `packages/core` | T1.1 | ⬜ |
+| T1.4 | `@shadow/core`: close the two gaps T2.2 found — corpus-level index slot, volume routing frontmatter, chapter relative-path accessor | `packages/core` | T1.1 | ✅ `f02692f` |
 
 T1.2 and T1.3 run in parallel once T1.1 lands — different packages, no shared files.
 
@@ -110,6 +110,10 @@ A few good e2e tests over coverage; unit tests only where correctness is subtle.
    A task needing a dependency added says so in its report instead of editing the root.
 4. Every task ends green: `bun run check` passes before its commit.
 5. Stage by name, never `git add -A` — concurrent work may be in the tree.
+6. **Commit green work before you run out of budget.** Subagents can be killed mid-task by a
+   session limit. A task that dies with everything uncommitted loses all of it; one that has
+   been committing incrementally loses only the last step. If a task must stop early, it
+   commits what is green and reports what is missing.
 
 ## Open questions
 
