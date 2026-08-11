@@ -23,6 +23,7 @@ export { buildIndexDocument } from "./corpus-index.ts";
 export {
   ChapterIndexBuildError,
   InvalidRoutingFieldError,
+  LintConfigError,
   NodeNotFoundError,
   ShadowIndexingError,
 } from "./errors.ts";
@@ -40,15 +41,56 @@ export { buildHeadingTree, extractHeadings, parseHeadingTree } from "./heading-t
 // ---- the build port -------------------------------------------------------
 export type { BuildIndexResult, Indexer, MintedId } from "./indexer.ts";
 export { StructuralIndexer } from "./indexer.ts";
+export type { LintDeps, LintOptions, LintReport } from "./lint.ts";
+// ---- shadow lint (T2.6, D14): index self-critique, offline, no query path -
+export { runLint } from "./lint.ts";
+export type { ContradictionFindingData, ContradictionOptions } from "./lint-contradiction.ts";
+export { checkContradiction, DEFAULT_OVERLAP_THRESHOLD } from "./lint-contradiction.ts";
+export type { CostModelFindingData, CostModelOptions, CostNode } from "./lint-cost-model.ts";
+export {
+  checkChapterCost,
+  costModelCheck,
+  DEFAULT_ROUTING_ROW_TOKENS,
+  treeCost,
+} from "./lint-cost-model.ts";
+export type {
+  DiscriminabilityFindingData,
+  DiscriminabilityOptions,
+} from "./lint-discriminability.ts";
+export {
+  checkDiscriminability,
+  DEFAULT_DISCRIMINABILITY_THRESHOLD,
+  discriminabilityCheck,
+} from "./lint-discriminability.ts";
+export type { MissLogEntry, MissLogStore } from "./lint-miss-log.ts";
+export { FileMissLog, InMemoryMissLog } from "./lint-miss-log.ts";
+export { ModelNavigationAgent } from "./lint-model-navigation-agent.ts";
+export type { OrphanFindingData } from "./lint-orphan.ts";
+export { checkOrphans } from "./lint-orphan.ts";
+export { pairs } from "./lint-pairs.ts";
+export type {
+  SelfRetrievalOptions,
+  SelfRetrievalProbe,
+  SelfRetrievalRunResult,
+} from "./lint-self-retrieval.ts";
+export { checkSelfRetrieval } from "./lint-self-retrieval.ts";
+export { tokenize, tokenSetJaccard } from "./lint-similarity.ts";
+export type {
+  LintCheck,
+  LintCheckResult,
+  LintFinding,
+  LintSeverity,
+} from "./lint-types.ts";
+export { runLintChecks } from "./lint-types.ts";
 // ---- the retrieval port and its default implementation (T2.3) -------------
 export type {
   ChapterIndexRow,
   Citation,
   GradePayload,
   NavigateOptions,
-  Navigator,
-  NavigationAgent,
   NavigatePayload,
+  NavigationAgent,
+  Navigator,
   Rejection,
   RetrievalTrace,
   RetrievalVerdict,
@@ -59,6 +101,10 @@ export type {
 } from "./navigator.ts";
 export { ReasoningNavigator } from "./navigator.ts";
 export { normalizeForHashing } from "./normalize.ts";
+// ---- passage assembly, document order (not relevance order) ----------------
+export type { Passage, PassageSource } from "./passages.ts";
+export { assemblePassages } from "./passages.ts";
+export type { BuildNavigatePayloadOptions } from "./payloads.ts";
 // ---- STAGE 2/3 payload preparation (route + navigate) ----------------------
 export {
   buildNavigatePayload,
@@ -66,18 +112,14 @@ export {
   CHAPTER_INDEX_THRESHOLD,
   shouldSkipRouting,
 } from "./payloads.ts";
-export type { BuildNavigatePayloadOptions } from "./payloads.ts";
-// ---- passage assembly, document order (not relevance order) ----------------
-export type { Passage, PassageSource } from "./passages.ts";
-export { assemblePassages } from "./passages.ts";
 // ---- STAGE 4 (READ): resolve a node_id's structural context and body -------
 export type { ReadContext, ReadResult } from "./read.ts";
 export { readNode, resolveReadContext } from "./read.ts";
+// ---- STAGE 1: the 1/√(N+1)·Σ rollup -----------------------------------------
+export { rollupScore } from "./rollup.ts";
 // ---- the round loop: visited[] + rejections, bounded at 3 rounds -----------
 export type { NavigateDecision, RoundState } from "./round-loop.ts";
 export { advanceRound, canContinue, initialRoundState, MAX_ROUNDS } from "./round-loop.ts";
-// ---- STAGE 1: the 1/√(N+1)·Σ rollup -----------------------------------------
-export { rollupScore } from "./rollup.ts";
 export {
   coerceConfidence,
   coerceDateLike,

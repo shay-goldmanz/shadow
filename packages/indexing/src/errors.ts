@@ -61,3 +61,14 @@ export class NodeNotFoundError extends ShadowIndexingError {
     super(`No node with node_id "${nodeId}" was found in the index`);
   }
 }
+
+/**
+ * `runLint` (`lint.ts`, T2.6) was called without `options.offline` but
+ * without the `deps.store`/`deps.port` the model-backed checks (2
+ * self-retrieval, 4 contradiction) need to run. Thrown before either check
+ * makes any I/O or model call — never a silent skip, since a caller who
+ * expected the full check set to run deserves to know it didn't.
+ */
+export class LintConfigError extends ShadowIndexingError {
+  override readonly name = "LintConfigError";
+}
