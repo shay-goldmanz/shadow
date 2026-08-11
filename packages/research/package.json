@@ -10,6 +10,9 @@
     "typecheck": "tsc -p ."
   },
   "dependencies": {
-    "@shadow/evidence": "workspace:*"
+    "@shadow/core": "workspace:*",
+    "@shadow/evidence": "workspace:*",
+    "@shadow/model": "workspace:*",
+    "zod": "^4.4.3"
   }
 }

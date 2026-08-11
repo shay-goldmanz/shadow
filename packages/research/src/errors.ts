@@ -158,3 +158,107 @@ export class LiveSearchUnavailableError extends ShadowResearchError {
     );
   }
 }
+
+// ---------------------------------------------------------------------------
+// T2.1b — research briefs and tool-agents
+// ---------------------------------------------------------------------------
+
+/**
+ * A tool-agent tried to submit a finding whose citation does not resolve
+ * against anything actually fetched in this research run — either the
+ * `sourceId` was never produced by the `fetch` tool, the `quote` is not a
+ * substring of that source's extracted text, or the finding carried zero
+ * citations at all. This is the structural refusal `docs/ARCHITECTURE.md`
+ * promises: a tool-agent cannot cite what it never fetched, full stop, not
+ * "cite what it never fetched and get a warning." See `research-run.ts`'s
+ * `validateFindings`.
+ */
+export class UnboundCitationError extends ShadowResearchError {
+  override readonly name = "UnboundCitationError";
+
+  constructor(
+    public readonly findingText: string,
+    public readonly sourceId: string | undefined,
+    public readonly reason: string,
+  ) {
+    super(
+      `Refusing to bind finding ${JSON.stringify(findingText)}: ${reason}` +
+        (sourceId ? ` (sourceId: ${JSON.stringify(sourceId)})` : ""),
+    );
+  }
+}
+
+/**
+ * `ResearchBrief.maxSources` was already reached when the `fetch` tool was
+ * called again. Checked *before* the retrieval, so it bounds spend rather
+ * than merely bounding what gets kept.
+ */
+export class SourceBudgetExceededError extends ShadowResearchError {
+  override readonly name = "SourceBudgetExceededError";
+
+  constructor(public readonly maxSources: number) {
+    super(`This research brief's source budget (${maxSources}) is already exhausted.`);
+  }
+}
+
+/**
+ * The agentic session's turn for this brief reported `isError: true` — a
+ * transport/process-level failure inside the model turn itself, distinct
+ * from `UnboundCitationError` (a *successful* turn that tried to fabricate
+ * a citation).
+ */
+export class ResearchTurnFailedError extends ShadowResearchError {
+  override readonly name = "ResearchTurnFailedError";
+
+  constructor(
+    public readonly goal: string,
+    public readonly stopReason: string | null,
+    public readonly text: string,
+  ) {
+    super(
+      `Research turn for brief ${JSON.stringify(goal)} failed ` +
+        `(stopReason: ${JSON.stringify(stopReason)}): ${text || "(no text)"}`,
+    );
+  }
+}
+
+/**
+ * The tool-agent's turn completed successfully (no `isError`) but never
+ * called `submit_findings` with a validated finding — e.g. it gave up, ran
+ * out of turns, or only ever attempted citations `validateFindings`
+ * rejected. This is what makes "fails rather than silently producing an
+ * unbacked finding" true end-to-end: `research()` never returns an empty
+ * or partial `ResearchResult` on this path, it throws.
+ */
+export class NoFindingsProducedError extends ShadowResearchError {
+  override readonly name = "NoFindingsProducedError";
+
+  constructor(
+    public readonly goal: string,
+    public readonly finalText: string,
+  ) {
+    super(
+      `Research brief ${JSON.stringify(goal)} completed with no findings bound to a real ` +
+        `retrieval. Final turn text: ${finalText || "(empty)"}`,
+    );
+  }
+}
+
+/**
+ * `WebResearchToolAgent.research()` was called while a previous call on the
+ * same instance is still in flight. Sessions are reused (D6), which means
+ * one mutable "active run" context backs the shared tool server — see
+ * `web-research-tool-agent.ts`. Concurrent calls would corrupt which run a
+ * `fetch`/`submit_findings` call is scoped to, so this is refused rather
+ * than silently interleaved.
+ */
+export class ResearchAgentBusyError extends ShadowResearchError {
+  override readonly name = "ResearchAgentBusyError";
+
+  constructor(public readonly goal: string) {
+    super(
+      `This WebResearchToolAgent is already running a brief; cannot start ${JSON.stringify(goal)} ` +
+        `concurrently on the same instance. Create a second tool-agent (and session) for parallel briefs.`,
+    );
+  }
+}
