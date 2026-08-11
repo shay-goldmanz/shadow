@@ -7,21 +7,22 @@
  */
 
 import type {
-  AuditResult,
+  AuditRecord,
   Chapter,
   ChapterSummary,
   ChatInput,
   ChatStreamEvent,
-  Claim,
+  ClaimSidecar,
   CreateVolumeInput,
   IndexStats,
-  IndexTree,
   LedgerEvent,
   LintReport,
+  PutChapterAudit,
   PutChapterInput,
   SourceRecord,
   UpdateVolumeInput,
   Volume,
+  VolumeIndexDocument,
   VolumeSummary,
 } from "./types.ts";
 
@@ -35,16 +36,17 @@ export interface ShadowApiClient {
   getChapter(
     slug: string,
     chapter: string,
-  ): Promise<{ chapter: Chapter; claims?: readonly Claim[]; audit?: AuditResult }>;
+  ): Promise<{ chapter: Chapter; claims?: ClaimSidecar; audit?: AuditRecord }>;
   putChapter(
     slug: string,
     chapter: string,
     input: PutChapterInput,
-  ): Promise<{ chapter: Chapter; audit: AuditResult }>;
+  ): Promise<{ chapter: Chapter; audit: PutChapterAudit }>;
   deleteChapter(slug: string, chapter: string): Promise<void>;
 
-  getIndex(slug: string): Promise<IndexTree>;
-  reindex(slug: string): Promise<{ index: IndexTree; stats: IndexStats }>;
+  /** @throws {ApiError} with code `index_not_built` if the volume has never been indexed — a normal state for a freshly created volume, not a fault. */
+  getIndex(slug: string): Promise<VolumeIndexDocument>;
+  reindex(slug: string): Promise<{ index: VolumeIndexDocument; stats: IndexStats }>;
   getLint(slug: string): Promise<LintReport>;
 
   getSource(slug: string, id: string): Promise<SourceRecord>;

@@ -7,42 +7,48 @@
  */
 
 /**
- * Permissive CORS: `@shadow/web` (T3.5) runs its own dev server on a
- * different port (`packages/web/src/dev-server.ts`), so a browser `fetch`
- * from it to this server is cross-origin. `docs/API.md` is silent on CORS
- * (it predates there being two separate localhost ports), but "no auth, no
- * multi-user... binds to localhost" already establishes there is no
- * origin worth restricting against on a single operator's machine, so
- * `*` costs nothing real here.
+ * No CORS. `packages/web/src/serve.ts` proxies `/api/*` to this server so
+ * the browser and the API share an origin — that proxy is what removes the
+ * need for CORS, per its own doc comment, not a wildcard header here. A
+ * wildcard `access-control-allow-origin: *` would instead let *any* site the
+ * operator's browser visits read their volumes via a cross-origin `fetch`
+ * straight to this server (it binds to loopback but has no auth, D5) —
+ * unnecessary exposure the proxy already makes redundant. `OPTIONS` still
+ * gets a plain no-content response (harmless, no permission granted); an
+ * actual cross-origin request without the proxy in front is left to the
+ * browser's default same-origin policy to block.
  */
-const CORS_HEADERS: Readonly<Record<string, string>> = {
-  "access-control-allow-origin": "*",
-  "access-control-allow-methods": "GET, POST, PUT, PATCH, DELETE, OPTIONS",
-  "access-control-allow-headers": "Content-Type",
-};
 
-function withCors(headers: Record<string, string> = {}): Record<string, string> {
-  return { ...CORS_HEADERS, ...headers };
+/**
+ * Every JSON/text response is `no-store`: `@shadow/web`'s state (the volume
+ * list in particular) must reflect what the filesystem actually holds, not
+ * a browser heuristic cache — Chromium will otherwise serve a stale 200
+ * from disk cache with no request even hitting the network when this
+ * server is down, since the API sent no cache-control/ETag validator at
+ * all.
+ */
+function withNoStore(headers: Record<string, string> = {}): Record<string, string> {
+  return { "cache-control": "no-store", ...headers };
 }
 
 export function jsonResponse(body: unknown, init: { status?: number } = {}): Response {
   return new Response(JSON.stringify(body), {
     status: init.status ?? 200,
-    headers: withCors({ "content-type": "application/json; charset=utf-8" }),
+    headers: withNoStore({ "content-type": "application/json; charset=utf-8" }),
   });
 }
 
 export function textResponse(body: string, init: { status?: number } = {}): Response {
   return new Response(body, {
     status: init.status ?? 200,
-    headers: withCors({ "content-type": "text/plain; charset=utf-8" }),
+    headers: withNoStore({ "content-type": "text/plain; charset=utf-8" }),
   });
 }
 
 export function noContentResponse(): Response {
-  return new Response(null, { status: 204, headers: withCors() });
+  return new Response(null, { status: 204, headers: withNoStore() });
 }
 
 export function corsPreflightResponse(): Response {
-  return new Response(null, { status: 204, headers: withCors() });
+  return new Response(null, { status: 204 });
 }

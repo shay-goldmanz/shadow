@@ -14,10 +14,10 @@
  * again on it (`conversation.ts`'s `getOrCreateSession` caches `this.session`
  * across calls). So this handler exposes `ShadowConversation.id` — stable
  * from construction, before any turn runs — as the wire `sessionId`, and
- * keeps a `Map<sessionId, ShadowConversation>` (`ApiDeps.conversations`)
- * so a client that echoes it back resumes the same instance, and therefore
- * the same underlying `AgenticSession`. Flagged for `docs/API.md` to
- * confirm or correct.
+ * keeps a bounded `sessionId -> ShadowConversation` registry
+ * (`ApiDeps.conversations`, `ConversationRegistry`) so a client that echoes
+ * it back resumes the same instance, and therefore the same underlying
+ * `AgenticSession`. Flagged for `docs/API.md` to confirm or correct.
  *
  * ## Mapping ShadowEvent -> docs/API.md's SSE table
  *
@@ -91,10 +91,39 @@ export async function postChat(deps: ApiDeps, req: BunRequest<"/api/chat">): Pro
   // `docs/API.md`: "error — terminal for this turn."
   const { conversation, sessionId } = await resolveConversation(deps, body);
 
+  // Guards against a disconnected client (`cancel()` below) racing the
+  // generator loop: without `closed`, a client that goes away mid-turn lets
+  // `conversation.sendMessage`'s generator keep running, `send()` then
+  // throws trying to `enqueue` on an already-closed/errored controller, the
+  // `catch` below turns that into an `error` SSE event on a dead stream
+  // (itself another `enqueue` on a closed controller), and `finally` then
+  // double-closes. `closed` short-circuits every one of those once either
+  // `cancel()` fires or the turn finishes on its own.
+  let closed = false;
+  let iterator: AsyncGenerator<ShadowEvent> | undefined;
+
   const stream = new ReadableStream<Uint8Array>({
     async start(controller) {
-      const send = (event: string, data: unknown) =>
-        controller.enqueue(encodeSseEvent(event, data));
+      const send = (event: string, data: unknown) => {
+        if (closed) return;
+        try {
+          controller.enqueue(encodeSseEvent(event, data));
+        } catch {
+          // Controller already closed/errored out from under us — nothing
+          // left to do; `closed` should already be true, but set it
+          // defensively so no later `send`/`close` call tries again.
+          closed = true;
+        }
+      };
+      const close = () => {
+        if (closed) return;
+        closed = true;
+        try {
+          controller.close();
+        } catch {
+          // Already closed (e.g. by a concurrent `cancel()`) — fine.
+        }
+      };
       send("session", { sessionId });
 
       // Correlates a `research-started` brief with its later `research-completed`
@@ -107,9 +136,9 @@ export async function postChat(deps: ApiDeps, req: BunRequest<"/api/chat">): Pro
       let briefCounter = 0;
 
       try {
-        for await (const event of conversation.sendMessage(
-          message,
-        ) as AsyncGenerator<ShadowEvent>) {
+        iterator = conversation.sendMessage(message) as AsyncGenerator<ShadowEvent>;
+        for await (const event of iterator) {
+          if (closed) break; // client disconnected (cancel()) mid-turn — stop draining the generator
           switch (event.type) {
             case "operator-turn-recorded":
               // No doc row — internal bookkeeping the operator doesn't need
@@ -206,17 +235,31 @@ export async function postChat(deps: ApiDeps, req: BunRequest<"/api/chat">): Pro
               // one of the typed pillar errors `error-mapping.ts` maps, it's
               // Shadow's own turn narrating its own failure.
               send("error", { message: event.error, code: "shadow_turn_error" });
-              controller.close();
+              close();
               return;
           }
         }
         send("done", {});
       } catch (error) {
-        const mapped = toErrorResponse(error);
-        send("error", { message: mapped.body.error.message, code: mapped.body.error.code });
+        if (!closed) {
+          const mapped = toErrorResponse(error);
+          send("error", { message: mapped.body.error.message, code: mapped.body.error.code });
+        }
       } finally {
-        controller.close();
+        close();
       }
+    },
+    // Fires when the client disconnects (nav away, tab close, aborted
+    // fetch) before the turn finishes. Without this, `conversation`'s
+    // generator keeps running to completion against a controller nobody
+    // can read from anymore — `send()` would throw into the `catch` above,
+    // which would `send("error", ...)` on the same dead controller, and
+    // `finally` would then close it a second time. Terminating the
+    // generator via `.return()` stops that chain at the source rather than
+    // papering over its symptoms downstream.
+    async cancel() {
+      closed = true;
+      await iterator?.return?.(undefined);
     },
   });
 
@@ -225,7 +268,6 @@ export async function postChat(deps: ApiDeps, req: BunRequest<"/api/chat">): Pro
       "content-type": "text/event-stream; charset=utf-8",
       "cache-control": "no-cache",
       connection: "keep-alive",
-      "access-control-allow-origin": "*",
     },
   });
 }

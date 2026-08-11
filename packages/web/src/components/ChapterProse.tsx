@@ -1,4 +1,4 @@
-import type { AuditResult, Claim } from "../api/types.ts";
+import type { Claim } from "../api/types.ts";
 import type { Tone } from "./Badge.tsx";
 import { CitationMark } from "./CitationMark.tsx";
 import { type ChapterBlock, type InlineSegment, parseChapterBody } from "./chapter-body.ts";
@@ -18,17 +18,17 @@ const HEADING_TAGS = ["h1", "h2", "h3", "h4", "h5", "h6"] as const;
 export function ChapterProse({
   body,
   claims,
-  audit,
+  failingLabels,
   onCiteClick,
 }: {
   readonly body: string;
   readonly claims: readonly Claim[];
-  readonly audit: AuditResult | undefined;
+  /** Labels named in a failing `CheckOutcome`'s issues — the caller derives this from whichever audit shape it has (`ChapterPage`'s `AuditRecord`), so this component stays independent of that shape. */
+  readonly failingLabels: ReadonlySet<string>;
   readonly onCiteClick: (claim: Claim) => void;
 }) {
   const blocks = parseChapterBody(body);
   const claimsByLabel = new Map(claims.map((claim) => [claim.label, claim]));
-  const failingLabels = new Set((audit?.findings ?? []).map((f) => f.claim));
 
   return (
     <div className="chapter-prose">
@@ -54,7 +54,7 @@ function Block({
 }: {
   readonly block: ChapterBlock;
   readonly claimsByLabel: Map<string, Claim>;
-  readonly failingLabels: Set<string>;
+  readonly failingLabels: ReadonlySet<string>;
   readonly onCiteClick: (claim: Claim) => void;
 }) {
   const content = block.segments.map((segment, i) => (
@@ -83,7 +83,7 @@ function Segment({
 }: {
   readonly segment: InlineSegment;
   readonly claimsByLabel: Map<string, Claim>;
-  readonly failingLabels: Set<string>;
+  readonly failingLabels: ReadonlySet<string>;
   readonly onCiteClick: (claim: Claim) => void;
 }) {
   if (segment.type === "text") return <>{segment.text}</>;
@@ -104,7 +104,11 @@ function Segment({
   );
 }
 
-function citationTone(label: string, claim: Claim | undefined, failingLabels: Set<string>): Tone {
+function citationTone(
+  label: string,
+  claim: Claim | undefined,
+  failingLabels: ReadonlySet<string>,
+): Tone {
   if (failingLabels.has(label)) return "red";
   if (claim?.evidence.some((span) => span.anchorStatus === "orphaned")) return "amber";
   if (claim?.kind === "operator") return "sage";

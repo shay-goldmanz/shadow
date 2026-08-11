@@ -16,15 +16,21 @@ describe("chat transcript reducer", () => {
     const events: ChatStreamEvent[] = [
       { event: "session", data: { sessionId: "sess_1" } },
       { event: "text", data: { delta: "Looking into it." } },
-      { event: "research.started", data: { brief: "How does Linear design UI?" } },
+      {
+        event: "research.started",
+        data: { briefId: "b1", brief: { volume: "v", goal: "How does Linear design UI?" } },
+      },
       {
         event: "research.source",
         data: { sourceId: "src_1", url: "https://linear.app", title: "Linear" },
       },
-      { event: "research.finished", data: { briefId: "b1", findings: "4px scale" } },
+      {
+        event: "research.finished",
+        data: { briefId: "b1", findings: [{ text: "4px scale", citations: [] }] },
+      },
       { event: "chapter.drafted", data: { volume: "v", chapter: "c" } },
-      { event: "audit", data: { chapter: "c", verdict: "pass", findings: [] } },
-      { event: "indexed", data: { volume: "v", stats: { volumes: 1, chapters: 1, tokens: 10 } } },
+      { event: "audit", data: { volume: "v", chapter: "c", passed: true, repairs: [] } },
+      { event: "chapter.published", data: { volume: "v", chapter: "c" } },
       { event: "done", data: {} },
     ];
 
@@ -39,7 +45,7 @@ describe("chat transcript reducer", () => {
       "research.finished",
       "chapter.drafted",
       "audit",
-      "indexed",
+      "chapter.published",
     ]);
     expect(state.sessionId).toBe("sess_1");
     expect(state.streaming).toBe(false);
@@ -74,6 +80,55 @@ describe("chat transcript reducer", () => {
     });
   });
 
+  test("a research.failed event is kept, not swallowed and not a state-wiping crash", () => {
+    let state = INITIAL_CHAT_STATE;
+    state = applyStreamEvent(state, {
+      event: "research.failed",
+      data: {
+        briefId: "b1",
+        brief: { volume: "v", goal: "goal" },
+        error: "network unavailable",
+      },
+    });
+    expect(state.items).toHaveLength(1);
+    expect(state.items[0]).toMatchObject({ type: "research.failed", error: "network unavailable" });
+  });
+
+  test("chapter.published and chapter.rejected are both kept, not swallowed", () => {
+    let state = INITIAL_CHAT_STATE;
+    state = applyStreamEvent(state, {
+      event: "chapter.published",
+      data: { volume: "v", chapter: "c1" },
+    });
+    state = applyStreamEvent(state, {
+      event: "chapter.rejected",
+      data: { volume: "v", chapter: "c2", issues: [{ code: "C3", message: "unsupported" }] },
+    });
+    expect(types(state.items)).toEqual(["chapter.published", "chapter.rejected"]);
+  });
+
+  test("an unhandled event never silently wipes the transcript (regression: reducer used to have no default and returned undefined)", () => {
+    let state = INITIAL_CHAT_STATE;
+    state = applyStreamEvent(state, { event: "text", data: { delta: "before" } });
+    // Every real `ChatStreamEvent` variant is handled; feed each of the
+    // "forwarded but no doc row" ones through in sequence and confirm the
+    // transcript accumulates rather than ever collapsing to nothing.
+    state = applyStreamEvent(state, {
+      event: "research.failed",
+      data: { briefId: "b1", brief: { volume: "v", goal: "g" }, error: "e" },
+    });
+    state = applyStreamEvent(state, {
+      event: "chapter.published",
+      data: { volume: "v", chapter: "c" },
+    });
+    state = applyStreamEvent(state, {
+      event: "chapter.rejected",
+      data: { volume: "v", chapter: "c", issues: [] },
+    });
+    expect(state).toBeDefined();
+    expect(state.items.length).toBe(4);
+  });
+
   test("an error event stops streaming but is preserved in the transcript", () => {
     let state = { ...INITIAL_CHAT_STATE, streaming: true };
     state = applyStreamEvent(state, {
@@ -89,7 +144,7 @@ describe("chat transcript reducer", () => {
     state = applyStreamEvent(state, { event: "text", data: { delta: "first" } });
     state = applyStreamEvent(state, {
       event: "research.started",
-      data: { brief: "b" },
+      data: { briefId: "b1", brief: { volume: "v", goal: "b" } },
     });
     state = applyStreamEvent(state, { event: "text", data: { delta: "second" } });
 

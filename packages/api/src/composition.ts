@@ -26,9 +26,10 @@ import {
   BatchedEntailmentRelevanceJudge,
   FileSystemEvidenceStore,
 } from "@shadow/evidence";
-import { InMemoryMissLog, StructuralIndexer } from "@shadow/indexing";
+import { FileMissLog, StructuralIndexer } from "@shadow/indexing";
 import { createModel } from "@shadow/model";
 import { createRetrievalTransport, WebResearchToolAgent } from "@shadow/research";
+import { ConversationRegistry } from "./conversation-registry.ts";
 import type { ApiDeps } from "./deps.ts";
 
 export interface BuildRealApiDepsOptions {
@@ -71,6 +72,14 @@ export function buildRealApiDeps(options: BuildRealApiDepsOptions = {}): ApiDeps
     checkWorthinessClassifier,
     entailmentRelevanceJudge,
     claimRestater,
+    // Without this, `ShadowConversation.getOrCreateSession` (`conversation.ts:324`)
+    // falls back to `homedir()/.shadow` for the *agentic session's own*
+    // working directory — independent of, and ignoring, `root` above.
+    // Verified live: with `SHADOW_HOME` pointed at a temp root, the
+    // `ShadowAgent`'s session still wrote into the operator's real home.
+    // `test-helpers.ts` already does this (`sessionCwd: root`); this was
+    // the one place real wiring diverged from it.
+    sessionCwd: root,
   });
 
   return {
@@ -81,8 +90,14 @@ export function buildRealApiDeps(options: BuildRealApiDepsOptions = {}): ApiDeps
     entailmentRelevanceJudge,
     claimRestater,
     structuredGenerationPort: structuredGeneration,
-    missLog: new InMemoryMissLog(),
+    // `FileMissLog` at `<root>/misses.jsonl` — the same file `@shadow/cli`
+    // reads/writes (`packages/cli/src/miss-log.ts`'s `missLogPath`). An
+    // `InMemoryMissLog` here meant D14's operator backlog ("every
+    // not-in-corpus verdict") evaporated on every server restart and was
+    // invisible to the CLI regardless — two miss logs for one concept,
+    // exactly the split T2.7 already fixed on the CLI side.
+    missLog: new FileMissLog(join(root, "misses.jsonl")),
     shadowAgent,
-    conversations: new Map(),
+    conversations: new ConversationRegistry(),
   };
 }

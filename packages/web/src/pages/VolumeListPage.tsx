@@ -38,26 +38,19 @@ export function VolumeListPage({
     };
   }, [client]);
 
-  async function handleCreate(input: { title: string; description: string }) {
+  async function handleCreate(input: { title: string; description: string }): Promise<boolean> {
     setCreating(true);
     setCreateError(undefined);
     try {
       const volume = await client.createVolume(input);
-      setVolumes((prev) => [
-        {
-          slug: volume.slug,
-          title: volume.title,
-          description: volume.description,
-          chapterCount: 0,
-          updatedAt: volume.updatedAt,
-        },
-        ...(prev ?? []),
-      ]);
+      setVolumes((prev) => [volume, ...(prev ?? [])]);
       navigate({ name: "volume", slug: volume.slug });
+      return true;
     } catch (err) {
       setCreateError(
         err instanceof ApiError ? err.message : err instanceof Error ? err.message : String(err),
       );
+      return false;
     } finally {
       setCreating(false);
     }
@@ -70,11 +63,7 @@ export function VolumeListPage({
         <p className="page__subtitle">Curated beliefs, distilled with Shadow.</p>
       </header>
 
-      <CreateVolumeForm
-        onCreate={(input) => void handleCreate(input)}
-        pending={creating}
-        error={createError}
-      />
+      <CreateVolumeForm onCreate={handleCreate} pending={creating} error={createError} />
 
       {error && <p role="alert">Could not load volumes: {error}</p>}
 

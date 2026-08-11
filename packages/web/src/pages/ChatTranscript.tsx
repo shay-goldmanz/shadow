@@ -1,13 +1,13 @@
-import { AuditBanner } from "../components/AuditBanner.tsx";
+import { AuditBanner, type AuditSummary } from "../components/AuditBanner.tsx";
 import { Badge } from "../components/Badge.tsx";
 import { RestatementNotice } from "../components/RestatementNotice.tsx";
 import type { TranscriptItem } from "./chat-transcript.ts";
 
 /**
- * Renders the transcript in order. Research and indexing events get their
- * own visible rows rather than being folded into prose, so slow work reads
- * as progress instead of a hang — and `chapter.restated` gets the same
- * prominent treatment as anywhere else it appears (D9).
+ * Renders the transcript in order. Research and publication events get
+ * their own visible rows rather than being folded into prose, so slow work
+ * reads as progress instead of a hang — and `chapter.restated` gets the
+ * same prominent treatment as anywhere else it appears (D9).
  */
 export function ChatTranscript({ items }: { readonly items: readonly TranscriptItem[] }) {
   return (
@@ -40,9 +40,11 @@ function TranscriptItemView({ item }: { readonly item: TranscriptItem }) {
       );
 
     case "research.started":
+      // `brief` is a `ResearchBrief` object (`{ goal, volume, ... }`), not a
+      // string — `goal` is the prose an operator actually reads.
       return (
         <div className="research-event">
-          <Badge tone="clay">Researching</Badge> <span>{item.brief}</span>
+          <Badge tone="clay">Researching</Badge> <span>{item.brief.goal}</span>
         </div>
       );
 
@@ -57,9 +59,23 @@ function TranscriptItemView({ item }: { readonly item: TranscriptItem }) {
       );
 
     case "research.finished":
+      // `findings` is `Finding[]` (`{ text, citations }[]`), not a string.
       return (
         <div className="research-event">
-          <Badge tone="sage">Research complete</Badge> <span>{item.findings}</span>
+          <Badge tone="sage">Research complete</Badge>
+          <ul className="research-event__findings">
+            {item.findings.map((finding) => (
+              <li key={finding.text}>{finding.text}</li>
+            ))}
+          </ul>
+        </div>
+      );
+
+    case "research.failed":
+      return (
+        <div className="research-event research-event--error" role="alert">
+          <Badge tone="red">Research failed</Badge> <span>{item.brief.goal}</span>
+          <p className="research-event__error">{item.error}</p>
         </div>
       );
 
@@ -70,27 +86,37 @@ function TranscriptItemView({ item }: { readonly item: TranscriptItem }) {
         </div>
       );
 
-    case "audit":
-      return (
-        <AuditBanner
-          audit={{
-            verdict: item.verdict,
-            findings: item.findings,
-          }}
-        />
-      );
+    case "audit": {
+      // The chat `audit` event only carries `passed`/`repairs` — no
+      // per-claim issue list (that arrives separately, below, on
+      // `chapter.rejected`, if the audit failed). Repairs already get their
+      // own visible `chapter.restated` rows, so this banner is deliberately
+      // just the pass/fail headline here.
+      const audit: AuditSummary = { passed: item.passed };
+      return <AuditBanner audit={audit} />;
+    }
 
     case "chapter.restated":
       return <RestatementNotice restatement={item} />;
 
-    case "indexed":
+    case "chapter.published":
       return (
         <div className="research-event">
-          <Badge tone="sage">Indexed</Badge>{" "}
-          <span>
-            {item.stats.chapters} chapter{item.stats.chapters === 1 ? "" : "s"}, {item.stats.tokens}{" "}
-            tokens
-          </span>
+          <Badge tone="sage">Chapter published</Badge> <span>{item.chapter}</span>
+        </div>
+      );
+
+    case "chapter.rejected":
+      return (
+        <div className="research-event research-event--error" role="alert">
+          <Badge tone="red">Chapter rejected</Badge> <span>{item.chapter}</span>
+          {item.issues.length > 0 && (
+            <ul className="research-event__findings">
+              {item.issues.map((issue) => (
+                <li key={`${issue.label ?? "chapter"}-${issue.code}`}>{issue.message}</li>
+              ))}
+            </ul>
+          )}
         </div>
       );
 

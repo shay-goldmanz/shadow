@@ -9,21 +9,22 @@ import { parseEventStream } from "./sse.ts";
 import {
   ApiError,
   type ApiErrorBody,
-  type AuditResult,
+  type AuditRecord,
   type Chapter,
   type ChapterSummary,
   type ChatInput,
   type ChatStreamEvent,
-  type Claim,
+  type ClaimSidecar,
   type CreateVolumeInput,
   type IndexStats,
-  type IndexTree,
   type LedgerEvent,
   type LintReport,
+  type PutChapterAudit,
   type PutChapterInput,
   type SourceRecord,
   type UpdateVolumeInput,
   type Volume,
+  type VolumeIndexDocument,
   type VolumeSummary,
 } from "./types.ts";
 
@@ -59,7 +60,7 @@ export class HttpApiClient implements ShadowApiClient {
   async getChapter(
     slug: string,
     chapter: string,
-  ): Promise<{ chapter: Chapter; claims?: readonly Claim[]; audit?: AuditResult }> {
+  ): Promise<{ chapter: Chapter; claims?: ClaimSidecar; audit?: AuditRecord }> {
     return this.getJson(
       `/volumes/${encodeURIComponent(slug)}/chapters/${encodeURIComponent(chapter)}`,
     );
@@ -69,7 +70,7 @@ export class HttpApiClient implements ShadowApiClient {
     slug: string,
     chapter: string,
     input: PutChapterInput,
-  ): Promise<{ chapter: Chapter; audit: AuditResult }> {
+  ): Promise<{ chapter: Chapter; audit: PutChapterAudit }> {
     return this.request(
       `/volumes/${encodeURIComponent(slug)}/chapters/${encodeURIComponent(chapter)}`,
       { method: "PUT", body: JSON.stringify(input) },
@@ -83,11 +84,11 @@ export class HttpApiClient implements ShadowApiClient {
     );
   }
 
-  async getIndex(slug: string): Promise<IndexTree> {
+  async getIndex(slug: string): Promise<VolumeIndexDocument> {
     return this.getJson(`/volumes/${encodeURIComponent(slug)}/index`);
   }
 
-  async reindex(slug: string): Promise<{ index: IndexTree; stats: IndexStats }> {
+  async reindex(slug: string): Promise<{ index: VolumeIndexDocument; stats: IndexStats }> {
     return this.request(`/volumes/${encodeURIComponent(slug)}/reindex`, { method: "POST" });
   }
 

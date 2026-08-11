@@ -9,7 +9,7 @@
  * with no network and no live model — see `test-helpers.ts`.
  */
 
-import type { ShadowAgent, ShadowConversation } from "@shadow/agent";
+import type { ShadowAgent } from "@shadow/agent";
 import type { VolumeStore } from "@shadow/core";
 import type {
   CheckWorthinessClassifier,
@@ -19,6 +19,7 @@ import type {
 } from "@shadow/evidence";
 import type { Indexer, MissLogStore } from "@shadow/indexing";
 import type { StructuredGenerationPort } from "@shadow/model";
+import type { ConversationRegistry } from "./conversation-registry.ts";
 
 /**
  * Every collaborator an `@shadow/api` handler can call into. A strict
@@ -45,6 +46,11 @@ export interface ApiDeps {
    * ever created once. Lost on server restart, same as any other
    * in-process state; `docs/API.md` documents no persistence guarantee for
    * chat sessions, only for volumes (D4).
+   *
+   * Bounded (`ConversationRegistry`, not a raw `Map`): each conversation now
+   * persists its session transcript on disk for as long as it's held (D6's
+   * `resume` requires it), so an unbounded registry would leak both memory
+   * and disk. See that class's doc for the eviction policy.
    */
-  readonly conversations: Map<string, ShadowConversation>;
+  readonly conversations: ConversationRegistry;
 }

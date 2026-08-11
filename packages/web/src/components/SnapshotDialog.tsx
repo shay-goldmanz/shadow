@@ -93,7 +93,8 @@ export function SnapshotDialog({
                 {state.source.title}
               </a>{" "}
               <span className="meta">
-                · {state.source.transport} · retrieved {state.source.retrievedAt}
+                · {state.source.retrieval.transport} · retrieved{" "}
+                {state.source.retrieval.retrievedAt}
               </span>
             </p>
           )}

@@ -10,24 +10,35 @@ export function CreateVolumeForm({
   pending,
   error,
 }: {
-  readonly onCreate: (input: { title: string; description: string }) => void;
+  /** Resolves `true` on success, `false` on a handled failure (the caller already recorded `error`) — never rejects. */
+  readonly onCreate: (input: { title: string; description: string }) => Promise<boolean>;
   readonly pending: boolean;
   readonly error: string | undefined;
 }) {
   const [title, setTitle] = useState("");
   const [description, setDescription] = useState("");
 
-  function handleSubmit(event: FormEvent<HTMLFormElement>) {
+  async function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     const trimmed = title.trim();
     if (!trimmed) return;
-    onCreate({ title: trimmed, description: description.trim() });
-    setTitle("");
-    setDescription("");
+    // Only clear the operator's typing on success — a duplicate slug,
+    // invalid slug, or the API being unreachable must leave both fields
+    // exactly as typed so the operator can fix and resubmit rather than
+    // retyping from scratch.
+    const created = await onCreate({ title: trimmed, description: description.trim() });
+    if (created) {
+      setTitle("");
+      setDescription("");
+    }
   }
 
   return (
-    <form className="create-volume-form" onSubmit={handleSubmit} aria-label="Create a volume">
+    <form
+      className="create-volume-form"
+      onSubmit={(event) => void handleSubmit(event)}
+      aria-label="Create a volume"
+    >
       <div className="create-volume-form__row">
         <label htmlFor="new-volume-title">Title</label>
         <input

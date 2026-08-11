@@ -17,43 +17,57 @@
 import index from "./index.html";
 
 const port = Number(process.env.PORT ?? 4300);
-const apiOrigin = process.env.SHADOW_API ?? "http://localhost:4301";
+// "127.0.0.1", not "localhost" — @shadow/api's own server.ts binds explicit
+// IPv4 loopback (see that file's doc comment: "localhost" resolved to IPv6
+// loopback only on macOS, refusing an IPv4 connection attempt). Matching it
+// here means this proxy doesn't depend on hostname-resolution behavior to
+// reach the server it's proxying to.
+const apiOrigin = process.env.SHADOW_API ?? "http://127.0.0.1:4301";
+
+async function proxyToApi(request: Request): Promise<Response> {
+  const url = new URL(request.url);
+  const target = new URL(url.pathname + url.search, apiOrigin);
+  try {
+    return await fetch(target, {
+      method: request.method,
+      headers: request.headers,
+      body: request.body,
+      // Required by undici/Bun when forwarding a streaming request body.
+      // @ts-expect-error -- duplex is not in the DOM RequestInit types yet.
+      duplex: "half",
+      redirect: "manual",
+    });
+  } catch (cause) {
+    return Response.json(
+      {
+        error: {
+          code: "api_unreachable",
+          message: `Could not reach @shadow/api at ${apiOrigin}. Is it running?`,
+          details: { cause: String(cause) },
+        },
+      },
+      { status: 502 },
+    );
+  }
+}
 
 const server = Bun.serve({
   port,
-  routes: { "/": index },
   development: true,
-  async fetch(request) {
-    const url = new URL(request.url);
-    if (!url.pathname.startsWith("/api/")) {
-      // Unknown non-API path: hand it back to the SPA so client-side routing
-      // survives a refresh on a deep link.
-      return new Response(null, { status: 404 });
-    }
-
-    const target = new URL(url.pathname + url.search, apiOrigin);
-    try {
-      return await fetch(target, {
-        method: request.method,
-        headers: request.headers,
-        body: request.body,
-        // Required by undici/Bun when forwarding a streaming request body.
-        // @ts-expect-error -- duplex is not in the DOM RequestInit types yet.
-        duplex: "half",
-        redirect: "manual",
-      });
-    } catch (cause) {
-      return Response.json(
-        {
-          error: {
-            code: "api_unreachable",
-            message: `Could not reach @shadow/api at ${apiOrigin}. Is it running?`,
-            details: { cause: String(cause) },
-          },
-        },
-        { status: 502 },
-      );
-    }
+  routes: {
+    // `"/api/*"`'s literal prefix beats the trailing wildcard below for any
+    // matching request (Bun's router prefers the more specific pattern), so
+    // every `/api/...` path proxies through regardless of registration order.
+    "/api/*": proxyToApi,
+    // Every other path — including a hard refresh on a client-side route —
+    // gets the SPA shell back, so routing survives a reload. Hash-based
+    // routing (`useHashRoute.ts`) never actually sends a non-`/` pathname to
+    // the server today, but the app shouldn't depend on that to avoid a
+    // dead-end 404 if that ever changes. Bun bundles `index.html`'s
+    // referenced `main.tsx` (and its imports) on the fly (D7); a plain
+    // `new Response(index)` cannot do that, so this must stay a `routes`
+    // entry, not a hand-built `fetch` fallback response.
+    "/*": index,
   },
 });
 

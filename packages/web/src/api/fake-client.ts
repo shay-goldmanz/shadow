@@ -1,9 +1,9 @@
 /**
  * An in-memory implementation of `ShadowApiClient`. This is what the app is
- * built and tested against — `docs/API.md` is the contract, `@shadow/api`
- * may not exist yet, and this fake is the stand-in. `bun run dev` also
- * serves the SPA wired to this client, seeded with `fake-data.ts`, so the
- * whole app is inspectable without a server.
+ * built and tested against — `@shadow/api` may be unavailable in a given
+ * dev environment, and this fake is the stand-in. `bun run dev` also serves
+ * the SPA wired to this client, seeded with `fake-data.ts`, so the whole
+ * app is inspectable without a server.
  */
 
 import type { ShadowApiClient } from "./client.ts";
@@ -11,21 +11,22 @@ import { defaultChatScript } from "./fake-chat-script.ts";
 import { chapterSummariesOf, type SeedVolume, seedVolume, volumeSummaryOf } from "./fake-data.ts";
 import {
   ApiError,
-  type AuditResult,
+  type AuditRecord,
   type Chapter,
   type ChapterSummary,
   type ChatInput,
   type ChatStreamEvent,
-  type Claim,
+  type ClaimSidecar,
   type CreateVolumeInput,
   type IndexStats,
-  type IndexTree,
   type LedgerEvent,
   type LintReport,
+  type PutChapterAudit,
   type PutChapterInput,
   type SourceRecord,
   type UpdateVolumeInput,
   type Volume,
+  type VolumeIndexDocument,
   type VolumeSummary,
 } from "./types.ts";
 
@@ -66,7 +67,7 @@ export class FakeApiClient implements ShadowApiClient {
   async createVolume(input: CreateVolumeInput): Promise<Volume> {
     const slug = input.slug ?? slugify(input.title);
     if (this.volumes.has(slug)) {
-      throw new ApiError("volume_exists", `A volume already exists at slug "${slug}".`);
+      throw new ApiError("volume_already_exists", `A volume already exists at slug "${slug}".`);
     }
     if (!slug) {
       throw new ApiError("invalid_slug", "Could not derive a slug from the given title.");
@@ -83,7 +84,18 @@ export class FakeApiClient implements ShadowApiClient {
     this.volumes.set(slug, {
       volume,
       chapters: [],
-      index: { volume: slug, generatedAt: now, nodes: [] },
+      index: {
+        schema_version: 1,
+        generated_at: now,
+        corpus_hash: "sha256:empty",
+        volume: {
+          volume_id: slug,
+          title: volume.title,
+          chapter_count: 0,
+          volume_hash: "sha256:empty",
+          chapters: [],
+        },
+      },
       sources: [],
       snapshots: {},
       ledger: [],
@@ -117,7 +129,7 @@ export class FakeApiClient implements ShadowApiClient {
   async getChapter(
     slug: string,
     chapter: string,
-  ): Promise<{ chapter: Chapter; claims?: readonly Claim[]; audit?: AuditResult }> {
+  ): Promise<{ chapter: Chapter; claims?: ClaimSidecar; audit?: AuditRecord }> {
     const seed = this.requireVolume(slug);
     const entry = seed.chapters.find((c) => c.chapter.slug === chapter);
     if (!entry) {
@@ -130,7 +142,7 @@ export class FakeApiClient implements ShadowApiClient {
     slug: string,
     chapter: string,
     input: PutChapterInput,
-  ): Promise<{ chapter: Chapter; audit: AuditResult }> {
+  ): Promise<{ chapter: Chapter; audit: PutChapterAudit }> {
     const seed = this.requireVolume(slug);
     const now = new Date().toISOString();
     const existing = seed.chapters.find((c) => c.chapter.slug === chapter);
@@ -142,13 +154,24 @@ export class FakeApiClient implements ShadowApiClient {
       createdAt: existing?.chapter.createdAt ?? now,
       updatedAt: now,
     };
-    const audit: AuditResult = { verdict: "pass", findings: [] };
-    const nextEntry = { chapter: nextChapter, claims: existing?.claims ?? [], audit };
+    const verdict = { chapter, passed: true, outcomes: [] };
+    const audit: AuditRecord = { chapter, auditedAt: now, verdict };
+    const claims: ClaimSidecar = existing?.claims ?? {
+      schemaVersion: "1.0",
+      chapter,
+      chapterTextSha256: `sha256:${chapter}`,
+      auditedAt: now,
+      claims: [],
+    };
+    const nextEntry = { chapter: nextChapter, claims, audit };
     const nextChapters = existing
       ? seed.chapters.map((c) => (c.chapter.slug === chapter ? nextEntry : c))
       : [...seed.chapters, nextEntry];
     this.volumes.set(slug, { ...seed, chapters: nextChapters });
-    return { chapter: nextChapter, audit };
+    return {
+      chapter: nextChapter,
+      audit: { verdict, outcomes: [], repairs: [], published: true },
+    };
   }
 
   async deleteChapter(slug: string, chapter: string): Promise<void> {
@@ -159,15 +182,25 @@ export class FakeApiClient implements ShadowApiClient {
     });
   }
 
-  async getIndex(slug: string): Promise<IndexTree> {
-    return this.requireVolume(slug).index;
+  async getIndex(slug: string): Promise<VolumeIndexDocument> {
+    const seed = this.requireVolume(slug);
+    if (seed.index.volume.chapters.length === 0) {
+      // Mirrors the real API: a volume with nothing published yet has no
+      // index — `index_not_built`, a normal state, not a fault.
+      throw new ApiError("index_not_built", `Volume "${slug}" has not been indexed yet`);
+    }
+    return seed.index;
   }
 
-  async reindex(slug: string): Promise<{ index: IndexTree; stats: IndexStats }> {
+  async reindex(slug: string): Promise<{ index: VolumeIndexDocument; stats: IndexStats }> {
     const seed = this.requireVolume(slug);
     return {
       index: seed.index,
-      stats: { volumes: 1, chapters: seed.chapters.length, tokens: 0 },
+      stats: {
+        volumes: 1,
+        chapters: seed.chapters.length,
+        tokens: seed.index.volume.chapters.reduce((sum, c) => sum + c.tokens, 0),
+      },
     };
   }
 
@@ -178,9 +211,9 @@ export class FakeApiClient implements ShadowApiClient {
 
   async getSource(slug: string, id: string): Promise<SourceRecord> {
     const seed = this.requireVolume(slug);
-    const source = seed.sources.find((s) => s.id === id);
-    if (!source) throw new ApiError("source_not_found", `No source "${id}" in volume "${slug}".`);
-    return source;
+    const src = seed.sources.find((s) => s.id === id);
+    if (!src) throw new ApiError("source_not_found", `No source "${id}" in volume "${slug}".`);
+    return src;
   }
 
   async getSnapshot(slug: string, hash: string): Promise<string> {

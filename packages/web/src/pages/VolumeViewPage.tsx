@@ -1,8 +1,21 @@
 import { useEffect, useState } from "react";
 import type { ShadowApiClient } from "../api/client.ts";
-import type { ChapterSummary, IndexTree, Volume } from "../api/types.ts";
+import {
+  ApiError,
+  type ChapterSummary,
+  type Volume,
+  type VolumeIndexDocument,
+  whenToUseOf,
+} from "../api/types.ts";
 import type { Route } from "../routing/useHashRoute.ts";
 import { IndexTreeView } from "./IndexTreeView.tsx";
+
+type IndexState =
+  | { readonly status: "loading" }
+  /** A volume that has never been indexed 404s `index_not_built` — a normal state for a freshly created volume (nothing has published yet), not a page-level error. */
+  | { readonly status: "not-built" }
+  | { readonly status: "ready"; readonly index: VolumeIndexDocument }
+  | { readonly status: "error"; readonly message: string };
 
 /** Chapters in a volume, plus its index tree — screen 2. */
 export function VolumeViewPage({
@@ -17,24 +30,46 @@ export function VolumeViewPage({
   const [data, setData] = useState<
     { volume: Volume; chapters: readonly ChapterSummary[] } | undefined
   >(undefined);
-  const [index, setIndex] = useState<IndexTree | undefined>(undefined);
+  const [indexState, setIndexState] = useState<IndexState>({ status: "loading" });
   const [error, setError] = useState<string | undefined>(undefined);
 
   useEffect(() => {
     let cancelled = false;
     setData(undefined);
-    setIndex(undefined);
     setError(undefined);
-    Promise.all([client.getVolume(slug), client.getIndex(slug)])
-      .then(([volumeResult, indexResult]) => {
-        if (!cancelled) {
-          setData(volumeResult);
-          setIndex(indexResult);
-        }
+    setIndexState({ status: "loading" });
+
+    // Independent requests, not `Promise.all`: a volume with no index yet
+    // (true of every volume immediately after creation, before its first
+    // chapter publishes) must not dead-end the whole page just because
+    // `getIndex` 404s — that is the critical path's very first screen after
+    // "create volume".
+    client
+      .getVolume(slug)
+      .then((result) => {
+        if (!cancelled) setData(result);
       })
       .catch((err: unknown) => {
         if (!cancelled) setError(err instanceof Error ? err.message : String(err));
       });
+
+    client
+      .getIndex(slug)
+      .then((index) => {
+        if (!cancelled) setIndexState({ status: "ready", index });
+      })
+      .catch((err: unknown) => {
+        if (cancelled) return;
+        if (err instanceof ApiError && err.code === "index_not_built") {
+          setIndexState({ status: "not-built" });
+        } else {
+          setIndexState({
+            status: "error",
+            message: err instanceof Error ? err.message : String(err),
+          });
+        }
+      });
+
     return () => {
       cancelled = true;
     };
@@ -75,8 +110,8 @@ export function VolumeViewPage({
                     onClick={() => navigate({ name: "chapter", slug, chapter: chapter.slug })}
                   >
                     <span className="chapter-list__title">{chapter.title}</span>
-                    {chapter.whenToUse && (
-                      <span className="chapter-list__when-to-use">{chapter.whenToUse}</span>
+                    {whenToUseOf(chapter) && (
+                      <span className="chapter-list__when-to-use">{whenToUseOf(chapter)}</span>
                     )}
                   </button>
                 </li>
@@ -87,7 +122,16 @@ export function VolumeViewPage({
 
         <section aria-label="Index tree">
           <h2>Index</h2>
-          {index && <IndexTreeView index={index} />}
+          {indexState.status === "loading" && <p aria-live="polite">Loading index…</p>}
+          {indexState.status === "not-built" && (
+            <p className="index-tree__empty">
+              Not indexed yet — publishing a chapter builds the index automatically.
+            </p>
+          )}
+          {indexState.status === "error" && (
+            <p role="alert">Could not load the index: {indexState.message}</p>
+          )}
+          {indexState.status === "ready" && <IndexTreeView index={indexState.index} />}
         </section>
       </div>
     </div>

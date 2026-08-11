@@ -12,14 +12,23 @@ import { buildRoutes, notFoundFallback } from "./router.ts";
 export interface CreateServerOptions {
   /** @default 0 — an OS-assigned ephemeral port, what tests want. */
   readonly port?: number;
-  /** @default "localhost" */
+  /**
+   * @default "127.0.0.1" — explicit IPv4 loopback, not the hostname
+   * `"localhost"`. Verified live on macOS: `Bun.serve({ hostname:
+   * "localhost" })` binds IPv6 loopback (`[::1]`) only, so a client that
+   * resolves `localhost`/connects to `127.0.0.1` directly (many `curl`
+   * invocations, some HTTP clients) gets connection-refused even though the
+   * server is "up". Binding the literal IPv4 address sidesteps hostname
+   * resolution entirely and is reachable via both `127.0.0.1` and
+   * `localhost` (which resolves to it first on essentially every system).
+   */
   readonly hostname?: string;
 }
 
 export function createServer(deps: ApiDeps, options: CreateServerOptions = {}) {
   return Bun.serve({
     port: options.port ?? 0,
-    hostname: options.hostname ?? "localhost",
+    hostname: options.hostname ?? "127.0.0.1",
     routes: buildRoutes(deps),
     fetch: notFoundFallback,
   });

@@ -5,6 +5,7 @@ import "./app.css";
 import type { ShadowApiClient } from "./api/client.ts";
 import { FakeApiClient } from "./api/fake-client.ts";
 import { HttpApiClient } from "./api/http-client.ts";
+import { ErrorBoundary } from "./ErrorBoundary.tsx";
 import { ThemeProvider } from "./theme/ThemeProvider.tsx";
 
 declare global {
@@ -22,7 +23,9 @@ const container = document.getElementById("root");
 if (!container) throw new Error("missing #root element");
 
 createRoot(container).render(
-  <ThemeProvider>
-    <App client={client} />
-  </ThemeProvider>,
+  <ErrorBoundary>
+    <ThemeProvider>
+      <App client={client} />
+    </ThemeProvider>
+  </ErrorBoundary>,
 );

@@ -41,7 +41,7 @@ describe("ChatPage", () => {
       el.className.replace("chat-transcript__item chat-transcript__item--", ""),
     );
 
-    // Ordering matches the script exactly (docs/API.md's event table, arrival order).
+    // Ordering matches the script exactly (arrival order, @shadow/api's real event mapping).
     expect(itemTypes).toEqual([
       "user",
       "assistant",
@@ -52,6 +52,7 @@ describe("ChatPage", () => {
       "assistant",
       "chapter.drafted",
       "audit",
+      "chapter.published",
       "assistant",
       "research.started",
       "research.source",
@@ -59,7 +60,7 @@ describe("ChatPage", () => {
       "chapter.restated",
       "chapter.drafted",
       "audit",
-      "indexed",
+      "chapter.rejected",
     ]);
   });
 

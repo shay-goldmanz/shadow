@@ -26,6 +26,11 @@
   --accent-soft: #e8efe9;
   --clay: #c08a72;
   --clay-soft: #f3e8e2;
+  /* D10a amendment: --clay measures 2.45:1 on --clay-soft at citation-mark
+     text sizes (AA needs 4.5:1). --clay-text is the darkened value for
+     TEXT uses only (the citation mark's own colour); --clay stays as-is
+     for non-text uses (rules, borders, dot markers), where 3:1 applies. */
+  --clay-text: #8a5a42;
   --warn: #c9a227;
   --warn-soft: #f7f0d8;
   --danger: #b4685e;
@@ -70,6 +75,8 @@
     --accent-soft: #232b26;
     --clay: #ce9a83;
     --clay-soft: #2c211c;
+    /* D10a: dark already passes at 6.39:1 — keep the same value for text. */
+    --clay-text: #ce9a83;
     --warn: #d9b540;
     --warn-soft: #2e2914;
     --danger: #c87c71;
@@ -88,6 +95,7 @@
   --accent-soft: #232b26;
   --clay: #ce9a83;
   --clay-soft: #2c211c;
+  --clay-text: #ce9a83;
   --warn: #d9b540;
   --warn-soft: #2e2914;
   --danger: #c87c71;

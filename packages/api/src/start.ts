@@ -15,6 +15,27 @@ const port = Number(process.env.PORT ?? 4301);
 // to ~/.shadow — any override sent the API and the CLI to different corpora,
 // so the operator's volumes were invisible to the agents meant to consume them.
 const deps = buildRealApiDeps({ root: process.env.SHADOW_HOME });
-const server = createServer(deps, { port, hostname: "localhost" });
+// "127.0.0.1", not "localhost" — see server.ts's CreateServerOptions doc:
+// Bun binds "localhost" to IPv6 loopback only on macOS, which refuses an
+// IPv4 client. Explicit IPv4 loopback is reachable via both.
+const server = createServer(deps, { port, hostname: "127.0.0.1" });
 
 console.log(`@shadow/api listening at ${server.url.toString()}`);
+
+/**
+ * Every live conversation persists its `AgenticSession`'s transcript on
+ * disk for as long as it's held (`ConversationRegistry`'s doc). On a normal
+ * shutdown (Ctrl-C, or `kill`) there is no later request that will ever
+ * evict and dispose them, so this is the only chance to release them —
+ * cheap, and the alternative is a slow accumulation of dead session
+ * directories under `~/.claude/projects/` every time the server restarts.
+ */
+async function shutdown(signal: NodeJS.Signals): Promise<void> {
+  console.log(`${signal} received — closing ${deps.conversations.size} live conversation(s)...`);
+  await deps.conversations.disposeAll();
+  await server.stop();
+  process.exit(0);
+}
+
+process.on("SIGINT", () => void shutdown("SIGINT"));
+process.on("SIGTERM", () => void shutdown("SIGTERM"));

@@ -11,10 +11,10 @@ export function VolumeCard({
     <button type="button" className="volume-card" onClick={onOpen}>
       <span className="volume-card__title">{volume.title}</span>
       {volume.description && <span className="volume-card__description">{volume.description}</span>}
-      <span className="volume-card__meta">
-        {volume.chapterCount} chapter{volume.chapterCount === 1 ? "" : "s"} · updated{" "}
-        {formatDate(volume.updatedAt)}
-      </span>
+      {/* `GET /api/volumes` never sends a chapter count (`VolumeSummary` is a
+          full `Volume`, nothing more) — showing "updated" alone here is
+          honest about what's actually known at this list-view granularity. */}
+      <span className="volume-card__meta">updated {formatDate(volume.updatedAt)}</span>
     </button>
   );
 }

@@ -12,7 +12,9 @@ describe("VolumeListPage", () => {
     const { findByText } = render(<VolumeListPage client={client} navigate={() => {}} />);
 
     expect(await findByText("Design Inspiration")).toBeTruthy();
-    expect(await findByText(/2 chapters/)).toBeTruthy();
+    // `GET /api/volumes` never sends a chapter count (a `VolumeSummary` is a
+    // full `Volume`, nothing more) — the card shows only what's real.
+    expect(await findByText(/updated/)).toBeTruthy();
   });
 
   test("an empty volume list shows the empty state rather than nothing", async () => {

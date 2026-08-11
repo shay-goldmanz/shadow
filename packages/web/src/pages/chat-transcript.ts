@@ -1,15 +1,32 @@
 /**
- * Pure reducer turning the chat SSE stream (docs/API.md) into a transcript
- * the UI renders. Kept separate from any component so event-ordering and
+ * Pure reducer turning the chat SSE stream (`@shadow/api`'s real
+ * `handlers/chat.ts` mapping, not `docs/API.md`'s table verbatim — see
+ * `../api/types.ts`'s `ChatStreamEvent` doc) into a transcript the UI
+ * renders. Kept separate from any component so event-ordering and
  * text-delta coalescing are unit-testable without a DOM.
+ *
+ * The `switch` in `applyStreamEvent` is exhaustive over every
+ * `ChatStreamEvent` variant on purpose: a missing `case` used to fall
+ * through with no `default`, so `applyStreamEvent` implicitly returned
+ * `undefined` and silently wiped the whole transcript the next time an
+ * unhandled event (`chapter.published`/`chapter.rejected`/`research.failed`
+ * — real events the server sends, just never handled here) arrived
+ * mid-stream. `event satisfies never` below is what makes a future
+ * unhandled variant a compile error instead of a repeat of that bug.
  */
 
-import type { AuditFinding, ChatStreamEvent, IndexStats } from "../api/types.ts";
+import type {
+  ChatStreamEvent,
+  CheckIssue,
+  Finding,
+  RepairDecision,
+  ResearchBrief,
+} from "../api/types.ts";
 
 export type TranscriptItem =
   | { readonly id: string; readonly type: "user"; readonly text: string }
   | { readonly id: string; readonly type: "assistant"; readonly text: string }
-  | { readonly id: string; readonly type: "research.started"; readonly brief: string }
+  | { readonly id: string; readonly type: "research.started"; readonly brief: ResearchBrief }
   | {
       readonly id: string;
       readonly type: "research.source";
@@ -21,7 +38,14 @@ export type TranscriptItem =
       readonly id: string;
       readonly type: "research.finished";
       readonly briefId: string;
-      readonly findings: string;
+      readonly findings: readonly Finding[];
+    }
+  | {
+      readonly id: string;
+      readonly type: "research.failed";
+      readonly briefId: string;
+      readonly brief: ResearchBrief;
+      readonly error: string;
     }
   | {
       readonly id: string;
@@ -32,9 +56,10 @@ export type TranscriptItem =
   | {
       readonly id: string;
       readonly type: "audit";
+      readonly volume: string;
       readonly chapter: string;
-      readonly verdict: "pass" | "fail";
-      readonly findings: readonly AuditFinding[];
+      readonly passed: boolean;
+      readonly repairs: readonly RepairDecision[];
     }
   | {
       readonly id: string;
@@ -47,9 +72,16 @@ export type TranscriptItem =
     }
   | {
       readonly id: string;
-      readonly type: "indexed";
+      readonly type: "chapter.published";
       readonly volume: string;
-      readonly stats: IndexStats;
+      readonly chapter: string;
+    }
+  | {
+      readonly id: string;
+      readonly type: "chapter.rejected";
+      readonly volume: string;
+      readonly chapter: string;
+      readonly issues: readonly CheckIssue[];
     }
   | {
       readonly id: string;
@@ -113,6 +145,14 @@ export function applyStreamEvent(state: ChatState, event: ChatStreamEvent): Chat
         findings: event.data.findings,
       });
 
+    case "research.failed":
+      return withItem(state, {
+        type: "research.failed",
+        briefId: event.data.briefId,
+        brief: event.data.brief,
+        error: event.data.error,
+      });
+
     case "chapter.drafted":
       return withItem(state, {
         type: "chapter.drafted",
@@ -123,9 +163,10 @@ export function applyStreamEvent(state: ChatState, event: ChatStreamEvent): Chat
     case "audit":
       return withItem(state, {
         type: "audit",
+        volume: event.data.volume,
         chapter: event.data.chapter,
-        verdict: event.data.verdict,
-        findings: event.data.findings,
+        passed: event.data.passed,
+        repairs: event.data.repairs,
       });
 
     case "chapter.restated":
@@ -138,11 +179,19 @@ export function applyStreamEvent(state: ChatState, event: ChatStreamEvent): Chat
         outcome: event.data.outcome,
       });
 
-    case "indexed":
+    case "chapter.published":
       return withItem(state, {
-        type: "indexed",
+        type: "chapter.published",
         volume: event.data.volume,
-        stats: event.data.stats,
+        chapter: event.data.chapter,
+      });
+
+    case "chapter.rejected":
+      return withItem(state, {
+        type: "chapter.rejected",
+        volume: event.data.volume,
+        chapter: event.data.chapter,
+        issues: event.data.issues,
       });
 
     case "error":
@@ -153,6 +202,13 @@ export function applyStreamEvent(state: ChatState, event: ChatStreamEvent): Chat
 
     case "done":
       return { ...state, streaming: false };
+
+    default:
+      // Exhaustiveness check: a `ChatStreamEvent` variant added to
+      // `../api/types.ts` without a matching `case` above is now a
+      // compile error here, not a silent `undefined` return at runtime.
+      event satisfies never;
+      return state;
   }
 }
 

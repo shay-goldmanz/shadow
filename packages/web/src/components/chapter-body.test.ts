@@ -53,6 +53,50 @@ describe("parseChapterBody", () => {
     ]);
   });
 
+  test("recognizes derived ([^=label]) and operator ([^~label]) citation markers, not just sourced ([^label])", () => {
+    const blocks = parseChapterBody(
+      "Linear uses 4px spacing.[^lin-4px] This follows from that.[^=derived-claim] I said so myself.[^~op-belief]",
+    );
+    expect(blocks).toEqual([
+      {
+        type: "paragraph",
+        segments: [
+          { type: "text", text: "Linear uses 4px spacing." },
+          { type: "citation", label: "lin-4px" },
+          { type: "text", text: " This follows from that." },
+          { type: "citation", label: "derived-claim" },
+          { type: "text", text: " I said so myself." },
+          { type: "citation", label: "op-belief" },
+        ],
+      },
+    ]);
+  });
+
+  test("strips derived and operator footnote definition lines too, not just sourced ones", () => {
+    const blocks = parseChapterBody(
+      "A derived claim.[^=derived-claim]\n\n[^=derived-claim]: raw definition text, not shown\n\n" +
+        "An operator claim.[^~op-belief]\n\n[^~op-belief]: another raw definition, not shown\n\n" +
+        "Trailing paragraph.",
+    );
+    expect(blocks).toEqual([
+      {
+        type: "paragraph",
+        segments: [
+          { type: "text", text: "A derived claim." },
+          { type: "citation", label: "derived-claim" },
+        ],
+      },
+      {
+        type: "paragraph",
+        segments: [
+          { type: "text", text: "An operator claim." },
+          { type: "citation", label: "op-belief" },
+        ],
+      },
+      { type: "paragraph", segments: [{ type: "text", text: "Trailing paragraph." }] },
+    ]);
+  });
+
   test("empty body yields no blocks", () => {
     expect(parseChapterBody("")).toEqual([]);
     expect(parseChapterBody("\n\n\n")).toEqual([]);

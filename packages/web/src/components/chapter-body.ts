@@ -1,11 +1,22 @@
 /**
  * Pure parsing of a chapter's Markdown body (D18: sentences marked with
- * ordinary reference footnotes, `[^label]`) into renderable blocks. No
- * domain logic — this only recognizes headings, paragraphs, and citation
- * markers well enough to render prose with clickable citations. Footnote
- * *definition* lines are skipped: the sidecar `claims[]` from the API is
- * the authoritative source for what a citation means, not the inline
- * definition text.
+ * reference footnotes) into renderable blocks. No domain logic — this only
+ * recognizes headings, paragraphs, and citation markers well enough to
+ * render prose with clickable citations. Footnote *definition* lines are
+ * skipped: the sidecar `claims[]` from the API is the authoritative source
+ * for what a citation means, not the inline definition text.
+ *
+ * D18's three real marker forms, matching `@shadow/evidence`'s
+ * `footnotes.ts` `MARKER_PATTERN` exactly (this package can't import that —
+ * see `../api/types.ts`'s module doc — so the regex is mirrored, not
+ * shared): `[^label]` (sourced), `[^=label]` (derived), `[^~label]`
+ * (operator). The label itself never carries the prefix; `parseInline`
+ * strips it. A prior version of this pattern only recognized the unprefixed
+ * form, so every derived/operator citation rendered as literal
+ * `[^~label]`-shaped text instead of a citation, and the corresponding
+ * `[^~label]: ...`/`[^=label]: ...` definition lines survived the
+ * definition-line filter below for the same reason, appearing as stray
+ * prose.
  */
 
 export type InlineSegment =
@@ -20,8 +31,8 @@ export type ChapterBlock =
     }
   | { readonly type: "paragraph"; readonly segments: readonly InlineSegment[] };
 
-const CITATION_PATTERN = /\[\^([a-zA-Z0-9_-]+)\]/g;
-const FOOTNOTE_DEFINITION_PATTERN = /^\[\^[a-zA-Z0-9_-]+\]:/;
+const CITATION_PATTERN = /\[\^(?:=|~)?([a-zA-Z0-9_-]+)\](?!:)/g;
+const FOOTNOTE_DEFINITION_PATTERN = /^\[\^(?:=|~)?[a-zA-Z0-9_-]+\]:/;
 const HEADING_PATTERN = /^(#{1,6})\s+(.*)$/;
 
 export function parseChapterBody(body: string): readonly ChapterBlock[] {

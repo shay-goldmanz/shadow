@@ -328,7 +328,8 @@
 
 .citation-mark {
   font-family: var(--font-sans);
-  font-size: 0.7em;
+  /* D10a: never below 13px, never smaller than 0.85x the surrounding body size. */
+  font-size: max(13px, 0.85em);
   border: 1px solid transparent;
   border-radius: 4px;
   padding: 0 4px;
@@ -339,7 +340,7 @@
 
 .citation-mark--clay {
   background: var(--clay-soft);
-  color: var(--clay);
+  color: var(--clay-text);
   border-color: var(--clay);
 }
 
@@ -586,4 +587,19 @@
   white-space: pre-wrap;
   max-height: 40vh;
   overflow: auto;
+}
+
+.error-boundary {
+  border: 1px solid var(--danger);
+  border-radius: var(--radius-card);
+  background: var(--danger-soft);
+  padding: var(--space-6);
+  max-width: var(--measure);
+}
+
+.error-boundary__detail {
+  font-family: var(--font-mono);
+  font-size: 0.85rem;
+  white-space: pre-wrap;
+  color: var(--text-muted);
 }

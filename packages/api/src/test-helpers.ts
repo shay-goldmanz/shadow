@@ -33,6 +33,7 @@ import {
   FakeStructuredGenerationPort,
 } from "@shadow/model";
 import type { ResearchBrief, ResearchBriefPort, ResearchResult } from "@shadow/research";
+import { ConversationRegistry } from "./conversation-registry.ts";
 import type { ApiDeps } from "./deps.ts";
 import { createServer } from "./server.ts";
 
@@ -125,7 +126,7 @@ export async function withApi<T>(fn: (harness: TestHarness) => Promise<T>): Prom
       structuredGenerationPort: new FakeStructuredGenerationPort(),
       missLog: new InMemoryMissLog(),
       shadowAgent,
-      conversations: new Map(),
+      conversations: new ConversationRegistry(),
     };
 
     const server = createServer(deps, { port: 0, hostname: "localhost" });
@@ -188,7 +189,7 @@ export async function withScriptedApi<T>(
       structuredGenerationPort: new FakeStructuredGenerationPort(),
       missLog: new InMemoryMissLog(),
       shadowAgent,
-      conversations: new Map(),
+      conversations: new ConversationRegistry(),
     };
 
     const server = createServer(deps, { port: 0, hostname: "localhost" });
