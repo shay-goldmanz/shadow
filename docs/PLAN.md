@@ -16,8 +16,8 @@ baseline.
 | Wave | State |
 |---|---|
 | 0 — Groundwork | ✅ complete |
-| 1 — Foundation | ⏳ in progress |
-| 2 — Capability | ⬜ not started |
+| 1 — Foundation | ✅ complete — 386 tests passing |
+| 2 — Capability | ⏳ in progress |
 | 3 — Surfaces | ⬜ not started |
 | 4 — Measure and prove | ⬜ not started |
 
@@ -37,7 +37,7 @@ The layers everything else stands on. No feature work until these are green.
 |---|---|---|---|---|
 | T1.1 | `@shadow/core`: Volume/Chapter domain model, `VolumeStore` port + filesystem impl, slug rules, frontmatter parsing. Unit tested. | `packages/core` | — | ✅ `5e7aa03` |
 | T1.2 | `@shadow/model`: structured-generation port + agentic-session port, the two adapters from D5, session reuse, **no-API-key guardrail test** | `packages/model` | T1.1 | ✅ `b784228` |
-| T1.3 | `@shadow/evidence`: package scaffold + domain model (Source, Snapshot, EvidenceSpan, Claim, Ledger) + append-only store + Tier 0 checks. Spec: `docs/EVIDENCE.md`. | `packages/evidence` | T1.1 | ⬜ |
+| T1.3 | `@shadow/evidence`: package scaffold + domain model (Source, Snapshot, EvidenceSpan, Claim, Ledger) + append-only store + Tier 0 checks. Spec: `docs/EVIDENCE.md`. | `packages/evidence` | T1.1 | ✅ `95c93ba` |
 | T1.4 | `@shadow/core`: close the two gaps T2.2 found — corpus-level index slot, volume routing frontmatter, chapter relative-path accessor | `packages/core` | T1.1 | ✅ `f02692f` |
 
 T1.2 and T1.3 run in parallel once T1.1 lands — different packages, no shared files.

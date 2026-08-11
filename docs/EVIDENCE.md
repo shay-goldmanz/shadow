@@ -91,6 +91,27 @@ labelling error in this space: do it and every well-written chapter — the ones
 sentences and transitions — scores as ungrounded, pushing Shadow toward stilted,
 citation-stuffed prose.
 
+## Amendments from implementation (T1.3)
+
+Four points in this document were wrong or under-specified. The implementation's resolutions
+are better and are now normative:
+
+1. **`supports[]` references claims by *label*, not `ClaimId`.** The writer authors the sidecar
+   and cannot know a tooling-minted ULID ahead of time. Labels are what exist in the Markdown,
+   and D18 already guarantees they are unique per chapter and never reused.
+2. **`inputHash` binds each evidence entry to its *own* snapshot hash.** The formula as written
+   (`… ‖ evidence[].exact ‖ snapshotHash ‖ …`) treats the snapshot hash as one global value,
+   which is wrong for a claim citing two different sources — one source could drift without
+   changing the hash. Each evidence entry contributes `exact ‖ its own snapshotHash`. This
+   reduces to the original formula in the single-citation case.
+3. **A sixth ledger event, `claim.label.retired`.** D18 requires labels never be reused after
+   deletion and says the ledger references them, but named no mechanism — and the sidecar only
+   holds current state, so a deleted label would leave no trace. Appended when a label present
+   in the previous sidecar disappears.
+4. **`nfc-ws-v1` step 1 (readability extraction) belongs to `@shadow/research`, not here.** It
+   needs HTML parsing, which is the transport's concern. `@shadow/evidence` implements steps
+   2–5 over already-extracted text. The two packages meet at the extracted-text boundary.
+
 ## On-disk layout
 
 ```
