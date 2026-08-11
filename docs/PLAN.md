@@ -114,7 +114,7 @@ adversarial live use.
 | # | Fix task | Owns | State |
 |---|---|---|---|
 | F3 | Session persistence so reuse works; fake now models the real failure; live two-turn proof | `packages/model`, `packages/agent` | ✅ |
-| F4 | Reconcile web↔API with an offline contract test; composition-root `SHADOW_HOME` and miss log; SSE lifecycle; a11y contrast (D10a) | `packages/web`, `packages/api` | ⏳ |
+| F4 | Reconcile web↔API with an offline contract test; composition-root `SHADOW_HOME` and miss log; SSE lifecycle; a11y contrast (D10a); bounded conversation registry with disposal | `packages/web`, `packages/api` | ✅ `bddbfc3` |
 | F5 | The audit gate leaks through reindex: a failed chapter becomes findable after any `shadow index` | `packages/indexing`, `packages/agent` | ⬜ |
 | F6 | `shadow` is on no PATH, so the installed skill's first command is "command not found" | `packages/cli`, `README.md` | ⬜ |
 | F7 | Leftovers: numeric sub-check skips `derived` claims; `listSources` swallows JSON corruption; `find --volumes <typo>` yields a false `not-in-corpus` and pollutes the backlog | `packages/evidence`, `packages/cli` | ⬜ |

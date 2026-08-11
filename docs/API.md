@@ -8,7 +8,24 @@ document rather than against each other.
 logic. Every endpoint is a thin call into `@shadow/agent`, `@shadow/core`, `@shadow/indexing`,
 or `@shadow/evidence`. If something needs deciding, it gets decided in a pillar, not here.
 
-Served by `Bun.serve` on `localhost`. JSON in, JSON out, except the chat stream.
+Served by `Bun.serve` on **`127.0.0.1`** — explicit IPv4 loopback, not the string `localhost`,
+which Bun binds to IPv6 only on macOS and which then refuses an IPv4 client. JSON in, JSON out,
+except the chat stream.
+
+**This contract is enforced, not just described.** `packages/web/src/api/contract.test.ts`
+drives the real `HttpApiClient` against a real `createServer` with offline fakes. It exists
+because the interface was originally built against a *guessed* wire format that its own fake
+then confirmed — every web test passed while every screen but one crashed against the real API.
+A doc cannot prevent that; a test can.
+
+Two shapes worth stating plainly, since both caused crashes:
+- `GET /api/volumes` returns full `Volume` objects. **There is no `chapterCount` field**, here
+  or anywhere.
+- `GET .../chapters/:chapter` returns `claims` as a whole **`ClaimSidecar`** (the array is
+  `claims.claims`), not a bare `Claim[]`.
+- `GET .../index` returns the raw `VolumeIndexDocument` **unwrapped**; `POST /reindex` wraps
+  the same document as `{ index, stats }`. The asymmetry is real — do not assume one from the
+  other.
 
 ## Volumes
 
@@ -65,17 +82,40 @@ since research is slow and silence reads as failure:
 
 | event | data | meaning |
 |---|---|---|
-| `session` | `{ sessionId }` | first event; echo it back to continue the conversation (D6 session reuse) |
+| `session` | `{ sessionId }` | first event; echo it back to continue the conversation (D6) |
 | `text` | `{ delta }` | assistant prose, incremental |
-| `research.started` | `{ brief }` | Shadow delegated a research brief |
+| `research.started` | `{ briefId, brief }` | `brief` is a `ResearchBrief` **object** (`volume`, `goal`, optional `subjectDomains`/`constraints`/`maxSources`) |
 | `research.source` | `{ sourceId, url, title }` | a source was retrieved and snapshotted |
-| `research.finished` | `{ briefId, findings }` | findings returned, bound to sources |
+| `research.finished` | `{ briefId, findings }` | `findings` is `Finding[]` — `{ text, citations: [{ sourceId, quote }] }` |
+| `research.failed` | `{ briefId, brief, error }` | a brief could not be fulfilled |
 | `chapter.drafted` | `{ volume, chapter }` | a chapter was written |
-| `audit` | `{ chapter, verdict, findings }` | audit result — **may be a failure** |
+| `audit` | `{ volume, chapter, passed, repairs }` | audit result — **may be a failure** |
 | `chapter.restated` | `{ claim, from, to, reason, outcome }` | conservative repair, or an escalation |
-| `indexed` | `{ volume, stats }` | reindex completed |
+| `chapter.published` | `{ volume, chapter }` | passed the audit and was written |
+| `chapter.rejected` | `{ volume, chapter, issues }` | failed the audit; **not** an error |
 | `error` | `{ message, code }` | terminal for this turn |
 | `done` | `{}` | turn complete |
+
+**`sessionId` is the conversation's id**, stable from construction — not the underlying
+`AgenticSession`'s own id, which is minted when the first turn runs. The client only ever sees
+and echoes the former.
+
+**There is no `indexed` event on this stream.** Reindexing happens as part of publication, but
+the repair result carries no index stats, and re-running the indexer purely to report them
+would index twice. Stats come from `POST /reindex`.
+
+**The `audit` shape differs by endpoint**, deliberately — each carries what its caller needs:
+
+| where | shape |
+|---|---|
+| chat SSE `audit` | `{ volume, chapter, passed, repairs }` |
+| `GET .../chapters/:chapter` | `AuditRecord` — `{ chapter, auditedAt, verdict: { chapter, passed, outcomes }, routingMetadataHash? }` |
+| `PUT .../chapters/:chapter` | `{ verdict, outcomes, repairs, published }` |
+
+In all three, **pass/fail is a boolean nested under a verdict object** — never a bare `"pass"`
+string. A client that tests for one is reading a shape that has never existed, which is
+precisely how the interface came to render "Audit failed" for every audit including passing
+ones.
 
 `sessionId` must be echoed by the client on the next message. Without it every turn pays the
 ~18k-token preamble (D6).
