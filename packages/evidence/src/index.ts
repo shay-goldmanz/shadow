@@ -33,6 +33,7 @@ export type {
   EvidenceRelation,
   EvidenceSpan,
   LedgerEvent,
+  NarrativeSentenceClassification,
   NarrativeSummary,
   OvergeneralizationRisk,
   Relevance,
@@ -108,6 +109,33 @@ export { computeInputHash } from "./input-hash.ts";
 
 export { levenshteinDistance } from "./edit-distance.ts";
 
+// ---- sentence segmentation (C1b's Tier-0 form-based exclusion) --------------
+
+export type { Sentence } from "./sentence-segmentation.ts";
+export { segmentChapterBody, splitSentences } from "./sentence-segmentation.ts";
+
+// ---- extractiveness (D21 — watched metric, never a target) ------------------
+
+export {
+  extractivenessOf,
+  longestCommonSubstringLength,
+  meanExtractiveness,
+} from "./extractiveness.ts";
+
+// ---- repair loop (D9/D21/T2.5) -----------------------------------------------
+
+export type { RepairDecision } from "./repair.ts";
+export {
+  applyPreservationBound,
+  buildRestatementRequests,
+  downgradeToOperatorClaim,
+  isRepairable,
+  preservationBound,
+  REPAIRABLE_STATUSES,
+  runRepairLoop,
+  toLedgerEvent,
+} from "./repair.ts";
+
 // ---- Tier 0 checks ------------------------------------------------------------
 
 export type { AuditRecord, Tier0AuditInput, Tier0AuditResult } from "./checks/audit.ts";
@@ -132,6 +160,38 @@ export {
 export type { AuditVerdict, CheckIssue, CheckOutcome, EvidenceCheck } from "./checks/types.ts";
 export { runChecks, verdictFromOutcomes } from "./checks/types.ts";
 
+// ---- Tier 2 checks (T2.4/T2.5) -----------------------------------------------
+
+export type {
+  CheckWorthinessInputBundle,
+  CheckWorthinessResult,
+} from "./checks/check-worthiness.ts";
+export { checkCheckWorthiness } from "./checks/check-worthiness.ts";
+export type {
+  EntailmentRelevanceBundle,
+  EntailmentRelevanceResult,
+} from "./checks/entailment-relevance.ts";
+export { judgeEntailmentAndRelevance } from "./checks/entailment-relevance.ts";
+export type { IndexAlignmentBundle } from "./checks/index-alignment.ts";
+export { checkIndexAlignment, computeRoutingMetadataHash } from "./checks/index-alignment.ts";
+export type {
+  FullAuditInput,
+  FullAuditResult,
+  Tier2AuditInput,
+  Tier2AuditResult,
+} from "./checks/tier2.ts";
+export { runFullAudit, runTier2Audit } from "./checks/tier2.ts";
+
+// ---- Tier 2 model adapters (backed by @shadow/model's StructuredGenerationPort) --
+
+export type { AdapterOptions } from "./checks/tier2-adapters.ts";
+export {
+  BatchedCheckWorthinessClassifier,
+  BatchedClaimRestater,
+  BatchedEntailmentRelevanceJudge,
+  BatchedIndexAlignmentChecker,
+} from "./checks/tier2-adapters.ts";
+
 // ---- store -------------------------------------------------------------------
 
 export { EvidenceLayout } from "./layout.ts";
@@ -148,15 +208,19 @@ export type {
 } from "./witness.ts";
 export { deriveSourceFromRetrieval, deriveSourceFromTranscript } from "./witness.ts";
 
-// ---- Tier 2 ports (defined, not implemented — see ports.ts) -----------------
+// ---- Tier 2 ports (see ports.ts; implementations in checks/tier2-adapters.ts) --
 
 export type {
   CheckWorthinessClassifier,
   CheckWorthinessInput,
   CheckWorthinessVerdict,
+  ClaimRestater,
   EntailmentCandidate,
   EntailmentInput,
   EntailmentJudge,
+  EntailmentRelevanceInput,
+  EntailmentRelevanceJudge,
+  EntailmentRelevanceVerdict,
   EntailmentVerdict,
   IndexAlignmentChecker,
   IndexAlignmentInput,
@@ -164,6 +228,8 @@ export type {
   RelevanceClassifier,
   RelevanceInput,
   RelevanceVerdict,
+  RestatementCandidateInput,
+  RestatementProposal,
 } from "./ports.ts";
 
 // ---- errors -------------------------------------------------------------------
