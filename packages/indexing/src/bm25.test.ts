@@ -98,3 +98,69 @@ describe("Bm25Index", () => {
     expect(hits.map((h) => h.score)).toEqual([0, 0]);
   });
 });
+
+describe("stopword filtering (T2.8a)", () => {
+  test("a query that is entirely stopwords scores nothing, not everything", () => {
+    const index = new Bm25Index([
+      doc("a", { body: "density is the central idea of this chapter and it matters" }),
+      doc("b", { body: "something completely unrelated to anything else" }),
+    ]);
+    const hits = index.score("and on the with into");
+    expect(hits.every((h) => h.score === 0)).toBe(true);
+  });
+
+  test("a query sharing only function words with a chapter does not score above zero", () => {
+    // The T2.8a scenario found by end-to-end testing: a natural-language
+    // query overlapping a chapter only on function words must not score
+    // above zero — before this fix it did, won fallback promotion, and
+    // returned a weak `promoted` guess instead of an honest miss.
+    const irrelevant = doc("irrelevant", {
+      body: "Notion favors generous whitespace and a calm reading experience on the desktop.",
+    });
+    const index = new Bm25Index([irrelevant]);
+
+    // Shares only "and", "on", "the" with the document above (all
+    // stopwords) — nothing else. Deliberately excludes "for"/"not"/"when"/
+    // "use", which this package keeps unfiltered (see `STOPWORDS`'s doc
+    // comment) precisely because they carry routing meaning.
+    expect(index.score("and on the")[0]?.score).toBe(0);
+  });
+
+  test("the possessive-split 's fragment does not create spurious cross-matches", () => {
+    // "Notion's" and "Epoch's" tokenize to `notion`/`epoch` plus a bare `s`
+    // fragment each (the apostrophe isn't part of the token regex). Before
+    // filtering, that shared `s` token alone was enough to produce a
+    // nonzero score between two documents about entirely different things.
+    const epoch = doc("epoch", { body: "Epoch's writers value clarity above all." });
+    const query = "Notion's approach"; // tokenizes to `notion`, `approach` — no `epoch` anywhere
+    expect(new Bm25Index([epoch]).score(query)[0]?.score).toBe(0);
+  });
+
+  test("stopwords are removed from both the query and indexed text — a stopword-only field contributes nothing", () => {
+    const index = new Bm25Index([doc("a", { body: "the a an of" }), doc("b", { body: "density" })]);
+    const hits = index.score("density");
+    const byId = new Map(hits.map((h) => [h.id, h.score]));
+    expect(byId.get("a")).toBe(0);
+    expect(byId.get("b")).toBeGreaterThan(0);
+  });
+
+  test("routing vocabulary survives filtering: not/when/use/for still score", () => {
+    const index = new Bm25Index([
+      doc("has-it", { when_to_use: "Use this only when not designing for empty states" }),
+      doc("lacks-it", { body: "generic filler content" }),
+    ]);
+    const byId = new Map(
+      index.score("when to use this, and not for what").map((h) => [h.id, h.score]),
+    );
+    expect(byId.get("has-it")).toBeGreaterThan(0);
+    expect(byId.get("has-it") ?? 0).toBeGreaterThan(byId.get("lacks-it") ?? 0);
+  });
+
+  test("the stoplist targets specific known remnants, not every single-letter token", () => {
+    // A genuine single-letter query term outside the curated remnant list
+    // (s, t, d, ll, m, o, re, ve, y) still scores normally — the filter is
+    // not "drop anything short".
+    const index = new Bm25Index([doc("a", { body: "x marks the spot" })]);
+    expect(index.score("x")[0]?.score).toBeGreaterThan(0);
+  });
+});

@@ -40,6 +40,22 @@ export interface VolumeManifestRow {
 
 export interface RoutePayload {
   readonly stage: "route";
+  /**
+   * The task being routed. Wired through so an in-process `NavigationAgent`
+   * (`lint-model-navigation-agent.ts`) can actually put the task in its
+   * prompt — before this field existed, `route`/`navigate` prompts were
+   * built from the volume/chapter rows alone, so a model asked to "route a
+   * task" was never told what the task was (Wave 2 review, C-3).
+   *
+   * Optional, not required, so existing hand-built payloads outside this
+   * package (test fixtures in sibling packages) keep compiling unchanged —
+   * `buildRoutePayload` always populates it with a real string (or `""`
+   * when nothing is available, e.g. the CLI's own `find` command, which
+   * already threads `query` through its own result types independently and
+   * can leave this blank without losing anything). Treat a missing value
+   * the same as `""` (see `ModelNavigationAgent.route`).
+   */
+  readonly query?: string;
   /** `true` when the corpus is at or under `CHAPTER_INDEX_THRESHOLD`: the agent should skip straight to STAGE 3 over the full chapter index. `volumes` is empty in that case — there is nothing to route. */
   readonly skip: boolean;
   readonly volumes: readonly VolumeManifestRow[];
@@ -56,12 +72,26 @@ function toVolumeManifestRow(volume: VolumeIndexNode): VolumeManifestRow {
   };
 }
 
-/** Build the STAGE 2 (ROUTE) payload: the volume manifest, or a `skip` signal when the corpus is small enough to skip straight to the chapter index. */
-export function buildRoutePayload(document: IndexDocument): RoutePayload {
+/**
+ * Build the STAGE 2 (ROUTE) payload: the volume manifest, or a `skip`
+ * signal when the corpus is small enough to skip straight to the chapter
+ * index.
+ *
+ * `query` is optional and defaults to `""` purely so existing callers that
+ * have nowhere to source one keep compiling unchanged — every in-process
+ * caller that actually drives a `NavigationAgent` (`ReasoningNavigator` in
+ * `navigator.ts`) always has the real task in scope and always passes it.
+ */
+export function buildRoutePayload(document: IndexDocument, query = ""): RoutePayload {
   if (shouldSkipRouting(document)) {
-    return { stage: "route", skip: true, volumes: [] };
+    return { stage: "route", query, skip: true, volumes: [] };
   }
-  return { stage: "route", skip: false, volumes: document.volumes.map(toVolumeManifestRow) };
+  return {
+    stage: "route",
+    query,
+    skip: false,
+    volumes: document.volumes.map(toVolumeManifestRow),
+  };
 }
 
 /** One chapter row of the STAGE 3 (NAVIGATE) payload, exactly the field set `docs/INDEXING.md` specifies. */
@@ -80,6 +110,8 @@ export interface ChapterIndexRow {
 
 export interface NavigatePayload {
   readonly stage: "navigate";
+  /** The task being navigated. See `RoutePayload.query`'s doc comment — same rationale, same C-3 fix, same optionality. */
+  readonly query?: string;
   readonly round: number;
   readonly chapters: readonly ChapterIndexRow[];
   /** Carried forward so the agent does not reselect (`docs/INDEXING.md`: "Carry visited[] forward"). Chapters whose `node_id` is in this list are already excluded from `chapters` below. */
@@ -100,6 +132,8 @@ function buildSupersededByMap(document: IndexDocument): ReadonlyMap<string, stri
 }
 
 export interface BuildNavigatePayloadOptions {
+  /** The task being navigated (`NavigatePayload.query`). Defaults to `""` — see `buildRoutePayload`'s doc comment for why this stays optional. */
+  readonly query?: string;
   /** Restrict to these `volume_id`s (STAGE 2 routed to a subset). Omit to include every volume — the ≤60-chapter skip-routing case. */
   readonly volumeIds?: readonly string[];
   /** Chapters already shown/decided on in a previous round; excluded from `chapters` and echoed back in the payload. */
@@ -113,6 +147,7 @@ export function buildNavigatePayload(
   document: IndexDocument,
   options: BuildNavigatePayloadOptions = {},
 ): NavigatePayload {
+  const query = options.query ?? "";
   const visited = options.visited ?? [];
   const visitedSet = new Set(visited);
   const volumeIdSet = options.volumeIds ? new Set(options.volumeIds) : undefined;
@@ -136,5 +171,5 @@ export function buildNavigatePayload(
       }),
     );
 
-  return { stage: "navigate", round: options.round ?? 1, chapters, visited };
+  return { stage: "navigate", query, round: options.round ?? 1, chapters, visited };
 }

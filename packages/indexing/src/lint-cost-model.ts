@@ -48,21 +48,34 @@
  * `structuredCost = tree_cost(chapter)` (route to the chapter, then in the
  * worst case either read its own residual prose or descend into its single
  * most expensive branch — never *all* branches, which is exactly the
- * saving a good section split buys). A chapter with no internal structure
- * has `structuredCost == flatCost` by construction (`S_residual` is the
- * whole body when there are no children to subtract) — never `>`, so such
- * a chapter is only ever flagged at equality, i.e. never actually splits
- * this rule in practice for an unsectioned chapter *unless* it is large
- * enough to have crossed `SECTION_TOKEN_THRESHOLD` (`chapter-index.ts`)
- * with literally no Markdown headings inside it at all — a real "wall of
- * text" case this check is specifically meant to catch. For a chapter that
- * *does* have sections, `structuredCost` only closes the gap with (or
- * exceeds) `flatCost` when one branch so dominates the others that
- * descending buys almost nothing over reading the whole thing — which is
- * the same "one section is doing all the work, split it out" signal in
- * disguise.
+ * saving a good section split buys).
+ *
+ * **The equality-gate fix (Wave 2 review, I-5).** A chapter with no
+ * internal structure has `structuredCost == flatCost` by construction
+ * (`S_residual` is the whole body when there are no children to subtract)
+ * — never `>`. Flagging on bare `structuredCost >= flatCost`, as this
+ * check originally did, therefore flagged *every* section-less chapter,
+ * including ordinary short ones: `chapter-index.ts`'s
+ * `SECTION_TOKEN_THRESHOLD` (800 tokens) means a chapter never grows a
+ * section tree below that size, and this package's whole design range is
+ * 300-3,000 words (`docs/INDEXING.md`), so most healthy chapters are
+ * childless and got warned regardless of size — burying the genuine
+ * "wall of text" signal in noise. Verified directly: a 150-token childless
+ * chapter was flagged before this fix.
+ *
+ * The fix gates the equality case on size: only a childless chapter that
+ * has *also* crossed `SECTION_TOKEN_THRESHOLD` — large enough that the
+ * indexer would have built it a section tree had the Markdown had any
+ * headings at all — counts as the real "wall of text" case. A chapter
+ * *with* sections is unaffected by the gate and still flags on plain `>=`,
+ * because there `structuredCost` closing the gap with (or exceeding)
+ * `flatCost` means one branch so dominates the others that descending buys
+ * almost nothing over reading the whole thing — the "one section is doing
+ * all the work, split it out" signal, which has nothing to do with overall
+ * chapter size and should not be gated by it.
  */
 
+import { SECTION_TOKEN_THRESHOLD } from "./chapter-index.ts";
 import type { LintCheck, LintCheckResult, LintFinding } from "./lint-types.ts";
 import type { ChapterIndexNode, IndexDocument, SectionIndexNode } from "./types.ts";
 
@@ -125,7 +138,18 @@ export function checkChapterCost(
       const structuredCost = treeCost(chapterToCostNode(chapter), routingRowTokens);
       const flatCost = routingRowTokens + chapter.tokens;
 
-      if (structuredCost >= flatCost) {
+      // A childless chapter always has structuredCost === flatCost (see
+      // this module's doc comment) — that equality is only the genuine
+      // wall-of-text signal once the chapter is large enough that it
+      // *should* have grown a section tree (`SECTION_TOKEN_THRESHOLD`).
+      // A chapter with sections is never gated: `>` there already means
+      // real structural inefficiency regardless of size.
+      const hasSections = (chapter.sections?.length ?? 0) > 0;
+      const isGenuineWallOfText =
+        structuredCost === flatCost && chapter.tokens >= SECTION_TOKEN_THRESHOLD;
+      const flagged = hasSections ? structuredCost >= flatCost : isGenuineWallOfText;
+
+      if (flagged) {
         findings.push({
           code: "chapter-too-large",
           severity: "warning",

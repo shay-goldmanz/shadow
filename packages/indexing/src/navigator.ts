@@ -18,7 +18,12 @@
 
 import { toChapterSlug, toVolumeSlug, type VolumeStore } from "@shadow/core";
 import { type Bm25Hit, Bm25Index } from "./bm25.ts";
-import { bm25Fallback, buildFallbackIndex, detectDisagreement } from "./bm25-fallback.ts";
+import {
+  bm25Fallback,
+  buildFallbackIndex,
+  detectDisagreement,
+  rollupFallbackPromotion,
+} from "./bm25-fallback.ts";
 import { toBytes } from "./byte-text.ts";
 import { ancestorClosure, renderOutline } from "./closure.ts";
 import { assemblePassages, type Passage, type PassageSource } from "./passages.ts";
@@ -148,7 +153,7 @@ export class ReasoningNavigator implements Navigator {
     const steps: TraceStep[] = [];
     const citations: Citation[] = [];
 
-    const volumeIds = await this.route(document, steps);
+    const volumeIds = await this.route(document, query, steps);
 
     let roundState: RoundState = initialRoundState();
     let currentQuery = query;
@@ -157,6 +162,7 @@ export class ReasoningNavigator implements Navigator {
     while (roundState.round <= maxRounds) {
       const round = roundState.round;
       const navigatePayload = buildNavigatePayload(document, {
+        query: currentQuery,
         volumeIds,
         visited: roundState.visited,
         round,
@@ -217,9 +223,10 @@ export class ReasoningNavigator implements Navigator {
   /** STAGE 2 (ROUTE), skipped entirely at ≤60 chapters (`shouldSkipRouting`, D11a) — returns `undefined` volume ids in that case, meaning "every volume". */
   private async route(
     document: IndexDocument,
+    query: string,
     steps: TraceStep[],
   ): Promise<readonly string[] | undefined> {
-    const payload = buildRoutePayload(document);
+    const payload = buildRoutePayload(document, query);
     if (payload.skip) {
       return undefined;
     }
@@ -235,11 +242,15 @@ export class ReasoningNavigator implements Navigator {
 
   /**
    * Resolve this round's actual chosen node_ids: the agent's own
-   * selection, or — when navigation returned nothing — the BM25
-   * fallback's top hit (D11a). Also runs the disagreement check when the
+   * selection, or — when navigation returned nothing — the BM25 fallback's
+   * rollup-aggregated promotion (D11a, I-6: `rollupFallbackPromotion`
+   * aggregates section scores up to chapter level per `docs/INDEXING.md`
+   * STAGE 1, rather than promoting the single raw top-scoring unit across
+   * the whole flat corpus). Also runs the disagreement check when the
    * agent *did* choose something, logging (as a trace step, not a side
    * channel) when BM25's independent top pick sits outside the agent's
-   * selection.
+   * selection — that check stays on the raw top hit, deliberately not
+   * aggregated (`bm25-fallback.ts`'s doc comment explains why).
    */
   private async resolveChosen(
     document: IndexDocument,
@@ -256,13 +267,11 @@ export class ReasoningNavigator implements Navigator {
       return decision.chosen;
     }
 
-    const hits = await this.scoreFallback(document, query);
-    steps.push({ step: "bm25-fallback", query, hits });
-    // A zero-score top hit means no query term matched anything at all —
-    // promoting it would fabricate a "find" out of noise, not a real
-    // fallback signal (same cutoff `detectDisagreement` uses).
-    const top = hits[0];
-    return top && top.score > 0 ? [top.id] : [];
+    const index = await this.getFallbackIndex(document);
+    const allHits = index.score(query);
+    steps.push({ step: "bm25-fallback", query, hits: allHits.slice(0, 5) });
+    const promotion = rollupFallbackPromotion(document, allHits);
+    return promotion ? [promotion.bestNodeId] : [];
   }
 
   private async scoreFallback(document: IndexDocument, query: string): Promise<readonly Bm25Hit[]> {

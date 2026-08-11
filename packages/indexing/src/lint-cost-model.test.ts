@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test";
+import { SECTION_TOKEN_THRESHOLD } from "./chapter-index.ts";
 import {
   checkChapterCost,
   costModelCheck,
@@ -73,17 +74,46 @@ describe("checkChapterCost", () => {
     });
   });
 
-  test("a small chapter with no sections is not flagged (equality is the only trigger, never below)", () => {
+  test("a small chapter with no sections is not flagged (I-5: the equality gate is size-bounded)", () => {
+    // Childless -> structuredCost == flatCost always (S_residual is the
+    // whole body when there are no children to subtract). Before the I-5
+    // fix, bare `structuredCost >= flatCost` flagged this unconditionally,
+    // so *every* section-less chapter warned regardless of size — and
+    // chapters never grow a section tree below SECTION_TOKEN_THRESHOLD (800
+    // tokens; chapter-index.ts), so nearly every healthy chapter in this
+    // package's 300-3,000-word design range (docs/INDEXING.md) got flagged.
+    // The fix requires the equality case to also clear
+    // SECTION_TOKEN_THRESHOLD before it counts as the genuine "wall of
+    // text" signal — a 50-token chapter falls well under that, so it is not
+    // flagged.
     const c = chapter({ node_id: "C", title: "Short chapter", tokens: 50, sections: undefined });
     const doc = document([volume({ volume_id: "v", chapters: [c] })]);
 
-    // Still flagged by this rule's own logic (structuredCost == flatCost
-    // always holds for a childless chapter) — demonstrates the documented
-    // limitation: this check only usefully discriminates chapters that
-    // *have* a section tree. A real `shadow lint` run pairs this with the
-    // SECTION_TOKEN_THRESHOLD (800 tokens) — chapters this small never
-    // reach it, so in practice this path is unreachable below threshold.
+    expect(checkChapterCost(doc).findings).toHaveLength(0);
+  });
+
+  test("a childless chapter right at SECTION_TOKEN_THRESHOLD is flagged (I-5 boundary)", () => {
+    const c = chapter({
+      node_id: "C",
+      title: "Threshold chapter",
+      tokens: SECTION_TOKEN_THRESHOLD,
+      sections: undefined,
+    });
+    const doc = document([volume({ volume_id: "v", chapters: [c] })]);
+
     expect(checkChapterCost(doc).findings).toHaveLength(1);
+  });
+
+  test("a childless chapter one token under SECTION_TOKEN_THRESHOLD is not flagged (I-5 boundary)", () => {
+    const c = chapter({
+      node_id: "C",
+      title: "Just under",
+      tokens: SECTION_TOKEN_THRESHOLD - 1,
+      sections: undefined,
+    });
+    const doc = document([volume({ volume_id: "v", chapters: [c] })]);
+
+    expect(checkChapterCost(doc).findings).toHaveLength(0);
   });
 
   test("routingRowTokens (R) is configurable and changes the outcome", () => {

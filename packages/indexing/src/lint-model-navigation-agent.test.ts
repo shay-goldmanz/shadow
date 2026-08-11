@@ -7,6 +7,7 @@ describe("ModelNavigationAgent", () => {
   test("route: derives consideredVolumeIds from the payload, chosenVolumeIds/why from the port", async () => {
     const payload: RoutePayload = {
       stage: "route",
+      query: "how should I lay out a dense settings page?",
       skip: false,
       volumes: [
         { volume_id: "ui", title: "UI", chapter_count: 3 },
@@ -28,6 +29,7 @@ describe("ModelNavigationAgent", () => {
   test("navigate: passes chosen/rejected/reasoning through from the port", async () => {
     const payload: NavigatePayload = {
       stage: "navigate",
+      query: "how should I lay out a dense settings page?",
       round: 1,
       chapters: [{ node_id: "C1", title: "Chapter One", tokens: 100 }],
       visited: [],
@@ -64,5 +66,45 @@ describe("ModelNavigationAgent", () => {
 
     expect(await agent.grade(payload)).toEqual({ kind: "sufficient" });
     expect(await agent.grade(payload)).toEqual({ kind: "not-in-corpus" });
+  });
+
+  // C-3 (Wave 2 review): RoutePayload/NavigatePayload carried no query
+  // field, and route()/navigate() built prompts from the volume/chapter
+  // rows alone — a model asked to "route a task" or "choose which chapters
+  // answer a task" was never actually told what the task was. This is the
+  // regression test for the gap: assert the task string is literally
+  // present in the prompt text sent to the port, not just accepted as a
+  // payload field that goes unused.
+  test("route: the task reaches the model's prompt, not just the payload", async () => {
+    const payload: RoutePayload = {
+      stage: "route",
+      query: "how should I lay out a dense settings page?",
+      skip: false,
+      volumes: [{ volume_id: "ui", title: "UI", chapter_count: 3 }],
+    };
+    const port = new FakeStructuredGenerationPort([{ chosenVolumeIds: ["ui"], why: "matches" }]);
+    const agent = new ModelNavigationAgent(port);
+
+    await agent.route(payload);
+
+    expect(port.calls).toHaveLength(1);
+    expect(port.calls[0]?.prompt).toContain(payload.query);
+  });
+
+  test("navigate: the task reaches the model's prompt, not just the payload", async () => {
+    const payload: NavigatePayload = {
+      stage: "navigate",
+      query: "how should I lay out a dense settings page?",
+      round: 1,
+      chapters: [{ node_id: "C1", title: "Chapter One", tokens: 100 }],
+      visited: [],
+    };
+    const port = new FakeStructuredGenerationPort([{ chosen: ["C1"], rejected: [] }]);
+    const agent = new ModelNavigationAgent(port);
+
+    await agent.navigate(payload);
+
+    expect(port.calls).toHaveLength(1);
+    expect(port.calls[0]?.prompt).toContain(payload.query);
   });
 });

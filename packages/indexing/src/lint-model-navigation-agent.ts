@@ -87,7 +87,7 @@ export class ModelNavigationAgent implements NavigationAgent {
       schemaName: "route_decision",
       system:
         "You are routing a task to the right volume(s) in a documentation corpus. Pick every volume that plausibly contains the answer.",
-      prompt: `Volumes:\n${formatVolumeManifest(payload)}`,
+      prompt: `Task: ${payload.query ?? ""}\n\nVolumes:\n${formatVolumeManifest(payload)}`,
     });
     return {
       consideredVolumeIds: payload.volumes.map((v) => v.volume_id),
@@ -102,7 +102,7 @@ export class ModelNavigationAgent implements NavigationAgent {
       schemaName: "navigate_decision",
       system:
         "You are choosing which chapters answer a task, from their when_to_use/not_for fields alone (never their body text). Choose the shallowest set that answers; reject anything close but ruled out by not_for.",
-      prompt: `Round ${payload.round}. Chapters:\n${formatChapterIndex(payload)}`,
+      prompt: `Task: ${payload.query ?? ""}\n\nRound ${payload.round}. Chapters:\n${formatChapterIndex(payload)}`,
     });
     return { chosen: object.chosen, rejected: object.rejected, reasoning: object.reasoning };
   }

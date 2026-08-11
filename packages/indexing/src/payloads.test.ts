@@ -54,7 +54,12 @@ describe("shouldSkipRouting / buildRoutePayload — threshold behavior", () => {
       volume({ volume_id: "v", chapters: manyChapters(CHAPTER_INDEX_THRESHOLD) }),
     ]);
     expect(shouldSkipRouting(doc)).toBe(true);
-    expect(buildRoutePayload(doc)).toEqual({ stage: "route", skip: true, volumes: [] });
+    expect(buildRoutePayload(doc)).toEqual({
+      stage: "route",
+      query: "",
+      skip: true,
+      volumes: [],
+    });
   });
 
   test("one over the threshold (61 chapters): routing is not skipped", () => {
@@ -100,6 +105,18 @@ describe("shouldSkipRouting / buildRoutePayload — threshold behavior", () => {
     ]);
     // No `chapters` key at all on a manifest row.
     expect(payload.volumes[0]).not.toHaveProperty("chapters");
+  });
+
+  test("carries the task through as `query` (C-3: the agent must be told what it is routing)", () => {
+    const doc = document([
+      volume({ volume_id: "v", chapters: manyChapters(CHAPTER_INDEX_THRESHOLD + 1) }),
+    ]);
+    expect(buildRoutePayload(doc, "design a one-pager").query).toBe("design a one-pager");
+  });
+
+  test("query defaults to an empty string when omitted", () => {
+    const doc = document([volume({ volume_id: "v", chapters: manyChapters(1) })]);
+    expect(buildRoutePayload(doc).query).toBe("");
   });
 });
 
@@ -170,5 +187,13 @@ describe("buildNavigatePayload", () => {
     const payload = buildNavigatePayload(doc);
     expect(payload.round).toBe(1);
     expect(payload.visited).toEqual([]);
+  });
+
+  test("carries the task through as `query`, defaulting to an empty string (C-3)", () => {
+    const doc = document([volume({ volume_id: "v", chapters: [chapter({ node_id: "N1" })] })]);
+    expect(buildNavigatePayload(doc, { query: "design a one-pager" }).query).toBe(
+      "design a one-pager",
+    );
+    expect(buildNavigatePayload(doc).query).toBe("");
   });
 });
