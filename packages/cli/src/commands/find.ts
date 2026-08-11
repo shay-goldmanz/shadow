@@ -48,7 +48,7 @@ import {
   type VolumeManifestRow,
 } from "@shadow/indexing";
 import { loadCorpusIndex } from "../loaders.ts";
-import { appendMiss } from "../miss-log.ts";
+import { createMissLog, toFindMissEntry } from "../miss-log.ts";
 
 export interface FindOptions {
   readonly volumes?: readonly string[];
@@ -122,7 +122,7 @@ async function notInCorpus(
   round: number | undefined,
   next: readonly string[],
 ): Promise<VerdictResult> {
-  await appendMiss(root, { query, reason, round });
+  await createMissLog(root).append(toFindMissEntry({ query, reason, round }));
   return { stage: "verdict", query, verdict: "not-in-corpus", next_steps: next };
 }
 

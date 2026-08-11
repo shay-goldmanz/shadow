@@ -1,9 +1,13 @@
 import { describe, expect, test } from "bun:test";
 import { toChapterSlug, toVolumeSlug } from "@shadow/core";
 import { StructuralIndexer } from "@shadow/indexing";
-import { readMisses } from "../miss-log.ts";
+import { createMissLog, widenMisses } from "../miss-log.ts";
 import { buildLargeFixture, buildSmallFixture, withStore } from "../test-fixture.ts";
 import { runFind } from "./find.ts";
+
+async function readMisses(root: string) {
+  return widenMisses(await createMissLog(root).readAll());
+}
 
 describe("runFind — small corpus (route stage skipped, D11a)", () => {
   test("round 1 returns the navigate payload directly, no route stage", async () => {
@@ -124,7 +128,7 @@ describe("runFind — explicit not-in-corpus verdict (acceptance: 'if it exists'
 
       const misses = await readMisses(root);
       expect(misses).toHaveLength(1);
-      expect(misses[0]?.query).toBe("sourdough bread baking technique");
+      expect(misses[0]?.task).toBe("sourdough bread baking technique");
     });
   });
 

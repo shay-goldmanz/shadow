@@ -6,8 +6,9 @@
  * *into* the store. This module owns exactly one sibling fact the store
  * does not expose: the root directory itself, which the CLI needs for two
  * things the store has no slot for — resolving a test-isolated root via
- * `SHADOW_HOME`, and the miss log (`miss-log.ts`), which D14 places
- * alongside the corpus index rather than inside any single volume.
+ * `SHADOW_HOME`, and the miss log (`miss-log.ts`, wired to `@shadow/indexing`'s
+ * `FileMissLog` since T2.7), which D14 places alongside the corpus index
+ * rather than inside any single volume.
  */
 
 import { homedir } from "node:os";

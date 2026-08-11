@@ -2,7 +2,14 @@ import { describe, expect, test } from "bun:test";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { appendMiss, readMisses } from "./miss-log.ts";
+import { FileMissLog } from "@shadow/indexing";
+import {
+  createMissLog,
+  isFindMiss,
+  missLogPath,
+  toFindMissEntry,
+  widenMisses,
+} from "./miss-log.ts";
 
 async function withRoot(fn: (root: string) => Promise<void>): Promise<void> {
   const root = await mkdtemp(join(tmpdir(), "shadow-miss-log-test-"));
@@ -13,38 +20,57 @@ async function withRoot(fn: (root: string) => Promise<void>): Promise<void> {
   }
 }
 
-describe("appendMiss / readMisses", () => {
-  test("readMisses returns [] when no log exists yet", async () => {
+describe("missLogPath", () => {
+  test("is a sibling of the corpus index, at <root>/misses.jsonl", () => {
+    expect(missLogPath("/some/root")).toBe(join("/some/root", "misses.jsonl"));
+  });
+});
+
+describe("createMissLog", () => {
+  test("returns a MissLogStore backed by @shadow/indexing's FileMissLog at missLogPath(root)", async () => {
     await withRoot(async (root) => {
-      expect(await readMisses(root)).toEqual([]);
+      const log = createMissLog(root);
+      await log.append(toFindMissEntry({ query: "q", reason: "no-match" }));
+
+      // Read through a fresh FileMissLog over the exact path createMissLog
+      // should have used — proves this isn't a parallel implementation.
+      const direct = new FileMissLog(missLogPath(root));
+      const all = await direct.readAll();
+      expect(all).toHaveLength(1);
+      expect(all[0]?.task).toBe("q");
+    });
+  });
+});
+
+describe("toFindMissEntry", () => {
+  test("carries task/reason/round/source, stamped with the given clock", () => {
+    const entry = toFindMissEntry({
+      query: "how to bake bread",
+      reason: "no-match",
+      round: 2,
+      now: () => new Date("2026-08-11T00:00:00.000Z"),
+    });
+    expect(entry).toEqual({
+      task: "how to bake bread",
+      source: "find",
+      reason: "no-match",
+      round: 2,
+      recordedAt: "2026-08-11T00:00:00.000Z",
     });
   });
 
-  test("appendMiss writes a JSON line the operator's backlog can read back", async () => {
-    await withRoot(async (root) => {
-      await appendMiss(root, { query: "how to bake bread", reason: "no-match" });
-      const misses = await readMisses(root);
-      expect(misses).toHaveLength(1);
-      expect(misses[0]?.query).toBe("how to bake bread");
-      expect(misses[0]?.reason).toBe("no-match");
-      expect(typeof misses[0]?.ts).toBe("string");
-    });
+  test("omits round when not given — JSON.stringify drops it rather than persisting `round: undefined`", () => {
+    const entry = toFindMissEntry({ query: "q", reason: "empty-corpus" });
+    expect(JSON.parse(JSON.stringify(entry))).not.toHaveProperty("round");
   });
+});
 
-  test("appends across calls, in order, without clobbering prior entries", async () => {
-    await withRoot(async (root) => {
-      await appendMiss(root, { query: "first", reason: "no-match" });
-      await appendMiss(root, { query: "second", reason: "empty-corpus" });
-      const misses = await readMisses(root);
-      expect(misses.map((m) => m.query)).toEqual(["first", "second"]);
-    });
-  });
-
-  test("creates the root directory if it does not exist yet", async () => {
-    await withRoot(async (root) => {
-      const nested = join(root, "nested", "deeper");
-      await appendMiss(nested, { query: "q", reason: "no-match" });
-      expect(await readMisses(nested)).toHaveLength(1);
-    });
+describe("isFindMiss / widenMisses", () => {
+  test("isFindMiss is true for find-shaped entries, false for lint-shaped entries", () => {
+    const find = toFindMissEntry({ query: "q", reason: "no-match" });
+    const lint = { task: "t", sourceChapterId: "C1", recordedAt: "2026-08-11T00:00:00.000Z" };
+    const [widenedFind, widenedLint] = widenMisses([find, lint]);
+    expect(widenedFind && isFindMiss(widenedFind)).toBe(true);
+    expect(widenedLint && isFindMiss(widenedLint)).toBe(false);
   });
 });

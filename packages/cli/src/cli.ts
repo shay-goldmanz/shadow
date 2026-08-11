@@ -15,6 +15,8 @@ import { runChapters } from "./commands/chapters.ts";
 import { runFind } from "./commands/find.ts";
 import { runGrep } from "./commands/grep.ts";
 import { runInstall } from "./commands/install.ts";
+import { runLintCommand } from "./commands/lint.ts";
+import { runMisses } from "./commands/misses.ts";
 import { runRead } from "./commands/read.ts";
 import { runIndexCommand } from "./commands/reindex.ts";
 import { runVolumes } from "./commands/volumes.ts";
@@ -37,6 +39,8 @@ const USAGE = {
     read: "shadow read <node_id> [--with-parents]      # body + heading path + hash",
     grep: 'shadow grep "<terms>"                        # raw BM25 escape hatch',
     index: "shadow index [--check]                       # rebuild; --check fails if stale",
+    lint: "shadow lint [--offline]                      # index self-critique (D14); --offline skips model-backed checks",
+    misses: "shadow misses                                # the operator's authoring backlog (D14)",
     install:
       "shadow install [--target dir] [--force]     # install the shadow-volumes skill into a repo",
   },
@@ -165,6 +169,20 @@ async function dispatch(argv: readonly string[], deps: RunDeps): Promise<unknown
       return runIndexCommand(deps.store, { check: values.check ?? false });
     }
 
+    case "lint": {
+      const { values } = parseArgs({
+        args: [...rest],
+        options: { offline: { type: "boolean" }, json: { type: "boolean" } },
+        strict: true,
+      });
+      return runLintCommand(deps.store, deps.root, { offline: values.offline ?? false });
+    }
+
+    case "misses": {
+      parseArgs({ args: [...rest], options: { json: { type: "boolean" } }, strict: true });
+      return runMisses(deps.root);
+    }
+
     case "install": {
       const { values } = parseArgs({
         args: [...rest],
@@ -188,7 +206,7 @@ async function dispatch(argv: readonly string[], deps: RunDeps): Promise<unknown
       throw new UsageError(
         "",
         `unknown command "${command}"`,
-        "shadow <volumes|chapters|find|read|grep|index|install>",
+        "shadow <volumes|chapters|find|read|grep|index|lint|misses|install>",
       );
   }
 }
