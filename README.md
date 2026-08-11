@@ -38,6 +38,7 @@ directly via Bun.
 | [`docs/PLAN.md`](docs/PLAN.md) | working plan and task status |
 | [`docs/INDEXING.md`](docs/INDEXING.md) | indexing schema and algorithms |
 | [`docs/EVIDENCE.md`](docs/EVIDENCE.md) | chain-of-evidence schema, checks, and metrics |
+| [`docs/API.md`](docs/API.md) | HTTP contract between the interface and the pillars |
 
 ## Getting started
 
