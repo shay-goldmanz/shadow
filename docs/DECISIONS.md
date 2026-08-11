@@ -261,6 +261,29 @@ interface instead of buried in a data model.
 **Cost.** Two typefaces to load. Both themes must be maintained from day one — cheaper now
 than retrofitting dark mode later.
 
+### D10a — Amendment: the citation tone must be legible, not just quiet
+
+Browser testing measured the rendered citation mark at **2.45:1 contrast in light mode**
+(clay `#C08A72` on the `#F3E8E2` citation background; WCAG AA requires 4.5:1) at **9.33px**.
+Dark mode passes at 6.39:1.
+
+I wrote *"desaturated enough to sit under body text without competing"*, and the implementation
+honoured that faithfully. But I over-specified quietness for the one element the whole design
+is organized around: clay means *this is sourced*, and a reader who cannot comfortably read it
+cannot trace evidence at a glance — which is the entire point of the semantic colour rule.
+Quiet is a means; legible is the requirement.
+
+**Amended:**
+- Light-mode citation text darkens to **`#8A5A42`** against `--surface` / `#F3E8E2`, clearing
+  4.5:1. Dark mode keeps `#CE9A83`, which already passes.
+- `--clay` stays `#C08A72` for **non-text** uses (rules, borders, dot markers), where 3:1 for
+  UI components applies and the softer tone still reads as the same family.
+- Citation text never renders below **13px**, and never smaller than 0.85× the surrounding
+  body size.
+
+**Cost.** A slightly more assertive citation than I first pictured. The right trade: a
+distinctive colour nobody can read is decoration, not signal.
+
 ---
 
 ## D11 — Indexing: cheap scorer locates, tree expands
