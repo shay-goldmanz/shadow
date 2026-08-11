@@ -4,6 +4,7 @@ import {
   PayloadTooLargeError,
   RetrievalNetworkError,
   RetrievalTimeoutError,
+  UnsuccessfulHttpStatusError,
   UnsupportedContentTypeError,
 } from "./errors.ts";
 import { LiveTransport } from "./live-transport.ts";
@@ -35,6 +36,32 @@ function fakeResponse(
       bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength),
     ...overrides,
   };
+}
+
+/**
+ * A body stream that "drips" one chunk every `chunkDelayMs`, forever —
+ * never closing. Simulates a slow-drip / stalled response body: headers
+ * arrive fine, but the body itself never finishes. `cancel()` stops the
+ * drip so an aborted read doesn't leave a dangling timer or throw from
+ * enqueueing on a canceled controller.
+ */
+function slowDripStream(chunkDelayMs: number): ReadableStream<Uint8Array> {
+  let stopped = false;
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  return new ReadableStream<Uint8Array>({
+    pull(controller) {
+      return new Promise<void>((resolve) => {
+        timer = setTimeout(() => {
+          if (!stopped) controller.enqueue(new TextEncoder().encode("x"));
+          resolve();
+        }, chunkDelayMs);
+      });
+    },
+    cancel() {
+      stopped = true;
+      clearTimeout(timer);
+    },
+  });
 }
 
 describe("LiveTransport.fetchPage", () => {
@@ -121,6 +148,95 @@ describe("LiveTransport.fetchPage", () => {
       RetrievalTimeoutError,
     );
     expect(error.timeoutMs).toBe(20);
+  });
+
+  test("a body that drips chunks slower than the timeout still times out, instead of stalling forever (Fix 3)", async () => {
+    // Headers arrive immediately (fine), but the body never finishes — one
+    // chunk every 500ms, forever. Before Fix 3, clearing the header timer
+    // the moment `fetchImpl` resolved left `readBodyCapped` with no
+    // deadline of its own, so this would hang until bun:test's own
+    // per-test timeout instead of failing with a clear, typed error.
+    const fetchImpl: FetchLike = async () =>
+      fakeResponse({
+        headers: fakeHeaders({ "content-type": "text/html" }),
+        body: slowDripStream(500),
+      });
+    const transport = new LiveTransport({ fetchImpl, timeoutMs: 20 });
+
+    const error = await expectRejection(
+      transport.fetchPage({ url: "https://example.com/slow-drip" }),
+      RetrievalTimeoutError,
+    );
+    expect(error.timeoutMs).toBe(20);
+  });
+
+  test("a body that yields one chunk and then stalls forever times out on the same deadline", async () => {
+    const stream = new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(new TextEncoder().encode("first chunk, then nothing more"));
+        // Deliberately never enqueue again and never close.
+      },
+    });
+    const fetchImpl: FetchLike = async () =>
+      fakeResponse({
+        headers: fakeHeaders({ "content-type": "text/html" }),
+        body: stream,
+      });
+    const transport = new LiveTransport({ fetchImpl, timeoutMs: 20 });
+
+    const error = await expectRejection(
+      transport.fetchPage({ url: "https://example.com/stalled-after-first-chunk" }),
+      RetrievalTimeoutError,
+    );
+    expect(error.timeoutMs).toBe(20);
+  });
+
+  test("a non-2xx response is refused by default (Fix 4)", async () => {
+    const fetchImpl: FetchLike = async () =>
+      fakeResponse({ status: 404, headers: fakeHeaders({ "content-type": "text/html" }) });
+    const transport = new LiveTransport({ fetchImpl });
+
+    const error = await expectRejection(
+      transport.fetchPage({ url: "https://example.com/missing" }),
+      UnsuccessfulHttpStatusError,
+    );
+    expect(error.httpStatus).toBe(404);
+    expect(error.url).toBe("https://example.com/missing");
+  });
+
+  test("a 5xx response is refused by default (Fix 4)", async () => {
+    const fetchImpl: FetchLike = async () =>
+      fakeResponse({ status: 503, headers: fakeHeaders({ "content-type": "text/html" }) });
+    const transport = new LiveTransport({ fetchImpl });
+
+    const error = await expectRejection(
+      transport.fetchPage({ url: "https://example.com/down" }),
+      UnsuccessfulHttpStatusError,
+    );
+    expect(error.httpStatus).toBe(503);
+  });
+
+  test("allowNon2xx opts a caller into receiving the error body instead", async () => {
+    const fetchImpl: FetchLike = async () =>
+      fakeResponse({
+        status: 404,
+        headers: fakeHeaders({ "content-type": "text/html" }),
+        bodyText: "<p>Not Found</p>",
+      });
+    const transport = new LiveTransport({ fetchImpl, allowNon2xx: true });
+
+    const page = await transport.fetchPage({ url: "https://example.com/missing" });
+    expect(page.httpStatus).toBe(404);
+    expect(new TextDecoder().decode(page.bytes)).toBe("<p>Not Found</p>");
+  });
+
+  test("2xx responses other than 200 (e.g. 201, 206) are accepted by default", async () => {
+    const fetchImpl: FetchLike = async () =>
+      fakeResponse({ status: 206, headers: fakeHeaders({ "content-type": "text/html" }) });
+    const transport = new LiveTransport({ fetchImpl });
+
+    const page = await transport.fetchPage({ url: "https://example.com/partial" });
+    expect(page.httpStatus).toBe(206);
   });
 
   test("a missing content-type is rejected as unsupported", async () => {

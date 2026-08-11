@@ -79,6 +79,30 @@ export class UnsupportedContentTypeError extends ShadowResearchError {
 }
 
 /**
+ * A non-2xx HTTP status was returned and `LiveTransportOptions.allowNon2xx`
+ * was not set. Refused by default (Wave 1 review, Fix 4): a 404, a 500
+ * error page, or a redirect chain's final error response must never
+ * silently become a fixture and, downstream, an evidence source record —
+ * "the page still resolves" is exactly the false confidence D16 warns
+ * about, and a non-2xx status is a much cheaper signal to catch than
+ * content drift. Callers that genuinely want the error body (e.g. to
+ * detect and report link rot) opt in explicitly.
+ */
+export class UnsuccessfulHttpStatusError extends ShadowResearchError {
+  override readonly name = "UnsuccessfulHttpStatusError";
+
+  constructor(
+    public readonly url: string,
+    public readonly httpStatus: number,
+  ) {
+    super(
+      `Refusing ${JSON.stringify(url)}: HTTP ${httpStatus} is not a 2xx success status. ` +
+        `Set LiveTransportOptions.allowNon2xx to opt into recording non-2xx responses.`,
+    );
+  }
+}
+
+/**
  * Replay mode found no recorded fixture for this request. **Fails loudly
  * by design** (D2) — replay must never fall through to a live fetch on a
  * miss, because that would silently reintroduce network non-determinism
