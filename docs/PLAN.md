@@ -74,8 +74,19 @@ The pillars that do real work. This is where the acceptance criteria are won or 
 
 T2.1 runs parallel with T2.2. T2.4 runs parallel with T2.2/T2.3. T2.3 and T2.5 are sequenced.
 
-**Wave 2 review checkpoint.** Gate: does the index actually retrieve well, and does the audit
-actually catch an injected hallucination? Both must be shown, not asserted.
+**Wave 2 review checkpoint.** ✅ Done — and the gate failed on its own terms. Fable
+demonstrated by execution that **a fabricated claim passed the entire audit**: C2 resolved
+fuzzily against an immutable pinned snapshot, and the entailment judge read the writer's own
+copy of the quote rather than the stored bytes, so a fabricated quote was checked against
+itself. Also found: unmarked claims in list items escaped both the sweep and the exemption
+budget; a derived claim was not re-judged when its support's meaning changed; C4 could replay a
+stale pass; and the lint navigator routed without ever seeing the task it was routing.
+Resolved into D24/D25; fixes below.
+
+| # | Fix task | Owns | State |
+|---|---|---|---|
+| F1 | Exact-only integrity resolution; judge reads stored bytes; list items segmented; transitive `supports` hashing; C4 memo key | `packages/evidence` | ✅ `c41f24a` |
+| F2 | Give the navigator its task; cost-model gate; wire the rollup; BM25 stopwords; per-line miss-log recovery | `packages/indexing` | ✅ `cd7ac57` |
 
 ## Wave 3 — Surfaces
 
@@ -92,7 +103,23 @@ actually catch an injected hallucination? Both must be shown, not asserted.
 T3.1→T3.2 and T3.3→T3.4→T3.5 are two mostly independent chains; the CLI chain runs parallel
 with the agent chain.
 
-**Wave 3 review checkpoint.** ✅ Passed, by actually running it rather than asserting it.
+**Wave 3 review checkpoint.** ⚠️ Failed on the operator's half. A hand smoke test passed, but
+Fable and a Playwright browser pass both found the interface unusable: **the volume page is a
+blank screen for every volume**, because `@shadow/web` was built against a *guessed* wire
+contract its own fake then confirmed. Separately, `persistSession: false` combined with
+`resume` meant **Shadow could not complete any multi-turn work** — so the critical path's
+research-then-draft could not finish through chat at all. The CLI half held up under
+adversarial live use.
+
+| # | Fix task | Owns | State |
+|---|---|---|---|
+| F3 | Session persistence so reuse works; fake now models the real failure; live two-turn proof | `packages/model`, `packages/agent` | ✅ |
+| F4 | Reconcile web↔API with an offline contract test; composition-root `SHADOW_HOME` and miss log; SSE lifecycle; a11y contrast (D10a) | `packages/web`, `packages/api` | ⏳ |
+| F5 | The audit gate leaks through reindex: a failed chapter becomes findable after any `shadow index` | `packages/indexing`, `packages/agent` | ⬜ |
+| F6 | `shadow` is on no PATH, so the installed skill's first command is "command not found" | `packages/cli`, `README.md` | ⬜ |
+| F7 | Leftovers: numeric sub-check skips `derived` claims; `listSources` swallows JSON corruption; `find --volumes <typo>` yields a false `not-in-corpus` and pollutes the backlog | `packages/evidence`, `packages/cli` | ⬜ |
+
+**The earlier hand smoke test still stands** and is what found T3.7:
 Live smoke test: `POST /api/volumes` → `PUT` a chapter → the audit ran (Tier 0 plus a real
 Tier 2 model call on subscription auth) → reindex → `shadow find` returned the chapter with
 `next_steps` naming its real `node_id`. That run is what surfaced T3.7: the two halves of the
