@@ -16,6 +16,7 @@ import type {
   TextQuoteSelector,
   Verification,
 } from "./types.ts";
+import type { RetrievalWitness, SessionTranscriptWitness, SourceMetadata } from "./witness.ts";
 
 let counter = 0;
 /** Deterministic, monotonically increasing timestamp so minted ids sort predictably within a test. */
@@ -101,6 +102,47 @@ export function makeClaim(overrides: Partial<Claim> & { label: string }): Claim 
     evidence: [],
     supports: [],
     verification: makeVerification(),
+    ...overrides,
+  };
+}
+
+/** A fixture `RetrievalWitness` (D23) — what a real fetch would have produced. */
+export function makeRetrievalWitness(overrides: Partial<RetrievalWitness> = {}): RetrievalWitness {
+  return {
+    requestedUrl: "https://example.com/article",
+    finalUrl: "https://example.com/article",
+    httpStatus: 200,
+    contentType: "text/html",
+    bytes: new TextEncoder().encode("<html><body>fixture raw bytes</body></html>"),
+    extractedText: "Every measurement in the sidebar is a multiple of four.",
+    retrievedAt: new Date(nextTime()).toISOString(),
+    transport: "live",
+    ...overrides,
+  };
+}
+
+/** A fixture `SessionTranscriptWitness` (D19/D23) — what a real transcript capture would have produced. */
+export function makeSessionTranscriptWitness(
+  overrides: Partial<SessionTranscriptWitness> = {},
+): SessionTranscriptWitness {
+  return {
+    sessionId: "sess_fixture",
+    transcriptText: "Operator: I really prefer borders over drop shadows for cards.",
+    capturedAt: new Date(nextTime()).toISOString(),
+    ...overrides,
+  };
+}
+
+/** Fixture editorial metadata to pair with a witness when calling `putSourceFromRetrieval`/`putSourceFromTranscript`. */
+export function makeSourceMetadata(overrides: Partial<SourceMetadata> = {}): SourceMetadata {
+  return {
+    title: "Example Article",
+    author: null,
+    publishedAt: null,
+    agent: "@shadow/research/web-tool-agent@0.1.0",
+    query: "example",
+    authority: { tier: "primary", rationale: "First-party publisher." },
+    volatility: "slow-changing",
     ...overrides,
   };
 }

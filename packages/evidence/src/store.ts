@@ -12,6 +12,13 @@
  * it depends on exposes a way to build those paths. Every path below the
  * evidence root is built exclusively through `EvidenceLayout`
  * (`layout.ts`) — never by joining strings inline here.
+ *
+ * **Sources are witnessed, not minted (D23).** There is no `putSource`
+ * accepting a hand-assembled `SourceRecord`. `putSourceFromRetrieval` and
+ * `putSourceFromTranscript` are the only two ways to create one, and both
+ * take a witness (`witness.ts`) describing what a real retrieval or a real
+ * transcript capture actually produced — the record itself is derived, not
+ * supplied.
  */
 
 import {
@@ -24,9 +31,16 @@ import type { AuditRecord } from "./checks/audit.ts";
 import type { EvidenceLookup } from "./checks/source-integrity.ts";
 import { type Sha256Digest, sha256Of } from "./digest.ts";
 import { LedgerCorruptError, SnapshotNotFoundError, SourceNotFoundError } from "./errors.ts";
-import { type SourceId, toSourceId } from "./ids.ts";
+import { newSourceId, type SourceId, toSourceId } from "./ids.ts";
 import { EvidenceLayout } from "./layout.ts";
 import type { ClaimSidecar, EvidenceManifest, LedgerEvent, SourceRecord } from "./types.ts";
+import {
+  deriveSourceFromRetrieval,
+  deriveSourceFromTranscript,
+  type RetrievalWitness,
+  type SessionTranscriptWitness,
+  type SourceMetadata,
+} from "./witness.ts";
 
 function isErrnoException(error: unknown): error is NodeJS.ErrnoException {
   return error instanceof Error && "code" in error;
@@ -47,7 +61,30 @@ export function buildEvidenceLookup(
 export interface EvidenceStore {
   // ---- sources ------------------------------------------------------------
 
-  putSource(volume: VolumeSlug, source: SourceRecord): Promise<void>;
+  /**
+   * Derive and persist a source record from a real retrieval witness (D23).
+   * Mints the id, computes both snapshot digests, and writes the
+   * normalized text via `putSnapshot` so it round-trips like any other
+   * snapshot. Returns the derived record.
+   */
+  putSourceFromRetrieval(
+    volume: VolumeSlug,
+    witness: RetrievalWitness,
+    metadata: SourceMetadata,
+  ): Promise<SourceRecord>;
+
+  /**
+   * Derive and persist a source record from a session-transcript witness —
+   * the *second* legitimate origin of a source record (D19/D23). The
+   * resulting record's `retrieval.transport` is always `"session"`, which
+   * is what `checks/operator-verification.ts` requires of any source an
+   * `operator` claim cites.
+   */
+  putSourceFromTranscript(
+    volume: VolumeSlug,
+    witness: SessionTranscriptWitness,
+    metadata: SourceMetadata,
+  ): Promise<SourceRecord>;
 
   /** @throws {SourceNotFoundError} */
   getSource(volume: VolumeSlug, id: SourceId): Promise<SourceRecord>;
@@ -120,9 +157,36 @@ export class FileSystemEvidenceStore implements EvidenceStore {
 
   // ---- sources ------------------------------------------------------------
 
-  async putSource(volume: VolumeSlug, source: SourceRecord): Promise<void> {
+  async putSourceFromRetrieval(
+    volume: VolumeSlug,
+    witness: RetrievalWitness,
+    metadata: SourceMetadata,
+  ): Promise<SourceRecord> {
+    const { record, normalizedText } = deriveSourceFromRetrieval(newSourceId(), witness, metadata);
+    return this.writeDerivedSource(volume, record, normalizedText);
+  }
+
+  async putSourceFromTranscript(
+    volume: VolumeSlug,
+    witness: SessionTranscriptWitness,
+    metadata: SourceMetadata,
+  ): Promise<SourceRecord> {
+    const { record, normalizedText } = deriveSourceFromTranscript(newSourceId(), witness, metadata);
+    return this.writeDerivedSource(volume, record, normalizedText);
+  }
+
+  private async writeDerivedSource(
+    volume: VolumeSlug,
+    record: SourceRecord,
+    normalizedText: string,
+  ): Promise<SourceRecord> {
     const layout = await this.layoutFor(volume);
-    await Bun.write(layout.sourcePath(source.id), `${JSON.stringify(source, null, 2)}\n`);
+    // Content-addressed, so this both writes the snapshot the record's
+    // `snapshot.normalizedTextSha256` names and dedupes for free if some
+    // other source already snapshotted identical text.
+    await this.putSnapshot(volume, normalizedText);
+    await Bun.write(layout.sourcePath(record.id), `${JSON.stringify(record, null, 2)}\n`);
+    return record;
   }
 
   async getSource(volume: VolumeSlug, id: SourceId): Promise<SourceRecord> {

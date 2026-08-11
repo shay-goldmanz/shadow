@@ -138,6 +138,16 @@ export { EvidenceLayout } from "./layout.ts";
 export type { EvidenceStore } from "./store.ts";
 export { buildEvidenceLookup, FileSystemEvidenceStore } from "./store.ts";
 
+// ---- witnesses (D23): the only legitimate origins of a source record --------
+
+export type {
+  DerivedSource,
+  RetrievalWitness,
+  SessionTranscriptWitness,
+  SourceMetadata,
+} from "./witness.ts";
+export { deriveSourceFromRetrieval, deriveSourceFromTranscript } from "./witness.ts";
+
 // ---- Tier 2 ports (defined, not implemented — see ports.ts) -----------------
 
 export type {

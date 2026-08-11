@@ -2,17 +2,26 @@ import { describe, expect, test } from "bun:test";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { FileSystemVolumeStore, toChapterSlug, toVolumeSlug } from "@shadow/core";
-import { sha256Of } from "./digest.ts";
-import { computeSnapshotDigests } from "./normalize.ts";
+import {
+  type ChapterSlug,
+  FileSystemVolumeStore,
+  InvalidSlugError,
+  toChapterSlug,
+  toVolumeSlug,
+} from "@shadow/core";
+import { type Sha256Digest, sha256Of } from "./digest.ts";
+import { InvalidDigestError, InvalidIdError } from "./errors.ts";
+import type { SourceId } from "./ids.ts";
 import { FileSystemEvidenceStore } from "./store.ts";
 import {
   expectRejection,
   makeClaim,
   makeEvidenceSpan,
+  makeRetrievalWitness,
   makeSelector,
   makeSidecar,
   makeSource,
+  makeSourceMetadata,
 } from "./test-helpers.ts";
 
 async function makeHarness() {
@@ -29,11 +38,36 @@ async function makeHarness() {
 }
 
 describe("FileSystemEvidenceStore", () => {
-  test("round-trips a source record", async () => {
+  test("putSourceFromRetrieval derives and round-trips a source record (D23)", async () => {
     const { store, volume, cleanup } = await makeHarness();
     try {
-      const source = makeSource();
-      await store.putSource(volume, source);
+      const source = await store.putSourceFromRetrieval(
+        volume,
+        makeRetrievalWitness(),
+        makeSourceMetadata(),
+      );
+      expect(source.retrieval.transport).toBe("live");
+      const roundTripped = await store.getSource(volume, source.id);
+      expect(roundTripped).toEqual(source);
+    } finally {
+      await cleanup();
+    }
+  });
+
+  test("putSourceFromTranscript derives a source record with transport 'session' (D19/D23)", async () => {
+    const { store, volume, cleanup } = await makeHarness();
+    try {
+      const source = await store.putSourceFromTranscript(
+        volume,
+        {
+          sessionId: "sess_abc",
+          transcriptText: "Operator: I prefer borders.",
+          capturedAt: new Date().toISOString(),
+        },
+        makeSourceMetadata({ agent: "shadow-chat" }),
+      );
+      expect(source.retrieval.transport).toBe("session");
+      expect(source.url).toBe("session:sess_abc");
       const roundTripped = await store.getSource(volume, source.id);
       expect(roundTripped).toEqual(source);
     } finally {
@@ -44,10 +78,16 @@ describe("FileSystemEvidenceStore", () => {
   test("listSources returns sources sorted by id", async () => {
     const { store, volume, cleanup } = await makeHarness();
     try {
-      const a = makeSource();
-      const b = makeSource();
-      await store.putSource(volume, a);
-      await store.putSource(volume, b);
+      const a = await store.putSourceFromRetrieval(
+        volume,
+        makeRetrievalWitness({ extractedText: "First fixture snapshot text." }),
+        makeSourceMetadata(),
+      );
+      const b = await store.putSourceFromRetrieval(
+        volume,
+        makeRetrievalWitness({ extractedText: "Second fixture snapshot text." }),
+        makeSourceMetadata(),
+      );
       const listed = await store.listSources(volume);
       expect(listed).toHaveLength(2);
       expect(listed.map((s) => s.id)).toEqual([a, b].map((s) => s.id).toSorted());
@@ -261,22 +301,17 @@ describe("FileSystemEvidenceStore", () => {
   test("loadLookupFor batch-loads exactly the sources/snapshots a sidecar cites", async () => {
     const { store, volume, cleanup } = await makeHarness();
     try {
-      const rawPayload = "<html>raw fetched bytes with an ad and a timestamp</html>";
-      const digests = computeSnapshotDigests(
-        rawPayload,
-        "Every measurement is a multiple of four.",
+      const source = await store.putSourceFromRetrieval(
+        volume,
+        makeRetrievalWitness({
+          bytes: new TextEncoder().encode(
+            "<html>raw fetched bytes with an ad and a timestamp</html>",
+          ),
+          extractedText: "Every measurement is a multiple of four.",
+        }),
+        makeSourceMetadata(),
       );
-      await store.putSnapshot(volume, digests.normalizedText);
-      const source = makeSource({
-        snapshot: {
-          path: `snapshots/${digests.normalizedTextSha256.slice(7)}.txt`,
-          payloadSha256: digests.payloadSha256,
-          normalizedTextSha256: digests.normalizedTextSha256,
-          normalization: "nfc-ws-v1",
-          chars: digests.chars,
-        },
-      });
-      await store.putSource(volume, source);
+      const normalizedTextSha256 = source.snapshot.normalizedTextSha256;
 
       const sidecar = makeSidecar({
         claims: [
@@ -286,7 +321,7 @@ describe("FileSystemEvidenceStore", () => {
             evidence: [
               makeEvidenceSpan({
                 sourceId: source.id,
-                snapshotHash: digests.normalizedTextSha256,
+                snapshotHash: normalizedTextSha256,
                 selector: makeSelector({ exact: "multiple of four" }),
               }),
             ],
@@ -296,7 +331,9 @@ describe("FileSystemEvidenceStore", () => {
 
       const lookup = await store.loadLookupFor(volume, sidecar);
       expect(lookup.getSource(source.id)).toEqual(source);
-      expect(lookup.getSnapshotText(digests.normalizedTextSha256)).toBe(digests.normalizedText);
+      expect(lookup.getSnapshotText(normalizedTextSha256)).toBe(
+        "Every measurement is a multiple of four.",
+      );
     } finally {
       await cleanup();
     }
@@ -310,6 +347,41 @@ describe("FileSystemEvidenceStore", () => {
       });
       const lookup = await store.loadLookupFor(volume, sidecar);
       expect(lookup.getSource(sidecar.claims[0]?.evidence[0]?.sourceId as never)).toBeUndefined();
+    } finally {
+      await cleanup();
+    }
+  });
+
+  // ---- C-3 (Wave 1 review): forged identifiers cannot escape the store ----
+  //
+  // Mirrors `packages/core/src/filesystem-volume-store.test.ts`'s
+  // "security boundary" test: a value that skipped `toChapterSlug`/
+  // `toSourceId`/`toDigest` (an unsafe cast, or JSON deserialized straight
+  // into a typed field — exactly what an LLM-authored sidecar produces in
+  // Wave 2) must still be rejected at the path-building layer, because the
+  // brand on `ChapterSlug`/`SourceId`/`Sha256Digest` is erased at runtime.
+  test("security boundary: forged identifiers that bypass the branded constructors are still rejected", async () => {
+    const { store, volume, cleanup } = await makeHarness();
+    try {
+      const forgedChapter = "../../../../tmp/pwn" as unknown as ChapterSlug;
+      const forgedSourceId = "../../../../tmp/pwn" as unknown as SourceId;
+      const forgedDigest = "sha256:../../../../tmp/pwn" as unknown as Sha256Digest;
+
+      await expectRejection(store.getClaims(volume, forgedChapter), InvalidSlugError);
+      await expectRejection(
+        store.putClaims(volume, makeSidecar({ chapter: "../../../../tmp/pwn" })),
+        InvalidSlugError,
+      );
+      await expectRejection(store.getAudit(volume, forgedChapter), InvalidSlugError);
+      await expectRejection(store.getSource(volume, forgedSourceId), InvalidIdError);
+      await expectRejection(store.getSnapshotText(volume, forgedDigest), InvalidDigestError);
+      await expectRejection(store.hasSnapshot(volume, forgedDigest), InvalidDigestError);
+
+      // Confirm nothing escaped: no file was ever written outside the volume's evidence dir.
+      expect(await Bun.file("/tmp/pwn.claims.json").exists()).toBe(false);
+      expect(await Bun.file("/tmp/pwn.audit.json").exists()).toBe(false);
+      expect(await Bun.file("/tmp/pwn.txt").exists()).toBe(false);
+      expect(await Bun.file("/tmp/pwn.json").exists()).toBe(false);
     } finally {
       await cleanup();
     }
