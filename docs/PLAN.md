@@ -69,7 +69,8 @@ The pillars that do real work. This is where the acceptance criteria are won or 
 | T2.4 | `@shadow/evidence`: CoE Audit — source integrity, span entailment, claim completeness (checks 1–3 of D9), plus C5 chapter relevance as a non-blocking warning (D15) | `packages/evidence` | T1.3, T1.2 | ✅ |
 | T2.5 | `@shadow/evidence`: index-alignment check (check 4 of D9) + conservative-restatement repair | `packages/evidence` | T2.4, T2.2 | ✅ |
 | T2.6 | `@shadow/indexing`: `shadow lint` self-critique — discriminability, self-retrieval coverage, orphans, contradictions, miss log (D14) | `packages/indexing` | T2.3 | ✅ |
-| T2.7 | Reconcile the two miss logs: the CLI wrote its own at `<SHADOW_HOME>/misses.jsonl`, T2.6 built a `MissLogStore` port and left the path to the CLI. Wire the CLI to `FileMissLog`. | `packages/cli` | T2.6, T3.1 | ⬜ |
+| T2.7 | Reconcile the two miss logs: the CLI wrote its own at `<SHADOW_HOME>/misses.jsonl`, T2.6 built a `MissLogStore` port and left the path to the CLI. Wire the CLI to `FileMissLog`. | `packages/cli` | T2.6, T3.1 | ✅ `1a70b31` |
+| T2.8 | `@shadow/indexing`: BM25 has no stopword filtering, so function-word overlap scores > 0 and promotes weak guesses instead of an honest miss (found by T4.5). Also `FileMissLog.readAll()` loses the whole backlog on one malformed line (found by T2.7). | `packages/indexing` | T2.6 | ⬜ |
 
 T2.1 runs parallel with T2.2. T2.4 runs parallel with T2.2/T2.3. T2.3 and T2.5 are sequenced.
 
@@ -100,7 +101,7 @@ with the agent chain.
 | T4.2 | Baseline comparison: naive flat/keyword retrieval vs the tree navigator, to substantiate "or better" | `packages/evaluation` | T4.1 | ⬜ |
 | T4.3 | Groundedness metrics: attribution rate, citation precision, injected-hallucination catch rate | `packages/evaluation` | T2.5 | ⬜ |
 | T4.4 | E2E: the critical path — create volume → research Linear/Notion/Epoch → two chapters → indexed → CLI finds it. Fixture-backed. | `tests/e2e` | T3.5 | ⬜ |
-| T4.5 | E2E: agent consumption — a coding agent asked for a one-pager reaches the right chapter via CLI unprompted | `tests/e2e` | T3.2 | ⬜ |
+| T4.5 | E2E: agent consumption — a coding agent asked for a one-pager reaches the right chapter via CLI unprompted | `tests/e2e` | T3.2 | ✅ `ba81f01` |
 
 **Final review.** Full acceptance-criteria walkthrough, each line evidenced.
 
