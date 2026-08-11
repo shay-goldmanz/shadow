@@ -37,6 +37,7 @@ directly via Bun.
 | [`docs/DECISIONS.md`](docs/DECISIONS.md) | architectural decision record |
 | [`docs/PLAN.md`](docs/PLAN.md) | working plan and task status |
 | [`docs/INDEXING.md`](docs/INDEXING.md) | indexing schema and algorithms |
+| [`docs/EVIDENCE.md`](docs/EVIDENCE.md) | chain-of-evidence schema, checks, and metrics |
 
 ## Getting started
 
