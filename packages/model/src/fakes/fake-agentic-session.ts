@@ -3,12 +3,25 @@
  *
  * Exported from the package's public surface (`../index.ts`) so T2.x/T3.x
  * packages can test tool-agent and chat orchestration logic offline. It
- * reproduces the one real-adapter behavior callers actually depend on:
- * a session's `sessionId` is `undefined` until the first turn, then stays
- * *stable* across every later turn sent through the same handle — the
- * observable shape of D6's session reuse, without a subprocess to reuse.
+ * reproduces the two real-adapter behaviors callers actually depend on:
+ *
+ * 1. A session's `sessionId` is `undefined` until the first turn, then
+ *    stays *stable* across every later turn sent through the same handle —
+ *    the observable shape of D6's session reuse, without a subprocess to
+ *    reuse.
+ * 2. A session created with `persistSession: false` **throws** if a second
+ *    turn is ever sent through it, exactly like `ClaudeAgentSdkSession`
+ *    (`../adapters/claude-agent-sdk-session.ts`) and the real CLI beneath
+ *    it. This one is load-bearing: before it existed, this fake happily
+ *    let a non-persisted handle "resume" forever, which is exactly how
+ *    `@shadow/agent`'s chat session shipped with `persistSession: false`
+ *    plus resume-based multi-turn continuation and every offline test
+ *    stayed green. Without this, the fake is a *more* permissive model of
+ *    the SDK than the SDK itself — see the class doc on
+ *    `AgenticSessionOptions.persistSession` for the incident.
  */
 
+import { AgenticSessionError } from "../errors.ts";
 import type {
   AgenticSession,
   AgenticSessionOptions,
@@ -63,6 +76,7 @@ export class FakeAgenticSession implements AgenticSession {
   private ownSessionId: string | undefined;
   private accumulatedUsage: TokenUsage = ZERO_USAGE;
   private turnIndex = 0;
+  private closed = false;
 
   constructor(
     private readonly assignedSessionId: string,
@@ -79,6 +93,25 @@ export class FakeAgenticSession implements AgenticSession {
   }
 
   async *stream(prompt: string): AsyncGenerator<AgenticStreamEvent, void, undefined> {
+    if (this.turnIndex > 0 && this.options.persistSession === false) {
+      // Mirrors `ClaudeAgentSdkSession.stream`'s eager guard, which mirrors
+      // the real CLI: a session created with `persistSession: false` was
+      // never written to `~/.claude/projects/`, so a `resume` on turn 2+
+      // has nothing to find. Verified live: the real error reads
+      // `No conversation found with session ID: <id>` — reproduced here in
+      // shape, not byte-for-byte, since this fake never talks to a CLI.
+      throw new AgenticSessionError(
+        `No conversation found with session ID: ${this.ownSessionId} ` +
+          "(fake: this session was created with persistSession: false and cannot be resumed " +
+          "for a second turn)",
+      );
+    }
+    if (this.closed) {
+      throw new AgenticSessionError(
+        `session ${this.ownSessionId} was closed via close() and cannot be resumed`,
+      );
+    }
+
     this.prompts.push(prompt);
     const script = this.respond(prompt, {
       turnIndex: this.turnIndex,
@@ -105,5 +138,15 @@ export class FakeAgenticSession implements AgenticSession {
       subagentsEnabled: script.subagentsEnabled ?? false,
     };
     yield { type: "done", result };
+  }
+
+  /** Mirrors `ClaudeAgentSdkSession.close`: marks the session unusable for a further turn. Inspectable via `closed` for tests that want to assert cleanup happened. */
+  async close(): Promise<void> {
+    this.closed = true;
+  }
+
+  /** Whether `close()` has been called — for tests asserting cleanup. */
+  get isClosed(): boolean {
+    return this.closed;
   }
 }

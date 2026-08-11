@@ -80,7 +80,20 @@ export interface AgenticSessionOptions {
   readonly subagents?: Readonly<Record<string, SubagentDefinition>>;
   readonly permissionMode?: PermissionMode;
   readonly maxTurns?: number;
-  /** @default true — set `false` for ephemeral/test sessions that should never touch `~/.claude/projects/`. */
+  /**
+   * @default true — set `false` only for a session you know will receive
+   * exactly one turn (e.g. a one-shot generation). A non-persisted session
+   * is never written to `~/.claude/projects/`, so there is nothing for a
+   * later turn's `resume` to find — **`persistSession: false` and sending a
+   * second turn on the same `AgenticSession` handle are mutually
+   * exclusive.** `ClaudeAgentSdkSession` enforces this at the port boundary
+   * (throws before spawning a subprocess) and `FakeAgenticSession` mirrors
+   * the same failure offline, so a caller that reuses a handle it created
+   * non-persisted fails loudly and immediately rather than silently
+   * "working" until it hits the real adapter (see DECISIONS.md D6, and the
+   * incident that made this comment necessary — a wave-3 review proved
+   * Shadow's chat handle was doing exactly this).
+   */
   readonly persistSession?: boolean;
   /**
    * Extra environment variables for the CLI subprocess, merged over
@@ -136,9 +149,23 @@ export interface AgenticSession {
    * @throws {SubscriptionAuthError} if auth did not resolve to the
    *   operator's subscription (D5's guardrail).
    * @throws {AgenticSessionError} on a transport/process failure that
-   *   prevented the turn from running.
+   *   prevented the turn from running, including reusing a handle created
+   *   with `persistSession: false` for a second turn (see that option's
+   *   doc).
    */
   stream(prompt: string): AsyncIterable<AgenticStreamEvent>;
+  /**
+   * Release this session's on-disk transcript, if it has one. A no-op for a
+   * session that never completed a turn (`sessionId` still `undefined`) or
+   * that was created with `persistSession: false` (nothing was ever
+   * written). Optional because most callers — anything short-lived, and
+   * every existing implementer besides the real adapter and its fake —
+   * have no cleanup to do; see `ClaudeAgentSdkSession.close` for why a
+   * long-lived handle (Shadow chat, D6) should call this when it is done
+   * with a conversation, since persisted sessions otherwise accumulate
+   * under `~/.claude/projects/` for as long as the operator keeps chatting.
+   */
+  close?(): Promise<void>;
 }
 
 export interface AgenticSessionPort {

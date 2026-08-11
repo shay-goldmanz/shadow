@@ -7,6 +7,14 @@
  * still a fresh `query()` call (and a fresh subprocess) — `resume` is what
  * lets that fresh process pick the conversation back up cheaply, reading
  * the Claude Code preamble from cache instead of paying to write it again.
+ * `resume` only works against a session that was actually persisted to
+ * `~/.claude/projects/`, so any handle that will see a second `stream()`
+ * call must be created without `persistSession: false` — enforced in
+ * `stream()` below rather than left as a convention (see
+ * `AgenticSessionOptions.persistSession`'s doc for the incident that made
+ * this necessary). `close()` is the matching cleanup half: a persisted
+ * session accumulates on disk for as long as its caller keeps the handle
+ * alive, so a long-lived caller should delete it when done.
  *
  * Guardrail: the CLI's first message is always the `system`/`init` message
  * carrying `apiKeySource`. We check it before yielding anything to the
@@ -17,6 +25,7 @@
 
 import {
   type AgentDefinition,
+  deleteSession,
   type McpServerConfig,
   type ModelUsage,
   type Options,
@@ -58,6 +67,8 @@ export type QueryFn = (params: {
 export interface ClaudeAgentSdkSessionPortDeps {
   /** Injectable for tests. Defaults to the real `query()`. */
   readonly query?: QueryFn;
+  /** Injectable for tests. Defaults to the real `deleteSession()`. Backs `AgenticSession.close()`. */
+  readonly deleteSession?: typeof deleteSession;
 }
 
 export function createClaudeAgentSdkSessionPort(
@@ -65,9 +76,10 @@ export function createClaudeAgentSdkSessionPort(
   deps: ClaudeAgentSdkSessionPortDeps = {},
 ): AgenticSessionPort {
   const queryFn = deps.query ?? query;
+  const deleteSessionFn = deps.deleteSession ?? deleteSession;
   return {
     createSession(options: AgenticSessionOptions = {}): AgenticSession {
-      return new ClaudeAgentSdkSession(queryFn, defaults, options);
+      return new ClaudeAgentSdkSession(queryFn, deleteSessionFn, defaults, options);
     },
   };
 }
@@ -169,6 +181,7 @@ class ClaudeAgentSdkSession implements AgenticSession {
 
   constructor(
     private readonly queryFn: QueryFn,
+    private readonly deleteSessionFn: typeof deleteSession,
     private readonly defaults: ClaudeAgentSdkSessionDefaults,
     private readonly options: AgenticSessionOptions,
   ) {}
@@ -183,6 +196,30 @@ class ClaudeAgentSdkSession implements AgenticSession {
 
   async *stream(prompt: string): AsyncGenerator<AgenticStreamEvent, void, undefined> {
     const isFirstTurn = this.turnsSent === 0;
+
+    if (!isFirstTurn && this.options.persistSession === false) {
+      // `persistSession: false` and resume are mutually exclusive by
+      // construction (see `AgenticSessionOptions.persistSession`'s doc): a
+      // non-persisted session was never written to `~/.claude/projects/`,
+      // so `resume: ownSessionId` below would have nothing to find. The
+      // real CLI does discover this — but only after we spawn a subprocess
+      // and pay for a round trip, surfacing as a raw
+      // "No conversation found with session ID: ..." error from inside
+      // `query()`. Fail fast, before any of that, with a message that
+      // names the actual cause. This is the exact bug a Wave 3 review
+      // proved live: Shadow's chat session (`@shadow/agent`'s
+      // `conversation.ts`) set `persistSession: false` while relying on
+      // resume-based multi-turn continuation (D6) — the fix there was to
+      // stop setting it, not to work around this guard.
+      throw new AgenticSessionError(
+        "This AgenticSession was created with persistSession: false and cannot be resumed " +
+          "for a second turn: non-persisted sessions are never written to " +
+          "~/.claude/projects/, so there is nothing for `resume` to find. If this handle " +
+          "needs more than one turn, do not set persistSession: false when creating it — " +
+          "the SDK default is already `true` — and see DECISIONS.md D6 for how to manage " +
+          "the resulting on-disk transcript.",
+      );
+    }
     this.turnsSent += 1;
 
     const queryOptions = buildQueryOptions(this.defaults, this.options, {
@@ -272,5 +309,28 @@ class ClaudeAgentSdkSession implements AgenticSession {
     }
 
     throw new AgenticSessionError("query() stream ended without a 'result' message");
+  }
+
+  /**
+   * Deletes this session's persisted transcript from `~/.claude/projects/`
+   * via the SDK's `deleteSession`. A no-op when there is nothing to delete:
+   * no turn has completed yet (`ownSessionId` still `undefined`), or this
+   * session was created with `persistSession: false` (nothing was ever
+   * written for it). Deliberately not called automatically anywhere in
+   * this package — this port has no notion of "the caller is done with
+   * this conversation," so a long-lived caller (Shadow chat, D6) that
+   * wants sessions to not accumulate indefinitely on disk must call this
+   * itself once it retires a handle.
+   */
+  async close(): Promise<void> {
+    if (!this.ownSessionId || this.options.persistSession === false) return;
+    try {
+      await this.deleteSessionFn(this.ownSessionId);
+    } catch (error) {
+      throw new AgenticSessionError(
+        `failed to delete persisted session ${this.ownSessionId}`,
+        error,
+      );
+    }
   }
 }

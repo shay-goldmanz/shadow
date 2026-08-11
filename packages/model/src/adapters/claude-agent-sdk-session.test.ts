@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { randomUUID } from "node:crypto";
 import type { Options, SDKMessage } from "@anthropic-ai/claude-agent-sdk";
-import { SubscriptionAuthError } from "../errors.ts";
+import { AgenticSessionError, SubscriptionAuthError } from "../errors.ts";
 import { runToCompletion } from "../ports/agentic-session.ts";
 import { expectRejection } from "../test-helpers.ts";
 import { createClaudeAgentSdkSessionPort, type QueryFn } from "./claude-agent-sdk-session.ts";
@@ -146,6 +146,97 @@ describe("createClaudeAgentSdkSessionPort — session reuse (D6)", () => {
 
     expect(calls[0]?.options?.env?.PATH).toBe(process.env.PATH);
     expect(calls[0]?.options?.env?.CUSTOM_VAR).toBe("1");
+  });
+});
+
+describe("createClaudeAgentSdkSessionPort — persistSession: false cannot be resumed", () => {
+  test("a second turn on a handle created with persistSession: false throws AgenticSessionError WITHOUT calling query() again — the contradiction this port now refuses to reach the subprocess for", async () => {
+    const { queryFn, calls } = makeRecordingQueryFn({});
+    const port = createClaudeAgentSdkSessionPort({}, { query: queryFn });
+    const session = port.createSession({ persistSession: false });
+
+    await runToCompletion(session, "first turn");
+    expect(calls).toHaveLength(1);
+
+    await expectRejection(runToCompletion(session, "second turn"), AgenticSessionError);
+    // The guard fires before `queryFn` is invoked a second time — no
+    // subprocess spawned for a call we already know cannot succeed.
+    expect(calls).toHaveLength(1);
+  });
+
+  test("a second turn on a handle created without persistSession: false (the default) resumes normally", async () => {
+    const fixedSessionId = randomUUID();
+    const { queryFn, calls } = makeRecordingQueryFn({ sessionIdForCall: () => fixedSessionId });
+    const port = createClaudeAgentSdkSessionPort({}, { query: queryFn });
+    const session = port.createSession();
+
+    await runToCompletion(session, "first turn");
+    await runToCompletion(session, "second turn");
+
+    expect(calls).toHaveLength(2);
+    expect(calls[1]?.options?.resume).toBe(fixedSessionId);
+  });
+});
+
+describe("createClaudeAgentSdkSessionPort — close()", () => {
+  test("delegates to the SDK's deleteSession with this session's own id", async () => {
+    const fixedSessionId = randomUUID();
+    const { queryFn } = makeRecordingQueryFn({ sessionIdForCall: () => fixedSessionId });
+    const deleteCalls: string[] = [];
+    const port = createClaudeAgentSdkSessionPort(
+      {},
+      {
+        query: queryFn,
+        // biome-ignore lint/suspicious/noExplicitAny: test double, only the sessionId argument matters
+        deleteSession: (async (sessionId: string) => {
+          deleteCalls.push(sessionId);
+        }) as any,
+      },
+    );
+    const session = port.createSession();
+    await runToCompletion(session, "hi");
+
+    await session.close?.();
+    expect(deleteCalls).toEqual([fixedSessionId]);
+  });
+
+  test("is a no-op when no turn has completed yet (no sessionId to delete)", async () => {
+    const { queryFn } = makeRecordingQueryFn({});
+    const deleteCalls: string[] = [];
+    const port = createClaudeAgentSdkSessionPort(
+      {},
+      {
+        query: queryFn,
+        // biome-ignore lint/suspicious/noExplicitAny: test double, only call-count matters
+        deleteSession: (async (sessionId: string) => {
+          deleteCalls.push(sessionId);
+        }) as any,
+      },
+    );
+    const session = port.createSession();
+
+    await session.close?.();
+    expect(deleteCalls).toEqual([]);
+  });
+
+  test("is a no-op for a session created with persistSession: false — nothing was ever written to delete", async () => {
+    const { queryFn } = makeRecordingQueryFn({});
+    const deleteCalls: string[] = [];
+    const port = createClaudeAgentSdkSessionPort(
+      {},
+      {
+        query: queryFn,
+        // biome-ignore lint/suspicious/noExplicitAny: test double, only call-count matters
+        deleteSession: (async (sessionId: string) => {
+          deleteCalls.push(sessionId);
+        }) as any,
+      },
+    );
+    const session = port.createSession({ persistSession: false });
+    await runToCompletion(session, "hi");
+
+    await session.close?.();
+    expect(deleteCalls).toEqual([]);
   });
 });
 

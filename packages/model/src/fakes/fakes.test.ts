@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { z } from "zod";
-import { StructuredGenerationError } from "../errors.ts";
+import { AgenticSessionError, StructuredGenerationError } from "../errors.ts";
 import { runToCompletion } from "../ports/agentic-session.ts";
 import { expectRejection } from "../test-helpers.ts";
 import { FakeAgenticSessionPort } from "./fake-agentic-session.ts";
@@ -129,5 +129,57 @@ describe("FakeAgenticSessionPort", () => {
     await runToCompletion(session, "second");
     const fake = port.sessions[0];
     expect(fake?.prompts).toEqual(["first", "second"]);
+  });
+
+  describe("persistSession: false cannot be resumed (the Wave 3 bug, modeled)", () => {
+    test("a first turn on a non-persisted session succeeds", async () => {
+      const port = new FakeAgenticSessionPort();
+      const session = port.createSession({ persistSession: false });
+      const result = await runToCompletion(session, "one");
+      expect(result.isError).toBe(false);
+      expect(result.text).toBe("echo: one");
+    });
+
+    test("a second turn on the SAME non-persisted session handle throws, exactly like the real adapter/SDK", async () => {
+      const port = new FakeAgenticSessionPort();
+      const session = port.createSession({ persistSession: false });
+      await runToCompletion(session, "one");
+
+      await expectRejection(runToCompletion(session, "two"), AgenticSessionError);
+    });
+
+    test("persistSession omitted (SDK default true) or explicitly true: a second turn on the same handle succeeds — this is the multi-turn path Shadow's chat and research agent both depend on (D6)", async () => {
+      const port = new FakeAgenticSessionPort();
+      const defaultSession = port.createSession();
+      await runToCompletion(defaultSession, "one");
+      const second = await runToCompletion(defaultSession, "two");
+      expect(second.isError).toBe(false);
+
+      const explicitSession = port.createSession({ persistSession: true });
+      await runToCompletion(explicitSession, "one");
+      const explicitSecond = await runToCompletion(explicitSession, "two");
+      expect(explicitSecond.isError).toBe(false);
+    });
+  });
+
+  describe("close()", () => {
+    test("marks the session closed, inspectable via isClosed", async () => {
+      const port = new FakeAgenticSessionPort();
+      const session = port.createSession();
+      await runToCompletion(session, "one");
+      expect(port.sessions[0]?.isClosed).toBe(false);
+
+      await session.close?.();
+      expect(port.sessions[0]?.isClosed).toBe(true);
+    });
+
+    test("a turn sent after close() throws", async () => {
+      const port = new FakeAgenticSessionPort();
+      const session = port.createSession();
+      await runToCompletion(session, "one");
+      await session.close?.();
+
+      await expectRejection(runToCompletion(session, "two"), AgenticSessionError);
+    });
   });
 });
