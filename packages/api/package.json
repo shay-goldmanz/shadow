@@ -7,11 +7,15 @@
     "./*": "./src/*.ts"
   },
   "scripts": {
-    "typecheck": "tsc -p ."
+    "typecheck": "tsc -p .",
+    "start": "bun run src/start.ts"
   },
   "dependencies": {
-    "@shadow/core": "workspace:*",
     "@shadow/agent": "workspace:*",
-    "@shadow/indexing": "workspace:*"
+    "@shadow/core": "workspace:*",
+    "@shadow/evidence": "workspace:*",
+    "@shadow/indexing": "workspace:*",
+    "@shadow/model": "workspace:*",
+    "@shadow/research": "workspace:*"
   }
 }

@@ -1,0 +1,90 @@
+/**
+ * Typed error hierarchy for @shadow/api itself — distinct from the typed
+ * errors the pillars beneath it throw (`@shadow/core`, `@shadow/evidence`,
+ * `@shadow/indexing`, `@shadow/agent`, `@shadow/model`, `@shadow/research`).
+ * This package's own errors exist only for things that are genuinely a
+ * transport concern: a malformed request body, an unresolvable route, a
+ * chat `sessionId` the server no longer holds. Everything else is a pillar
+ * error passed through `error-mapping.ts`.
+ *
+ * `instanceof` is the supported way to branch on these, matching the
+ * convention every other package in this monorepo already uses.
+ */
+
+/** Base class for every error `@shadow/api` itself originates (not a pillar's). */
+export abstract class ShadowApiError extends Error {
+  abstract override readonly name: string;
+  /** HTTP status this error maps to. */
+  abstract readonly status: number;
+  /** Stable machine-readable code, `docs/API.md`'s `error.code`. */
+  abstract readonly code: string;
+}
+
+/**
+ * The request body or query string was malformed or missing a required
+ * field — operator/client error, never a server fault. Distinct from a
+ * pillar's own validation errors (e.g. `InvalidSlugError`), which are
+ * mapped separately in `error-mapping.ts`; this is for shape-level
+ * problems a pillar never gets the chance to see (missing `message`,
+ * invalid JSON, missing `title`, etc).
+ */
+export class InvalidRequestError extends ShadowApiError {
+  override readonly name = "InvalidRequestError";
+  readonly status = 400;
+  readonly code = "invalid_request";
+
+  constructor(
+    message: string,
+    public readonly details?: Record<string, unknown>,
+  ) {
+    super(message);
+  }
+}
+
+/** No route matches this method + path. */
+export class RouteNotFoundError extends ShadowApiError {
+  override readonly name = "RouteNotFoundError";
+  readonly status = 404;
+  readonly code = "route_not_found";
+
+  constructor(
+    public readonly method: string,
+    public readonly path: string,
+  ) {
+    super(`No route for ${method} ${path}`);
+  }
+}
+
+/**
+ * `POST /api/chat` was called with a `sessionId` this server has no
+ * `ShadowConversation` for — either it was never issued by this process, or
+ * the process restarted (conversations are held in memory; D4's
+ * filesystem-is-truth invariant is about volumes, not in-flight chat
+ * sessions). Operator-visible, not a fault: the client should start a new
+ * conversation.
+ */
+export class SessionNotFoundError extends ShadowApiError {
+  override readonly name = "SessionNotFoundError";
+  readonly status = 404;
+  readonly code = "session_not_found";
+
+  constructor(public readonly sessionId: string) {
+    super(`No conversation with sessionId ${JSON.stringify(sessionId)}`);
+  }
+}
+
+/**
+ * `GET /api/volumes/:slug/index` (or `/api/lint`) was called before the
+ * volume was ever indexed — `VolumeStore.readIndex`/`readCorpusIndex`
+ * returned `undefined`. Not a fault: `POST /api/volumes/:slug/reindex`
+ * (or publishing a chapter, which reindexes as a side effect) builds it.
+ */
+export class IndexNotBuiltError extends ShadowApiError {
+  override readonly name = "IndexNotBuiltError";
+  readonly status = 404;
+  readonly code = "index_not_built";
+
+  constructor(public readonly volume: string) {
+    super(`Volume ${JSON.stringify(volume)} has not been indexed yet`);
+  }
+}

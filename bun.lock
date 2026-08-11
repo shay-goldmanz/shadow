@@ -6,6 +6,7 @@
       "name": "@shadow/monorepo",
       "devDependencies": {
         "@biomejs/biome": "^2.5.7",
+        "@happy-dom/global-registrator": "^18.0.1",
         "@types/bun": "^1.3.14",
         "oxlint": "^1.78.0",
         "oxlint-tsgolint": "^7.0.2001",
@@ -30,7 +31,10 @@
       "dependencies": {
         "@shadow/agent": "workspace:*",
         "@shadow/core": "workspace:*",
+        "@shadow/evidence": "workspace:*",
         "@shadow/indexing": "workspace:*",
+        "@shadow/model": "workspace:*",
+        "@shadow/research": "workspace:*",
       },
     },
     "packages/cli": {
@@ -42,6 +46,7 @@
       "dependencies": {
         "@shadow/core": "workspace:*",
         "@shadow/indexing": "workspace:*",
+        "@shadow/model": "workspace:*",
       },
     },
     "packages/core": {
