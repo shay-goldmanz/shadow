@@ -411,6 +411,16 @@ describe("ShadowConversation — a second sendMessage reuses the same session (D
 
         expect(sessions.sessions).toHaveLength(1);
         expect(sessions.sessions[0]?.prompts).toHaveLength(2);
+        // The regression this guards: a session created with
+        // `persistSession: false` cannot be resumed at all — `@shadow/model`'s
+        // `FakeAgenticSessionPort` now throws on a second turn through such a
+        // handle (mirroring the real adapter/SDK), so this whole test would
+        // fail with an uncaught rejection if `getOrCreateSession` ever
+        // reintroduces that flag. Assert the intent directly too.
+        expect(sessions.sessions[0]?.options.persistSession).not.toBe(false);
+
+        await conversation.dispose();
+        expect(sessions.sessions[0]?.isClosed).toBe(true);
       });
     });
   });

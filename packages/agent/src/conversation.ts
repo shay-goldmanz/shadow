@@ -37,6 +37,16 @@
  * up, at the "any tool at all" granularity rather than "any tool but our
  * three." `disallowedTools` names the risky built-ins anyway, as
  * belt-and-braces against a future change loosening `allowedTools`.
+ *
+ * ## Session persistence is required, not optional (see `getOrCreateSession`)
+ *
+ * "Reused across turns" above means what it says: this handle sends every
+ * turn after the first as `resume: <this handle's own session id>`
+ * (`@shadow/model`'s `ClaudeAgentSdkSession`). `resume` only finds a
+ * session that was actually written to `~/.claude/projects/`, so this
+ * session must NOT be created with `persistSession: false` — see the
+ * comment at that call site for the incident this guards against, and
+ * `ShadowConversation.dispose` for the cleanup this now requires.
  */
 
 import { randomUUID } from "node:crypto";
@@ -203,6 +213,22 @@ export class ShadowConversation {
   }
 
   /**
+   * Release the underlying `AgenticSession`'s persisted transcript
+   * (`AgenticSession.close`, backed by the Agent SDK's `deleteSession`).
+   * This handle deliberately persists its session for `resume` to work
+   * across turns — see the comment on `persistSession` in
+   * `getOrCreateSession` — which means it accumulates on disk under
+   * `~/.claude/projects/` for as long as it stays alive. Nothing in this
+   * class calls `dispose` automatically: it has no notion of "the operator
+   * is done with this conversation." Whoever owns conversation lifecycle
+   * (today, `@shadow/api`'s `ApiDeps.conversations` map) should call this
+   * when evicting a conversation. A no-op if no turn has completed yet.
+   */
+  async dispose(): Promise<void> {
+    await this.session?.close?.();
+  }
+
+  /**
    * Send one operator message and drive Shadow's response, including any
    * auto-continuation rounds (research delegation, chapter drafting and
    * publication) it triggers. Streams progress as `ShadowEvent`s so a
@@ -333,7 +359,29 @@ export class ShadowConversation {
       allowedTools: ["Skill"],
       disallowedTools: ["WebFetch", "WebSearch", "Bash", "Read", "Write", "Edit", "Agent", "Task"],
       permissionMode: "default",
-      persistSession: false,
+      // Deliberately NOT `persistSession: false`. This handle is reused
+      // across every `sendMessage` call and every auto-continuation round
+      // (module doc above, D6) via `resume` — and `resume` only works
+      // against a session actually written to `~/.claude/projects/`.
+      // `persistSession: false` and multi-turn resume are mutually
+      // exclusive by construction (see
+      // `@shadow/model`'s `AgenticSessionOptions.persistSession` doc); a
+      // Wave 3 review proved live that combination throws
+      // "No conversation found with session ID: ..." on the very first
+      // continuation turn, meaning Shadow could never actually
+      // research-then-draft through chat. Omitting the field takes the
+      // Agent SDK's own default, which is already `true` — no need to set
+      // it explicitly, but the omission itself is the fix, so it is
+      // spelled out here rather than left to be silently reintroduced.
+      //
+      // Cost this incurs (documented, not hidden): every conversation's
+      // transcript now persists under `~/.claude/projects/` for as long as
+      // the process keeps this `ShadowConversation` alive. Nothing in this
+      // package currently calls the matching cleanup —
+      // `AgenticSession.close()` (backed by the SDK's `deleteSession`) is
+      // available on `this.session` for whichever layer owns conversation
+      // lifecycle (today, `@shadow/api`'s `ApiDeps.conversations` map) to
+      // call once a conversation is evicted or the operator ends it.
     });
     return this.session;
   }

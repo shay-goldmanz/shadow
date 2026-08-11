@@ -201,7 +201,17 @@ export class WebResearchToolAgent implements ResearchBriefPort {
       toolServers: [toolServer],
       settingSources: [],
       permissionMode: "default",
-      persistSession: false,
+      // Deliberately NOT `persistSession: false`. Per the class doc's
+      // "Session reuse (D6)" section, this session handle is reused across
+      // every `research()` call on this instance — the second and later
+      // calls send their turn via `resume`, which only works against a
+      // session actually persisted to `~/.claude/projects/`.
+      // `persistSession: false` here would be the identical contradiction
+      // a Wave 3 review found and fixed in `@shadow/agent`'s
+      // `conversation.ts` (see that file's comment on this same field) —
+      // this session just hadn't been exercised with a second `research()`
+      // call against the *real* adapter yet. Omitting the field takes the
+      // Agent SDK's own default (`true`).
     };
 
     this.session = this.deps.sessions.createSession(options);
