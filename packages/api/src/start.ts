@@ -10,7 +10,11 @@ import { createServer } from "./server.ts";
 
 const port = Number(process.env.PORT ?? 4301);
 
-const deps = buildRealApiDeps({ root: process.env.SHADOW_ROOT });
+// SHADOW_HOME, not SHADOW_ROOT: `@shadow/cli` already reads SHADOW_HOME, and
+// the two must resolve to the same corpus. They agreed only by both defaulting
+// to ~/.shadow — any override sent the API and the CLI to different corpora,
+// so the operator's volumes were invisible to the agents meant to consume them.
+const deps = buildRealApiDeps({ root: process.env.SHADOW_HOME });
 const server = createServer(deps, { port, hostname: "localhost" });
 
 console.log(`@shadow/api listening at ${server.url.toString()}`);
