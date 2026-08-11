@@ -7,10 +7,13 @@
     "./*": "./src/*.ts"
   },
   "scripts": {
-    "typecheck": "tsc -p ."
+    "typecheck": "tsc -p .",
+    "eval": "bun run src/run-eval.ts"
   },
   "dependencies": {
     "@shadow/core": "workspace:*",
-    "@shadow/indexing": "workspace:*"
+    "@shadow/indexing": "workspace:*",
+    "@shadow/model": "workspace:*",
+    "zod": "^4.4.3"
   }
 }
