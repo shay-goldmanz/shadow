@@ -83,6 +83,38 @@ since research is slow and silence reads as failure:
 `chapter.restated` is deliberately visible in the stream: D9 requires that what Shadow softened
 and why stays in front of the operator rather than being quietly cleaned up.
 
+## Wire types
+
+The endpoints above return the pillars' domain types. Their authoritative shapes live with
+their owners — `Volume`/`Chapter` in `@shadow/core`, `IndexDocument` in `@shadow/indexing`
+(schema in `INDEXING.md`), `SourceRecord`/`Claim`/`LedgerEvent`/audit results in
+`@shadow/evidence` (schema in `EVIDENCE.md`). This document deliberately does not restate
+them: a second copy of a schema is a second thing to drift.
+
+**Dates cross the wire as ISO-8601 strings**, not `Date` objects. Everything else serializes
+as-is.
+
+The one thing a client must not have to reconstruct is which claims failed. Audit responses
+carry findings keyed by **claim label** (the `[^label]` from D18), because that is the stable
+identity the operator sees in the Markdown and the only key a UI can join on.
+
+### `claim.restated` carries its chapter
+
+The ledger is volume-wide, but a restatement belongs to one chapter — and D9's whole point is
+that the operator can see *what Shadow softened in this chapter and why*. Without a `chapter`
+field a client has to cross-reference the chapter's claim list to scope the list, which is
+both fiddly and wrong at the edges (a label deleted from a chapter still has ledger history).
+
+So `claim.restated` events include `chapter`, matching `audit.completed`. **This is a change
+to `@shadow/evidence`'s `ClaimRestatedEvent`, not just to this document** — tracked as T3.6.
+
+## Session continuation
+
+`sessionId` arrives **only** on the `session` event, which is always the first event of a
+stream. The client stores it and echoes it on the next `POST /api/chat`. There is no other
+channel — a client that misses it starts a new conversation and pays the ~18k-token preamble
+again (D6).
+
 ## Errors
 
 ```jsonc
