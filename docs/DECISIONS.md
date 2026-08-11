@@ -116,6 +116,37 @@ than in actual work.
 
 **Cost.** Session state to manage. Contained inside the model package.
 
+### D6a — Amendment: reuse requires persistence, and the fake must be able to fail
+
+Shadow's sessions were created with `persistSession: false` while continuation was implemented
+as `resume`. Those are mutually exclusive: the SDK's `resume` only works against a session
+written to `~/.claude/projects/`, so **every second turn failed** with *"No conversation found
+with session ID"*. Live-proven, twice.
+
+The damage was wider than a second chat message. Shadow's research→draft continuation runs as
+turn 2+ on the same handle, so the critical path's *"invokes tools and skills… adds 2
+chapters"* could not complete through chat at all. D6 — the decision this project's entire
+session-cost argument rests on — did not function.
+
+**Amended:** sessions persist. `AgenticSession.close()` and `ShadowConversation.dispose()`
+exist because persistence means on-disk transcripts that must be cleaned up, and the API binds
+disposal to conversation eviction.
+
+**Why 918 tests missed it, and the rule that follows.** `FakeAgenticSessionPort` could not fail
+the way the real SDK does — a fake that only models the happy path will confirm any bug that
+lives in the unhappy one. The fake now throws on a resumed non-persisted session, exactly as
+the SDK does, and reintroducing the old flag makes the suite fail immediately.
+
+**The general rule: a fake must be able to reproduce the failure modes of the thing it
+replaces, or it is not a test double — it is an echo.** The same shape caused the web
+interface to be built against a guessed wire contract that its own fake then confirmed.
+
+**Known environment limitation.** The `SHADOW_LIVE_TEST=1` smoke tests currently fail under
+`bun test` — but not under `bun run` — on Bun 1.3.14 with Agent SDK 0.3.226:
+`TypeError: The "eventTargets" argument must be of type EventEmitter or EventTarget. Received
+an instance of AbortSignal`, thrown inside the SDK's `setMaxListeners`. Live verification runs
+via `bun run` until that combination changes.
+
 ---
 
 ## D7 — No build step: Bun runs TypeScript source directly
