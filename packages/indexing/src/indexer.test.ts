@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { FileSystemVolumeStore, toChapterSlug, toVolumeSlug, type VolumeStore } from "@shadow/core";
 import { StructuralIndexer } from "./indexer.ts";
-import type { IndexDocument } from "./types.ts";
+import type { IndexDocument, VolumeIndexDocument } from "./types.ts";
 import { isValidUlid } from "./ulid.ts";
 
 async function withStore(fn: (store: VolumeStore) => Promise<void>): Promise<void> {
@@ -199,13 +199,20 @@ describe("StructuralIndexer — end to end via VolumeStore", () => {
       expect(short?.sections).toBeUndefined();
       expect(short?.key_items).toEqual(["Just one small heading"]);
 
-      // --- persisted: reading it back via VolumeStore matches what was returned ---
-      const persisted = await store.readIndex<IndexDocument>(volume);
-      expect(persisted).toEqual(document);
+      // --- persisted: corpus-wide document lives at the corpus index slot ---
+      const persistedCorpus = await store.readCorpusIndex<IndexDocument>();
+      expect(persistedCorpus).toEqual(document);
+
+      // --- persisted: the volume's own index.json is a scoped view, not the corpus ---
+      const persistedVolume = await store.readIndex<VolumeIndexDocument>(volume);
+      expect(persistedVolume?.schema_version).toBe(document.schema_version);
+      expect(persistedVolume?.generated_at).toBe(document.generated_at);
+      expect(persistedVolume?.corpus_hash).toBe(document.corpus_hash);
+      expect(persistedVolume?.volume).toEqual(volumeNode);
     });
   });
 
-  test("reindex persists the same corpus-wide document into every volume's own index.json", async () => {
+  test("reindex no longer duplicates the corpus into every volume's index.json (T2.2 follow-up)", async () => {
     await withStore(async (store) => {
       const volA = toVolumeSlug("volume-a");
       const volB = toVolumeSlug("volume-b");
@@ -218,14 +225,27 @@ describe("StructuralIndexer — end to end via VolumeStore", () => {
       const { document } = await indexer.reindex(store);
 
       expect(document.volumes).toHaveLength(2);
-      const persistedA = await store.readIndex<IndexDocument>(volA);
-      const persistedB = await store.readIndex<IndexDocument>(volB);
-      expect(persistedA).toEqual(document);
-      expect(persistedB).toEqual(document);
+
+      // The corpus-wide document lives once, at the corpus index slot.
+      const persistedCorpus = await store.readCorpusIndex<IndexDocument>();
+      expect(persistedCorpus).toEqual(document);
+
+      // Each volume's own index.json holds only that volume's own node —
+      // volume A's index does not list volume B's chapters, and vice versa.
+      const persistedA = await store.readIndex<VolumeIndexDocument>(volA);
+      const persistedB = await store.readIndex<VolumeIndexDocument>(volB);
+      expect(persistedA?.volume.volume_id).toBe("volume-a");
+      expect(persistedA?.volume.chapters.map((c) => c.slug)).toEqual(["a1"]);
+      expect(persistedB?.volume.volume_id).toBe("volume-b");
+      expect(persistedB?.volume.chapters.map((c) => c.slug)).toEqual(["b1"]);
+      // Neither per-volume view carries a `volumes` array (that's the
+      // corpus document's shape) — each is scoped to a single `volume`.
+      expect(persistedA).not.toHaveProperty("volumes");
+      expect(persistedB).not.toHaveProperty("volumes");
     });
   });
 
-  test("build() does not write index.json; only reindex() does", async () => {
+  test("build() does not write index.json or the corpus index; only reindex() does", async () => {
     await withStore(async (store) => {
       const volume = toVolumeSlug("v");
       await store.createVolume({ slug: volume, title: "V" });
@@ -235,6 +255,45 @@ describe("StructuralIndexer — end to end via VolumeStore", () => {
       await indexer.build(store);
 
       expect(await store.readIndex(volume)).toBeUndefined();
+      expect(await store.readCorpusIndex()).toBeUndefined();
+    });
+  });
+
+  test("volume routing fields come from VOLUME.md frontmatter, with description as fallback when_to_use", async () => {
+    await withStore(async (store) => {
+      const routed = toVolumeSlug("routed");
+      await store.createVolume({
+        slug: routed,
+        title: "Routed",
+        description: "Fallback description, not used because frontmatter wins.",
+        frontmatter: {
+          when_to_use: "Designing UI: layout, density, navigation.",
+          not_for: "brand identity, illustration",
+          keywords: ["linear", "notion", "density"],
+        },
+      });
+      await store.putChapter(routed, { slug: toChapterSlug("c"), title: "C", body: "prose\n" });
+
+      const fallback = toVolumeSlug("fallback-only");
+      await store.createVolume({
+        slug: fallback,
+        title: "Fallback Only",
+        description: "How Linear and Notion design interfaces.",
+      });
+      await store.putChapter(fallback, { slug: toChapterSlug("c"), title: "C", body: "prose\n" });
+
+      const indexer = new StructuralIndexer();
+      const { document } = await indexer.build(store);
+
+      const routedNode = document.volumes.find((v) => v.volume_id === "routed");
+      expect(routedNode?.when_to_use).toBe("Designing UI: layout, density, navigation.");
+      expect(routedNode?.not_for).toBe("brand identity, illustration");
+      expect(routedNode?.keywords).toEqual(["linear", "notion", "density"]);
+
+      const fallbackNode = document.volumes.find((v) => v.volume_id === "fallback-only");
+      expect(fallbackNode?.when_to_use).toBe("How Linear and Notion design interfaces.");
+      expect(fallbackNode?.not_for).toBeUndefined();
+      expect(fallbackNode?.keywords).toBeUndefined();
     });
   });
 

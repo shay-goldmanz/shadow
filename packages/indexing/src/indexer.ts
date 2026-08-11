@@ -14,8 +14,13 @@ import type { Chapter, VolumeSlug, VolumeStore } from "@shadow/core";
 import { buildChapterIndexNode } from "./chapter-index.ts";
 import { buildIndexDocument } from "./corpus-index.ts";
 import { ChapterIndexBuildError } from "./errors.ts";
-import { coerceRoutingText } from "./routing-fields.ts";
-import type { ChapterIndexNode, IndexDocument, VolumeIndexNode } from "./types.ts";
+import { coerceRoutingText, coerceStringArray } from "./routing-fields.ts";
+import type {
+  ChapterIndexNode,
+  IndexDocument,
+  VolumeIndexDocument,
+  VolumeIndexNode,
+} from "./types.ts";
 import { generateUlid } from "./ulid.ts";
 import { buildVolumeIndexNode } from "./volume-index.ts";
 
@@ -48,12 +53,13 @@ export interface Indexer {
    */
   build(store: VolumeStore): Promise<BuildIndexResult>;
 
-  /** `build`, then persist the result as every volume's `index.json`. */
+  /**
+   * `build`, then persist the result: the corpus-wide document to the
+   * root-level corpus index (`VolumeStore.writeCorpusIndex`), and a
+   * volume-scoped view (just that volume's own node) to each volume's own
+   * `index.json` (`VolumeStore.writeIndex`).
+   */
   reindex(store: VolumeStore): Promise<BuildIndexResult>;
-}
-
-function chapterFilePath(volumeSlug: string, chapterSlug: string): string {
-  return `volumes/${volumeSlug}/chapters/${chapterSlug}.md`;
 }
 
 function getExistingId(frontmatter: Readonly<Record<string, unknown>>): string | undefined {
@@ -80,17 +86,31 @@ export class StructuralIndexer implements Indexer {
 
   async reindex(store: VolumeStore): Promise<BuildIndexResult> {
     const { result, volumeSlugs } = await this.buildInternal(store);
-    // Persist the identical corpus-wide document into every volume's own
-    // index.json. VolumeStore.writeIndex is scoped per volume with no
-    // corpus-level equivalent, and this package must not build a
-    // filesystem path of its own for a hypothetical root-level file — so
-    // this redundant-but-cheap (milliseconds, ~12k tokens per D11a) write
-    // is how every volume's index.json ends up holding the full,
-    // consistent corpus view that docs/INDEXING.md's schema describes.
-    // Flagged in the implementation report as a boundary tension worth
-    // revisiting if `VolumeStore` grows a corpus-level index slot.
-    for (const slug of volumeSlugs) {
-      await store.writeIndex(slug, result.document);
+    // Corpus-wide document goes to the root-level corpus index
+    // (`@shadow/core`'s `writeCorpusIndex`, added in T1.4/f02692f
+    // specifically to close this gap — T2.2 had no corpus-level slot and
+    // wrote the whole corpus document into every volume's own index.json
+    // as a workaround, so volume A's index listed volume B's chapters).
+    await store.writeCorpusIndex(result.document);
+    // Each volume's own index.json gets a *scoped* view — just its own
+    // node, not the corpus. This is still worth writing (not dropped
+    // entirely): it is what a consumer who only cares about one volume
+    // (the web UI's index-tree viewer for that volume, `shadow read`
+    // resolving a citation without needing the whole corpus) reads without
+    // paying for every other volume's chapters, and it is the volume's own
+    // durable historical record independent of corpus growth elsewhere.
+    for (const [i, slug] of volumeSlugs.entries()) {
+      const volumeNode = result.document.volumes[i];
+      if (!volumeNode) {
+        continue; // unreachable: volumeSlugs and document.volumes are built in lockstep in buildInternal
+      }
+      const volumeView: VolumeIndexDocument = {
+        schema_version: result.document.schema_version,
+        generated_at: result.document.generated_at,
+        corpus_hash: result.document.corpus_hash,
+        volume: volumeNode,
+      };
+      await store.writeIndex(slug, volumeView);
     }
     return result;
   }
@@ -117,7 +137,7 @@ export class StructuralIndexer implements Indexer {
               chapterTitle: ensured.chapter.title,
               body: ensured.chapter.body,
               frontmatter: ensured.chapter.frontmatter,
-              file: chapterFilePath(volume.slug, ensured.chapter.slug),
+              file: store.chapterRelativePath(volume.slug, ensured.chapter.slug),
             }),
           );
         } catch (cause) {
@@ -129,16 +149,19 @@ export class StructuralIndexer implements Indexer {
         buildVolumeIndexNode({
           volumeSlug: volume.slug,
           volumeTitle: volume.title,
-          // @shadow/core's Volume carries only title/description — no
-          // dedicated when_to_use/not_for/keywords fields. docs/INDEXING.md
-          // assumes a VOLUME.md file with that frontmatter; core has no
-          // such file or fields (frozen, out of this task's scope).
-          // `description` is the closest available signal, used as a
-          // best-effort `when_to_use`; `not_for`/`keywords` have no source
-          // and are left absent. Flagged in the implementation report.
-          whenToUse: coerceRoutingText(volume.description),
-          notFor: undefined,
-          keywords: undefined,
+          // @shadow/core's Volume now carries an open `frontmatter` record
+          // (T1.4/f02692f), the volume-level counterpart of a chapter's
+          // frontmatter — VOLUME.md round-trips `when_to_use`/`not_for`/
+          // `keywords` the same way a chapter document does. `description`
+          // (the VOLUME.md body, free prose) is kept only as a fallback for
+          // `when_to_use` when the operator hasn't authored routing
+          // frontmatter yet, since it is at least a content-adjacent signal
+          // and better than leaving routing empty.
+          whenToUse:
+            coerceRoutingText(volume.frontmatter.when_to_use) ??
+            coerceRoutingText(volume.description),
+          notFor: coerceRoutingText(volume.frontmatter.not_for),
+          keywords: coerceStringArray(volume.frontmatter.keywords),
           chapters: chapterNodes,
         }),
       );

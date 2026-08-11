@@ -119,3 +119,22 @@ export interface IndexDocument {
   readonly stats: IndexStats;
   readonly volumes: readonly VolumeIndexNode[];
 }
+
+/**
+ * A single volume's `index.json` document — a scoped view over the
+ * corpus-wide `IndexDocument`, holding only that volume's own node rather
+ * than every volume's (T2.2 originally wrote the identical corpus-wide
+ * document into every volume's `index.json`, so volume A's index listed
+ * volume B's chapters; fixed in T2.3, see `indexer.ts`'s `reindex`).
+ *
+ * `corpus_hash` is carried through so a reader can tell whether this
+ * volume-scoped view is still consistent with the corpus-wide index
+ * (`VolumeStore.readCorpusIndex`) it was generated alongside, without
+ * needing to fetch the whole corpus document just to check.
+ */
+export interface VolumeIndexDocument {
+  readonly schema_version: typeof INDEX_SCHEMA_VERSION;
+  readonly generated_at: string; // ISO 8601
+  readonly corpus_hash: string;
+  readonly volume: VolumeIndexNode;
+}

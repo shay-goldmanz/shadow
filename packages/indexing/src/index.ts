@@ -56,6 +56,7 @@ export type {
   IndexStats,
   SectionIndexNode,
   Span,
+  VolumeIndexDocument,
   VolumeIndexNode,
 } from "./types.ts";
 // ---- index.json schema, owned and versioned by this package ----------------
