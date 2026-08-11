@@ -8,9 +8,5 @@
   },
   "scripts": {
     "typecheck": "tsc -p ."
-  },
-  "dependencies": {
-    "@shadow/core": "workspace:*",
-    "@shadow/model": "workspace:*"
   }
 }

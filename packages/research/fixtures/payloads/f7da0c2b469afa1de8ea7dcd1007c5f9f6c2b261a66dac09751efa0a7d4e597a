@@ -1,0 +1,18 @@
+<!doctype html>
+<html>
+<head><title>How Linear designs its UI</title></head>
+<body>
+  <nav><a href="/">Home</a></nav>
+  <main>
+    <article>
+      <h1>How Linear designs its UI</h1>
+      <p>Linear renders its sidebar on a 4px spacing scale. Every measurement
+      is a multiple of four, which removes a whole class of alignment bugs
+      from the design system.</p>
+      <p>Notion, by contrast, leans on generous whitespace rather than a
+      strict grid.</p>
+    </article>
+  </main>
+  <footer>Copyright Linear, Inc.</footer>
+</body>
+</html>

@@ -1,0 +1,13 @@
+{
+  "schemaVersion": "1.0",
+  "query": "how linear designs its UI",
+  "maxResults": 5,
+  "hits": [
+    {
+      "url": "https://example.com/blog/design-system",
+      "title": "How Linear designs its UI",
+      "snippet": "Linear renders its sidebar on a 4px spacing scale."
+    }
+  ],
+  "retrievedAt": "2026-08-11T09:14:22.000Z"
+}

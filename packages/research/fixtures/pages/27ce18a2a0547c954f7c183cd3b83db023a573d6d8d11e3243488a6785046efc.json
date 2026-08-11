@@ -1,0 +1,12 @@
+{
+  "schemaVersion": "1.0",
+  "requestedUrl": "https://example.com/blog/design-system",
+  "finalUrl": "https://example.com/blog/design-system",
+  "httpStatus": 200,
+  "contentType": "text/html; charset=utf-8",
+  "headers": {
+    "content-type": "text/html; charset=utf-8"
+  },
+  "payloadSha256": "sha256:f7da0c2b469afa1de8ea7dcd1007c5f9f6c2b261a66dac09751efa0a7d4e597a",
+  "retrievedAt": "2026-08-11T09:14:22.000Z"
+}
