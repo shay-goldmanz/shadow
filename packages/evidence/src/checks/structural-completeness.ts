@@ -77,7 +77,24 @@ export function checkStructuralCompleteness(input: StructuralCompletenessInput):
     });
   }
 
-  // Duplicate inline markers (same label used more than once as a reference).
+  // Duplicate inline markers (same label used more than once as a
+  // reference) — a **blocking failure**, confirmed deliberate (Wave 1
+  // review, "minor" item). Valid Markdown allows a footnote reference to
+  // repeat ("as noted[^lin-4px] ... and again[^lin-4px]"), and under D18's
+  // claim-is-a-sentence model this check treats every marker occurrence as
+  // if it introduced a second, distinct claim sharing the first's label —
+  // which is wrong for that specific case. We keep it blocking anyway:
+  // D18's load-bearing property is that a label is a *stable identity for
+  // one sentence*, and a second inline reference to the same label is
+  // ambiguous about which of two different sentences the evidence chain
+  // actually attaches to. The alternative — silently accepting repeats — is
+  // a much larger loophole (nothing would stop a label from being reused
+  // for a materially different sentence elsewhere in the chapter, which
+  // duplicate-claim-record's counterpart check below cannot catch from the
+  // marker side alone). If genuine same-sentence back-references turn out
+  // to be common in practice, the fix is to make the auditor pass treat
+  // repeats of an *identical* surrounding sentence as one marker rather
+  // than relaxing this check.
   const markerLabelCounts = new Map<string, number>();
   for (const marker of markers) {
     markerLabelCounts.set(marker.label, (markerLabelCounts.get(marker.label) ?? 0) + 1);

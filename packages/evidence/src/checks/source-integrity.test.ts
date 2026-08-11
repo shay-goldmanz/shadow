@@ -143,6 +143,90 @@ describe("checkSourceIntegrity (C2)", () => {
     expect(result.issues.some((i) => i.code === "unresolved-selector")).toBe(true);
   });
 
+  // ---- D22 (Wave 1 review): fabrication blocks, drift warns ---------------
+
+  test("an unresolved selector against a non-drifted (current) snapshot is still blocking (D22)", () => {
+    const snapshotText = "This text has completely changed and no longer mentions the old quote.";
+    const hash = sha256Of(snapshotText);
+    // The source's *current* snapshot pointer matches exactly what this
+    // evidence pins — no drift — so an unresolved selector here can only
+    // mean fabrication or tampering.
+    const source = makeSource({
+      snapshot: {
+        path: "snapshots/x.txt",
+        payloadSha256: sha256Of("raw"),
+        normalizedTextSha256: hash,
+        normalization: "nfc-ws-v1",
+        chars: snapshotText.length,
+      },
+    });
+    const sidecar = makeSidecar({
+      claims: [
+        makeClaim({
+          label: "x",
+          kind: "sourced",
+          evidence: [
+            makeEvidenceSpan({
+              sourceId: source.id,
+              snapshotHash: hash,
+              selector: makeSelector({
+                exact: "Linear renders its sidebar on a 4px spacing scale.",
+              }),
+            }),
+          ],
+        }),
+      ],
+    });
+    const result = checkSourceIntegrity({
+      sidecar,
+      lookup: fakeLookup([source], { [hash]: snapshotText }),
+    });
+    expect(result.passed).toBe(false);
+    expect(result.issues.some((i) => i.code === "unresolved-selector")).toBe(true);
+    expect(result.warnings?.some((w) => w.code === "source-drifted")).toBe(false);
+  });
+
+  test("a drifted source is a non-blocking warning, not a failure, when the pinned selector still resolves (D22)", () => {
+    const pinnedSnapshotText = "Every measurement in the sidebar is a multiple of four.";
+    const pinnedHash = sha256Of(pinnedSnapshotText);
+    const currentHash = sha256Of("A completely different, later version of this page.");
+    // The source has since been refetched: its record now points at
+    // `currentHash`, but this claim's evidence still pins the older,
+    // still-intact `pinnedHash` snapshot.
+    const source = makeSource({
+      snapshot: {
+        path: "snapshots/current.txt",
+        payloadSha256: sha256Of("raw"),
+        normalizedTextSha256: currentHash,
+        normalization: "nfc-ws-v1",
+        chars: 40,
+      },
+    });
+    const sidecar = makeSidecar({
+      claims: [
+        makeClaim({
+          label: "lin-4px",
+          kind: "sourced",
+          evidence: [
+            makeEvidenceSpan({
+              sourceId: source.id,
+              snapshotHash: pinnedHash,
+              selector: makeSelector({ exact: "multiple of four" }),
+            }),
+          ],
+        }),
+      ],
+    });
+    const result = checkSourceIntegrity({
+      sidecar,
+      lookup: fakeLookup([source], { [pinnedHash]: pinnedSnapshotText }),
+    });
+    // Non-blocking: the pinned snapshot itself still resolves cleanly.
+    expect(result.passed).toBe(true);
+    expect(result.issues.some((i) => i.code === "unresolved-selector")).toBe(false);
+    expect(result.warnings?.some((w) => w.code === "source-drifted")).toBe(true);
+  });
+
   test("numeric sub-check catches a mismatch via the composed check", () => {
     const snapshotText = "A total of 40 respondents completed the survey.";
     const hash = sha256Of(snapshotText);

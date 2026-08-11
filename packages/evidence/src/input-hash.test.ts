@@ -89,6 +89,47 @@ describe("computeInputHash", () => {
     expect(a).not.toBe(b);
   });
 
+  // ---- I-3: the Wave 1 review's verified collision ------------------------
+
+  test("a boundary shift between decontextualized and evidence.exact does not collide (I-3, amendment 8)", () => {
+    // Verified collision under the old plain-space join: these two inputs
+    // differ only in where the word "uses" falls (decontextualized vs.
+    // exact), and used to hash identically.
+    const a = computeInputHash({
+      decontextualized: "Linear uses",
+      evidence: [{ exact: "grid", snapshotHash: HASH_A }],
+      supports: [],
+    });
+    const b = computeInputHash({
+      decontextualized: "Linear",
+      evidence: [{ exact: "uses grid", snapshotHash: HASH_A }],
+      supports: [],
+    });
+    expect(a).not.toBe(b);
+  });
+
+  test("a boundary shift between two evidence entries' exact text does not collide (I-3)", () => {
+    // A single-evidence claim whose exact text is the concatenation of what
+    // a two-evidence claim's entries would be — same characters overall,
+    // different structure. A separator-based join without escaping could
+    // still collide these depending on the separator choice; JSON encoding
+    // cannot, since array/field boundaries are explicit in the output.
+    const a = computeInputHash({
+      decontextualized: "x",
+      evidence: [{ exact: "first factsecond fact", snapshotHash: HASH_A }],
+      supports: [],
+    });
+    const b = computeInputHash({
+      decontextualized: "x",
+      evidence: [
+        { exact: "first fact", snapshotHash: HASH_A },
+        { exact: "second fact", snapshotHash: HASH_A },
+      ],
+      supports: [],
+    });
+    expect(a).not.toBe(b);
+  });
+
   test("evidence order matters", () => {
     const base = { decontextualized: "Two corroborating citations.", supports: [] };
     const a = computeInputHash({

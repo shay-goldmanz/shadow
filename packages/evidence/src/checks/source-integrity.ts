@@ -8,6 +8,28 @@
  * Takes an `EvidenceLookup` rather than the store directly, so this stays a
  * pure, filesystem-free function testable with an in-memory fake — the
  * store (`../store.ts`) is just one implementation of that lookup.
+ *
+ * **Orphan semantics split in two, per D22 (Wave 1 review).** Two distinct
+ * situations used to collapse into one blocking `unresolved-selector`
+ * finding:
+ *
+ * - `selector.exact` fails to resolve **in its pinned snapshot**
+ *   (`unresolved-selector`, blocking): snapshots are immutable and
+ *   content-addressed, so if the quote isn't in the exact bytes stored
+ *   under `span.snapshotHash`, the citation was fabricated or the snapshot
+ *   was tampered with. Neither is survivable — this is what C2 exists to
+ *   catch.
+ * - the **source has drifted** since this evidence was captured
+ *   (`source-drifted`, non-blocking warning): `source.snapshot`'s *current*
+ *   `normalizedTextSha256` no longer matches `span.snapshotHash`, meaning
+ *   the source record has since been updated to point at a newer snapshot
+ *   (see the ledger's `source.drifted` event) while this claim still pins
+ *   the older one. The operator did nothing wrong and the world moved; the
+ *   pinned snapshot itself is untouched and still resolves normally, so
+ *   this is reported as staleness, not fabrication. Detected independently
+ *   of whether the selector resolves, since the two are orthogonal: a
+ *   drifted source's *old* pinned snapshot still contains exactly what it
+ *   always did.
  */
 
 import { type AnchoringConfig, resolveSelector } from "../anchoring.ts";
@@ -60,6 +82,21 @@ function checkEvidenceSpan(
       label,
     });
     return;
+  }
+
+  // D22: the source has since been refetched to different content — its
+  // record's *current* snapshot pointer no longer matches what this
+  // specific evidence span pinned at citation time. This is expected
+  // corpus aging (D16), not fabrication: warn and mark the claim stale
+  // rather than blocking the chapter. Independent of whatever the
+  // resolution check below finds, since the pinned snapshot's own content
+  // never changes regardless of what the live source has done since.
+  if (source.snapshot.normalizedTextSha256 !== span.snapshotHash) {
+    warnings.push({
+      code: "source-drifted",
+      message: `Claim "${label}"'s evidence pins snapshot "${span.snapshotHash}", but source "${span.sourceId}" has since drifted to "${source.snapshot.normalizedTextSha256}" — claim is stale, refetch queued`,
+      label,
+    });
   }
 
   const snapshotText = lookup.getSnapshotText(span.snapshotHash);
