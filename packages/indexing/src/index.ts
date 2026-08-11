@@ -9,13 +9,23 @@
 
 export type { Bm25Document, Bm25Fields, Bm25Hit } from "./bm25.ts";
 export { BM25_B, BM25_FIELD_BOOSTS, BM25_K1, Bm25Index } from "./bm25.ts";
+export type { DisagreementSignal } from "./bm25-fallback.ts";
+export { bm25Fallback, buildFallbackIndex, detectDisagreement } from "./bm25-fallback.ts";
 export { byteLength, bytesToText, sliceBytesToText, toBytes } from "./byte-text.ts";
 export type { BuildChapterIndexNodeInput } from "./chapter-index.ts";
 // ---- building blocks, exported for T2.3/T2.6 and for direct unit testing ---
 export { buildChapterIndexNode, SECTION_TOKEN_THRESHOLD } from "./chapter-index.ts";
+// ---- STAGE 4 (EXPAND): ancestor closure + indented outline rendering -------
+export type { FlatNode, NodeKind } from "./closure.ts";
+export { ancestorClosure, flattenIndex, renderOutline } from "./closure.ts";
 export { buildIndexDocument } from "./corpus-index.ts";
 // ---- errors -----------------------------------------------------------------
-export { ChapterIndexBuildError, InvalidRoutingFieldError, ShadowIndexingError } from "./errors.ts";
+export {
+  ChapterIndexBuildError,
+  InvalidRoutingFieldError,
+  NodeNotFoundError,
+  ShadowIndexingError,
+} from "./errors.ts";
 export {
   combineHashes,
   computeContentHash,
@@ -30,15 +40,44 @@ export { buildHeadingTree, extractHeadings, parseHeadingTree } from "./heading-t
 // ---- the build port -------------------------------------------------------
 export type { BuildIndexResult, Indexer, MintedId } from "./indexer.ts";
 export { StructuralIndexer } from "./indexer.ts";
-// ---- the retrieval seam (T2.3 owns the implementation) ---------------------
+// ---- the retrieval port and its default implementation (T2.3) -------------
 export type {
+  ChapterIndexRow,
   Citation,
+  GradePayload,
   NavigateOptions,
   Navigator,
+  NavigationAgent,
+  NavigatePayload,
+  Rejection,
   RetrievalTrace,
   RetrievalVerdict,
+  RouteDecision,
+  RoutePayload,
+  TraceStep,
+  VolumeManifestRow,
 } from "./navigator.ts";
+export { ReasoningNavigator } from "./navigator.ts";
 export { normalizeForHashing } from "./normalize.ts";
+// ---- STAGE 2/3 payload preparation (route + navigate) ----------------------
+export {
+  buildNavigatePayload,
+  buildRoutePayload,
+  CHAPTER_INDEX_THRESHOLD,
+  shouldSkipRouting,
+} from "./payloads.ts";
+export type { BuildNavigatePayloadOptions } from "./payloads.ts";
+// ---- passage assembly, document order (not relevance order) ----------------
+export type { Passage, PassageSource } from "./passages.ts";
+export { assemblePassages } from "./passages.ts";
+// ---- STAGE 4 (READ): resolve a node_id's structural context and body -------
+export type { ReadContext, ReadResult } from "./read.ts";
+export { readNode, resolveReadContext } from "./read.ts";
+// ---- the round loop: visited[] + rejections, bounded at 3 rounds -----------
+export type { NavigateDecision, RoundState } from "./round-loop.ts";
+export { advanceRound, canContinue, initialRoundState, MAX_ROUNDS } from "./round-loop.ts";
+// ---- STAGE 1: the 1/√(N+1)·Σ rollup -----------------------------------------
+export { rollupScore } from "./rollup.ts";
 export {
   coerceConfidence,
   coerceDateLike,
@@ -49,6 +88,8 @@ export type { SpannedNode } from "./spans.ts";
 export { assignSpans, chapterSpan } from "./spans.ts";
 
 export { estimateTokens } from "./tokens.ts";
+// ---- the retrieval trace and its citations ----------------------------------
+export { buildTrace, citationForChapter, citationForSection } from "./trace.ts";
 export type {
   ChapterIndexNode,
   Confidence,

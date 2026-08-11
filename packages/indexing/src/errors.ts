@@ -48,3 +48,16 @@ export class ChapterIndexBuildError extends ShadowIndexingError {
     });
   }
 }
+
+/**
+ * `shadow read <node_id>` (STAGE 4) was asked for a `node_id` that does
+ * not resolve to any chapter or section in the given `IndexDocument` —
+ * a stale citation, a typo, or a node from a different corpus build.
+ */
+export class NodeNotFoundError extends ShadowIndexingError {
+  override readonly name = "NodeNotFoundError";
+
+  constructor(public readonly nodeId: string) {
+    super(`No node with node_id "${nodeId}" was found in the index`);
+  }
+}
