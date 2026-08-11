@@ -43,6 +43,20 @@ import type {
   SearchResponse,
 } from "./types.ts";
 
+/**
+ * The real global `fetch` satisfies `FetchResponseLike` at runtime, but not
+ * structurally: the DOM types give `Response.body` as `ReadableStream<any>`,
+ * which is not assignable to our `ReadableStream<Uint8Array>` under TS 7's
+ * stricter stream variance.
+ *
+ * Bridged here, at the single boundary where the real `fetch` enters, rather
+ * than by widening `FetchResponseLike` — widening would erase the chunk type
+ * at every read site in `readBodyCapped`, which is exactly where knowing the
+ * chunks are `Uint8Array` matters for the size cap.
+ */
+const globalFetch: FetchLike = (url, init) =>
+  globalThis.fetch(url, init) as unknown as Promise<FetchResponseLike>;
+
 export const DEFAULT_USER_AGENT =
   "ShadowResearchBot/0.1 (+https://github.com/shadow-project/shadow)";
 export const DEFAULT_TIMEOUT_MS = 15_000;
@@ -184,7 +198,7 @@ export class LiveTransport implements RetrievalTransport {
   constructor(private readonly options: LiveTransportOptions = {}) {}
 
   async fetchPage(request: FetchRequest): Promise<FetchedPage> {
-    const fetchImpl = this.options.fetchImpl ?? globalThis.fetch;
+    const fetchImpl = this.options.fetchImpl ?? globalFetch;
     const timeoutMs = this.options.timeoutMs ?? DEFAULT_TIMEOUT_MS;
     const maxBytes = this.options.maxBytes ?? DEFAULT_MAX_BYTES;
     const allowed = this.options.allowedContentTypes ?? DEFAULT_ALLOWED_CONTENT_TYPES;
@@ -269,6 +283,6 @@ export class LiveTransport implements RetrievalTransport {
     if (!this.options.search) {
       throw new LiveSearchUnavailableError(request.query);
     }
-    return this.options.search.search(request, this.options.fetchImpl ?? globalThis.fetch);
+    return this.options.search.search(request, this.options.fetchImpl ?? globalFetch);
   }
 }
