@@ -101,9 +101,22 @@ Volumes carry the same routing fields in `VOLUME.md`.
 
 ### Schema invariants — assert these in tests
 
+**Amendments from implementation (T2.2).** Three details in this document were
+under-specified and were resolved during the build; the resolutions are better than the
+original text and are now normative:
+
+1. **Spans are offsets into `Chapter.body`, not the whole file.** The pseudocode implies
+   whole-file offsets via `body_offset`, but `@shadow/core` never exposes raw file bytes —
+   only the parsed body. Body-relative offsets are also what any consumer actually slices
+   against, through the same store.
+2. **`end_byte` is exclusive (half-open `[start, end)`)**, not "next start minus 1". Required
+   for consistency with a chapter's own `[0, EOF)` span.
+3. **`when_to_use` / `not_for` accept either a YAML string or a string array**, arrays joined
+   with `"; "`. Both forms occur naturally in authored frontmatter.
+
 | Question | Answer |
 |---|---|
-| How does a node address into a chapter? | `file` + `span: {start_byte, end_byte}`, derived at index time |
+| How does a node address into a chapter? | `file` + `span: {start_byte, end_byte}` — body-relative, half-open, derived at index time |
 | What is the citation anchor? | `node_id` + `content_hash` (+ `path` for humans) |
 | Are spans overlapping? | **No.** A section ends one byte before the next heading of level ≤ its own. Markdown headings are unambiguous — we have no PDF page-boundary problem, so do not inherit PageIndex's deliberate 1-page overlap. |
 | Does a parent's span cover its subtree? | **Yes — union semantics.** `chapter.span` covers the whole body. PageIndex ships *both* conventions and it is a live footgun; pick one and assert `parent.span ⊇ ∪ children.span`. |

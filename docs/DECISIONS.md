@@ -538,6 +538,143 @@ with it.
 
 ---
 
+## D18 — A claim is a sentence, marked with a Markdown footnote
+
+**Context.** D9 requires every claim to carry an evidence chain, which forces two questions:
+what is a claim, and how is it marked in a file the operator has to read and edit.
+
+**Decision.** A claim is **a sentence, as written** — not a proposition extracted from it.
+Claims are marked with ordinary Markdown reference footnotes (`[^lin-4px]`), with all
+machine-facing data in a sidecar JSON file beside the chapter.
+
+**Why sentences.** Decomposition granularity is the largest source of variance in this entire
+field: identical text and identical verifier but a different decomposition strategy moves
+scores 33.00 → 61.51, flipping 19% of judgments. It is also trivially gameable — padding with
+obvious subclaims inflates precision, and under attack FActScore drops 83.0 → 36.2. **If we
+never decompose, none of that can happen to us.** The sentence is also the unit the operator
+edits, and D4 exists precisely so they can edit.
+
+**Why footnotes over the alternatives.** An invisible sidecar anchored by quoting the sentence
+would leave the operator unable to see which sentences are grounded — and worse, any edit
+silently orphans the claim, making "operator rephrased this" indistinguishable from "operator
+wrote something new and unsourced." Custom inline markers (`{{claim:clm_01HQ8ZK}}`) render as
+garbage and put a ULID in prose a human must read. Footnotes are valid Markdown, render as
+citations, and are idiomatic.
+
+**The load-bearing property** is that the label is a short, stable, human-chosen string the
+operator keeps while rewriting the sentence around it. That is what tells us "same claim,
+restated" with certainty instead of by inference.
+
+**Cost.** A sentence carrying two propositions where only one is supported gets a single
+verdict. That is what `partial` is for — and `partial` is the lowest-agreement label in every
+published scheme, so it is where our judge will be weakest. Accepted; the alternative is worse.
+
+---
+
+## D19 — The writer does not decide what needs evidence
+
+**Context.** Not every sentence is an empirical claim. Connective prose, the operator's stated
+preferences, and definitional statements exist. Requiring evidence for all of it is both wrong
+and expensive — but any exemption rule the writer controls becomes a loophole that swallows
+the rule.
+
+**Decision.** The writer marks what it cites. A **separate auditor pass independently
+classifies every unmarked sentence** as check-required or not. Disagreement is a failure, not
+a negotiation: a sentence the auditor says needed a chain and the writer left unmarked is an
+orphan claim, and the chapter fails.
+
+**Silence is what gets audited.** That is the structural reason the writer cannot exempt itself.
+
+Four claim kinds, three of which require something:
+
+| kind | Requires |
+|---|---|
+| `sourced` | ≥1 evidence span that entails it |
+| `derived` | ≥1 supporting claim in the same chapter, and no scope beyond them |
+| `operator` | **a citation into the session turn where the operator actually said it** |
+| `narrative` | nothing |
+
+**`operator` is the decision that matters most here.** Shadow's whole product is distilling
+the operator's beliefs, so a category for "this is what they think" is unavoidable — but
+free-form, it licenses writing anything and calling it belief. So operator claims cite the
+chat transcript, stored as a source like any other with `transport: "session"` and verified at
+Tier 0 by exact quote match. **Shadow cannot mint a belief the operator never expressed, for
+the same structural reason it cannot mint a citation to a page it never fetched.** This
+extends D9's guardrail: the transcript is the second and only other legitimate origin of a
+source record.
+
+`narrative` is bounded by form-based exclusion, the auditor sweep, and a **visible budget** —
+`narrativeRatio` is reported per chapter. Classification need not be perfect; abuse only has
+to be visible.
+
+**One subtle rule with outsized effect:** `checkRequired: false` sentences are excluded from
+**both** numerator and denominator of every groundedness metric. Collapsing "not check-worthy"
+into "unsupported" is the most damaging labelling error in this space — do it and every
+well-written chapter, the ones with topic sentences and transitions, scores as ungrounded,
+pushing Shadow toward stilted citation-stuffed prose.
+
+**Cost.** An extra classification pass over unmarked sentences. Batched into the existing
+judge session, and only over sentences that are new or changed.
+
+---
+
+## D20 — Three cost tiers, memoized on an input hash
+
+**Context.** D6 says a fresh model session costs ~18k cache-write tokens. An audit that
+re-judged every claim on every edit would be unusable.
+
+**Decision.** Tier 0 is pure code and runs always, including in every offline test. Tier 2 is
+a single batched LLM judge session that runs **only over claims whose verification inputs
+changed**, keyed on
+`inputHash = sha256(decontextualized ‖ evidence spans ‖ snapshot hash ‖ supports)`.
+
+Tier 1 — a small local entailment model as a cheap pre-filter — is **deliberately deferred**,
+because it would introduce a non-subscription model dependency that cuts against D5. It is the
+lever to pull if judge cost becomes a problem.
+
+**Why this matters beyond cost.** The tier split means **the entire completeness property and
+the entire anti-fabrication property live in Tier 0** — structural checks, span resolution
+against stored snapshots, and exact-quote verification of operator claims. All of it is
+testable in `bun test` with no network and no model. The expensive, fuzzy, model-dependent
+part is only the *semantic* judgment of whether a span entails a claim.
+
+**Cost.** Rewriting prose without changing a claim or its evidence re-runs nothing; a typical
+edit judges 1–5 claims. The expensive case is the first full audit of a new chapter, once.
+
+---
+
+## D21 — Guardrails against optimizing the audit into uselessness
+
+**Context.** D9's repair rule restates unsupported claims conservatively against their source.
+D15 already found that this pushes toward irrelevance. There are two further ways a naive
+repair loop degrades the product while improving its metrics.
+
+**Decision.** Two guardrails, both measured.
+
+**1. Preservation bound.** RARR states the attack plainly: *"an adversarial editor could
+ensure 100% attribution by simply replacing the input with the text of any arbitrary retrieved
+document, which is trivially attributable to itself."* Reject any restatement whose Levenshtein
+distance from the original exceeds `max(80 chars, 0.5 × original length)` and escalate to the
+operator. Log the distance either way. The published comparison is stark: one system scored
+*higher* raw attribution while destroying intent (preservation 16.0 vs 90.0; combined F1 17.1
+vs 57.0).
+
+**2. Extractiveness as a watched metric, never a target.** Track mean longest-common-substring
+between a claim and its cited span. Citation precision and *perceived utility* correlate at
+**r ≈ −0.96** across production generative search engines — the system with the highest
+citation precision had the lowest utility, because heavily-grounded statements trend toward
+near-verbatim copying. Vectara say the same of their own leaderboard: a copy-paste summarizer
+scores 0% hallucination.
+
+**The rule to internalize:** if Shadow's volumes get more grounded and less useful, the metric
+is working and the product is failing. Extractiveness rising alongside groundedness is that
+signal, and it is why extractiveness is reported next to every groundedness number rather than
+buried.
+
+**Cost.** Two cheap computations and one metric that exists to make us uncomfortable.
+
+---
+
 ## D12 — The CLI is composable, and steers its caller in-band
 
 **Context.** The CLI's consumer is a language model with a token budget, not a human.
