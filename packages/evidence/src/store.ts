@@ -14,7 +14,12 @@
  * (`layout.ts`) — never by joining strings inline here.
  */
 
-import type { ChapterSlug, VolumePathResolver, VolumeSlug } from "@shadow/core";
+import {
+  type ChapterSlug,
+  toChapterSlug,
+  type VolumePathResolver,
+  type VolumeSlug,
+} from "@shadow/core";
 import type { AuditRecord } from "./checks/audit.ts";
 import type { EvidenceLookup } from "./checks/source-integrity.ts";
 import { type Sha256Digest, sha256Of } from "./digest.ts";
@@ -187,8 +192,23 @@ export class FileSystemEvidenceStore implements EvidenceStore {
   }
 
   async putClaims(volume: VolumeSlug, sidecar: ClaimSidecar): Promise<void> {
-    const chapter = sidecar.chapter as ChapterSlug;
+    // `sidecar.chapter` is a bare string from JSON (see `getClaims`'s "trust
+    // boundary" comment below) — re-validate it into a real `ChapterSlug`
+    // here rather than casting, since this value flows straight into
+    // `layout.claimsPath`, a write path (Wave 1 review, C-3). `claimsPath`
+    // re-validates too (`layout.ts`), so this call would already be safe
+    // without this line — but doing it here as well means a malformed
+    // `chapter` fails *before* the diff-against-previous work below runs,
+    // with a clearer error, rather than only at the write itself.
+    const chapter = toChapterSlug(sidecar.chapter);
     const previous = await this.getClaims(volume, chapter);
+
+    // Write the sidecar itself before appending any retirement events. If
+    // this write fails, nothing below runs — no ledger line ever claims a
+    // retirement that didn't actually happen (Wave 1 review, "minor" item).
+    const layout = await this.layoutFor(volume);
+    await Bun.write(layout.claimsPath(chapter), `${JSON.stringify(sidecar, null, 2)}\n`);
+
     if (previous) {
       const currentLabels = new Set(sidecar.claims.map((c) => c.label));
       for (const claim of previous.claims) {
@@ -203,9 +223,6 @@ export class FileSystemEvidenceStore implements EvidenceStore {
         }
       }
     }
-
-    const layout = await this.layoutFor(volume);
-    await Bun.write(layout.claimsPath(chapter), `${JSON.stringify(sidecar, null, 2)}\n`);
   }
 
   async getRetiredLabels(volume: VolumeSlug, chapter: ChapterSlug): Promise<ReadonlySet<string>> {
@@ -253,14 +270,15 @@ export class FileSystemEvidenceStore implements EvidenceStore {
     const layout = await this.layoutFor(volume);
     const path = layout.ledgerPath();
     const line = `${JSON.stringify(event)}\n`;
-    const existing = Bun.file(path);
-    if (await existing.exists()) {
-      // Bun.write always overwrites; append via the underlying Node fs API.
-      const { appendFile } = await import("node:fs/promises");
-      await appendFile(path, line, "utf8");
-    } else {
-      await Bun.write(path, line);
-    }
+    // `Bun.write` always overwrites, so appending needs the underlying Node
+    // fs API regardless of whether the file exists yet. The previous
+    // version branched on an `exists()` check first — a TOCTOU race (the
+    // file could be created between the check and the write by a
+    // concurrent append) and dead weight, since `flag: "a"` already creates
+    // the file if it's missing and appends if it isn't, atomically, in one
+    // syscall (Wave 1 review, "minor" item).
+    const { appendFile } = await import("node:fs/promises");
+    await appendFile(path, line, { encoding: "utf8", flag: "a" });
   }
 
   async readLedger(volume: VolumeSlug): Promise<LedgerEvent[]> {

@@ -100,4 +100,41 @@ describe("resolveSelector", () => {
     const result = resolveSelector(selector({ exact: "" }), "some text");
     expect(result.status).toBe("orphaned");
   });
+
+  // ---- C-2 performance regression (Wave 1 review) --------------------------
+  //
+  // Measured before the fix: a 68-char orphaned selector against a
+  // 66,489-character snapshot took 66,510 ms (unpruned O(n·m) Levenshtein
+  // over every start position and every candidate window length). Tier 0 is
+  // specified as "milliseconds, always, in every offline test"
+  // (`docs/EVIDENCE.md`), and the orphan case is the *common* case as
+  // sources age (amendment 9) — so this is exactly the path that must stay
+  // fast. The bound below (1000ms) is deliberately generous for a CI
+  // machine; the fix (k-gram pre-filter + early-abandon bounded Levenshtein,
+  // see `anchoring.ts`) brings this down to low single-digit milliseconds
+  // locally.
+  test("an orphaned selector against a large snapshot resolves well under a second (C-2)", () => {
+    // A deterministic ~64k-character snapshot built from repeating,
+    // varied prose — large enough to reproduce the reported blowup, with no
+    // network or fixture file required.
+    const paragraph =
+      "Linear renders its sidebar navigation on a strict spacing scale, and every " +
+      "measurement in the interface follows the same underlying grid so that " +
+      "nothing ever feels arbitrary or hand-placed by a designer in a hurry. ";
+    const snapshotText = paragraph.repeat(Math.ceil(66_489 / paragraph.length)).slice(0, 66_489);
+    expect(snapshotText.length).toBe(66_489);
+
+    // A ~68-character quote that does not occur anywhere in the snapshot,
+    // matching the reported reproduction shape (orphaned selector).
+    const exact =
+      "Notion abandons the grid entirely in favor of freeform whitespace, always.".slice(0, 68);
+    expect(exact.length).toBe(68);
+
+    const start = performance.now();
+    const result = resolveSelector(selector({ exact }), snapshotText);
+    const elapsedMs = performance.now() - start;
+
+    expect(result.status).toBe("orphaned");
+    expect(elapsedMs).toBeLessThan(1000);
+  });
 });

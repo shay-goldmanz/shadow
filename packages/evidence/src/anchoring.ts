@@ -34,7 +34,7 @@
  * rationale for each.
  */
 
-import { levenshteinDistance } from "./edit-distance.ts";
+import { boundedLevenshteinDistance, levenshteinDistance } from "./edit-distance.ts";
 import type { AnchorStatus, TextQuoteSelector } from "./types.ts";
 
 export interface DisambiguationWeights {
@@ -170,11 +170,61 @@ interface FuzzyCandidate {
 }
 
 /**
+ * Length of the k-grams used by `hasPlausibleFuzzyCandidate` below to
+ * decide whether a fuzzy search is worth attempting at all. Shorter is more
+ * lenient (survives more scattered edits) but cheapens the filter's power;
+ * longer is a tighter filter but risks missing a real match if edits are
+ * dense. 8 is a small fraction of a typical cited sentence (tens of
+ * characters), so a handful of edits still leaves multiple unbroken 8-char
+ * runs intact — see the module doc's "Context length... tunable
+ * configuration" note; this constant is the same kind of calibrated
+ * starting point, not an established one.
+ */
+const FUZZY_PREFILTER_KGRAM_LENGTH = 8;
+
+/**
+ * Cheap pre-check: does *any* contiguous substring of `exact`, of length
+ * `FUZZY_PREFILTER_KGRAM_LENGTH` (or all of `exact`, if shorter), occur
+ * anywhere in `text`? Tried at every possible offset within `exact` (not
+ * sampled), so any unbroken run of that length shared between the original
+ * quote and its edited descendant is guaranteed to be found regardless of
+ * where the edits fall.
+ *
+ * If nothing survives intact, no candidate window within the accepted
+ * fuzzy-match threshold can exist either — a match close enough to accept
+ * (`fuzzyAcceptThreshold`, default 0.6 similarity) necessarily preserves
+ * some unbroken run at least this long. This turns the common case — the
+ * common case *specifically because sources age* (`docs/EVIDENCE.md`
+ * amendment 9) — of `exact` simply not being in `text` anymore from an
+ * O(slack · |text| · |exact|) nested Levenshtein scan into an
+ * O(|exact| · |text|) pass of native substring search, which is what made a
+ * single orphaned 68-char selector against a 66,489-character snapshot take
+ * 66 seconds (measured, Wave 1 review, C-2) instead of the low
+ * milliseconds Tier 0 is specified to cost.
+ */
+function hasPlausibleFuzzyCandidate(text: string, exact: string): boolean {
+  const kgramLen = Math.min(FUZZY_PREFILTER_KGRAM_LENGTH, exact.length);
+  if (kgramLen === 0) return false;
+  for (let i = 0; i + kgramLen <= exact.length; i++) {
+    if (text.includes(exact.slice(i, i + kgramLen))) return true;
+  }
+  return false;
+}
+
+/**
  * Bounded approximate search: tries candidate windows whose length is
  * within `slack` of `exact.length` (further capped by `budget`, since a
  * window further off in length than the edit budget could never score
- * within it anyway), scanning every start position. O(slack · N · M) — fine
- * at fixture/chapter scale, not intended for whole-corpus scanning.
+ * within it anyway), scanning every start position. Guarded by
+ * `hasPlausibleFuzzyCandidate` above (skips the scan entirely when no
+ * candidate could possibly clear the fuzzy-accept threshold) and scores
+ * each candidate with `boundedLevenshteinDistance` (abandons a hopeless
+ * candidate mid-computation rather than always running the full O(n·m) DP).
+ * Still O(slack · N · M) in the worst case where many candidates are
+ * genuinely close — fine at fixture/chapter scale, not intended for
+ * whole-corpus scanning — but the orphan case, which is the one this
+ * package is specified to keep cheap ("milliseconds, always" — Tier 0),
+ * now short-circuits before that scan ever starts.
  */
 function findFuzzyMatch(
   text: string,
@@ -182,6 +232,8 @@ function findFuzzyMatch(
   budget: number,
   slack: number,
 ): FuzzyCandidate | undefined {
+  if (!hasPlausibleFuzzyCandidate(text, exact)) return undefined;
+
   const span = Math.min(slack, budget);
   const minLen = Math.max(1, exact.length - span);
   const maxLen = exact.length + span;
@@ -189,7 +241,12 @@ function findFuzzyMatch(
 
   for (let len = minLen; len <= maxLen; len++) {
     for (let start = 0; start + len <= text.length; start++) {
-      const distance = levenshteinDistance(exact, text.slice(start, start + len));
+      const currentBudget = best ? Math.min(budget, best.distance) : budget;
+      const distance = boundedLevenshteinDistance(
+        exact,
+        text.slice(start, start + len),
+        currentBudget,
+      );
       if (distance <= budget && (!best || distance < best.distance)) {
         best = { start, end: start + len, distance };
         if (distance === 0) return best;

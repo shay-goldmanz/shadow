@@ -20,9 +20,18 @@ export function sha256Of(input: string | Uint8Array): Sha256Digest {
   return `sha256:${hasher.digest("hex")}` as Sha256Digest;
 }
 
-/** The bare hex portion of a digest — this is the content-addressed snapshot filename. */
+/**
+ * The bare hex portion of a digest — this is the content-addressed snapshot
+ * filename. Re-validates `digest` even though its type is already branded:
+ * the brand is erased at runtime and can be defeated by an unsafe cast or a
+ * value deserialized straight from JSON (`sidecar.evidence[].snapshotHash`
+ * loaded off disk, for instance) — this is one of the join sites where a
+ * forged value would otherwise flow straight into a filesystem path (see
+ * `layout.ts`'s `snapshotPath`, and `docs/DECISIONS.md` D23/the Wave 1
+ * review's C-3 finding). @throws {InvalidDigestError}
+ */
 export function digestHex(digest: Sha256Digest): string {
-  return digest.slice("sha256:".length);
+  return toDigest(digest).slice("sha256:".length);
 }
 
 /** Validate a raw string as a digest and brand it. @throws {InvalidDigestError} */
