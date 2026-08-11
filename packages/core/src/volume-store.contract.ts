@@ -9,7 +9,12 @@
  */
 
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { ChapterNotFoundError, VolumeAlreadyExistsError, VolumeNotFoundError } from "./errors.ts";
+import {
+  ChapterNotFoundError,
+  ReservedFrontmatterKeyError,
+  VolumeAlreadyExistsError,
+  VolumeNotFoundError,
+} from "./errors.ts";
 import { toChapterSlug, toVolumeSlug } from "./slug.ts";
 import { expectRejection } from "./test-helpers.ts";
 import type { VolumeStore } from "./volume-store.ts";
@@ -328,6 +333,108 @@ export function runVolumeStoreContractTests(
         const { store } = harness;
         await expectRejection(store.readIndex(toVolumeSlug("missing")), VolumeNotFoundError);
         await expectRejection(store.writeIndex(toVolumeSlug("missing"), {}), VolumeNotFoundError);
+      });
+    });
+
+    describe("corpus index", () => {
+      test("readCorpusIndex returns undefined before any write", async () => {
+        const { store } = harness;
+        expect(await store.readCorpusIndex()).toBeUndefined();
+      });
+
+      test("write/read round-trip of an opaque, caller-typed JSON value", async () => {
+        const { store } = harness;
+        interface FakeCorpusIndex {
+          version: number;
+          volumes: string[];
+        }
+        const index: FakeCorpusIndex = { version: 1, volumes: ["alpha", "zeta"] };
+        await store.writeCorpusIndex(index);
+
+        expect(await store.readCorpusIndex<FakeCorpusIndex>()).toEqual(index);
+      });
+
+      test("is independent of any single volume's per-volume index.json", async () => {
+        const { store } = harness;
+        const volume = toVolumeSlug("vol");
+        await store.createVolume({ slug: volume, title: "Vol" });
+
+        interface Scoped {
+          scope: string;
+        }
+
+        await store.writeIndex(volume, { scope: "per-volume" } satisfies Scoped);
+        await store.writeCorpusIndex({ scope: "corpus" } satisfies Scoped);
+
+        expect(await store.readIndex<Scoped>(volume)).toEqual({ scope: "per-volume" });
+        expect(await store.readCorpusIndex<Scoped>()).toEqual({ scope: "corpus" });
+
+        // Overwriting one must never disturb the other.
+        await store.writeCorpusIndex({ scope: "corpus-v2" } satisfies Scoped);
+        expect(await store.readIndex<Scoped>(volume)).toEqual({ scope: "per-volume" });
+        expect(await store.readCorpusIndex<Scoped>()).toEqual({ scope: "corpus-v2" });
+
+        await store.writeIndex(volume, { scope: "per-volume-v2" } satisfies Scoped);
+        expect(await store.readCorpusIndex<Scoped>()).toEqual({ scope: "corpus-v2" });
+      });
+    });
+
+    describe("reserved frontmatter keys (open record must never shadow typed fields)", () => {
+      test("putChapter rejects a frontmatter record that would smuggle a fake title past the real one", async () => {
+        const { store } = harness;
+        const volume = toVolumeSlug("vol");
+        await store.createVolume({ slug: volume, title: "Vol" });
+
+        await expectRejection(
+          store.putChapter(volume, {
+            slug: toChapterSlug("c1"),
+            title: "Real Title",
+            body: "body",
+            frontmatter: { title: "Smuggled Title" },
+          }),
+          ReservedFrontmatterKeyError,
+        );
+        // Rejected before any write — nothing persisted under this slug.
+        await expectRejection(store.getChapter(volume, toChapterSlug("c1")), ChapterNotFoundError);
+      });
+
+      test("putChapter rejects a non-string createdAt/updatedAt in the open frontmatter record", async () => {
+        const { store } = harness;
+        const volume = toVolumeSlug("vol");
+        await store.createVolume({ slug: volume, title: "Vol" });
+
+        await expectRejection(
+          store.putChapter(volume, {
+            slug: toChapterSlug("c1"),
+            title: "T",
+            body: "body",
+            frontmatter: { createdAt: 12345 },
+          }),
+          ReservedFrontmatterKeyError,
+        );
+      });
+
+      test("createVolume rejects a frontmatter record that sets a reserved key", async () => {
+        const { store } = harness;
+        const slug = toVolumeSlug("smuggled-vol");
+
+        await expectRejection(
+          store.createVolume({ slug, title: "Real Title", frontmatter: { title: "Smuggled" } }),
+          ReservedFrontmatterKeyError,
+        );
+        await expectRejection(store.getVolume(slug), VolumeNotFoundError);
+      });
+
+      test("updateVolume rejects a frontmatter patch that sets a reserved key, leaving the volume unchanged", async () => {
+        const { store } = harness;
+        const slug = toVolumeSlug("vol-update");
+        const created = await store.createVolume({ slug, title: "Before" });
+
+        await expectRejection(
+          store.updateVolume(slug, { frontmatter: { updatedAt: "not-a-real-timestamp" } }),
+          ReservedFrontmatterKeyError,
+        );
+        expect(await store.getVolume(slug)).toEqual(created);
       });
     });
   });

@@ -11,6 +11,7 @@ export {
   ChapterNotFoundError,
   ChapterParseError,
   InvalidSlugError,
+  ReservedFrontmatterKeyError,
   ShadowCoreError,
   VolumeAlreadyExistsError,
   VolumeNotFoundError,

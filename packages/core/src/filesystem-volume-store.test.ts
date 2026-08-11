@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { mkdir, mkdtemp, rm, stat } from "node:fs/promises";
+import { mkdtemp, rm, stat } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { InvalidSlugError, VolumeNotFoundError } from "./errors.ts";
@@ -45,69 +45,6 @@ describe("FileSystemVolumeStore (filesystem-specific)", () => {
       expect(await Bun.file(join(volumeDir, "chapters", "intro.md")).exists()).toBe(true);
       expect(await Bun.file(join(volumeDir, "index.json")).exists()).toBe(true);
       expect((await stat(join(volumeDir, "evidence"))).isDirectory()).toBe(true);
-      // volume.json is legacy-read-only; this version must never write it.
-      expect(await Bun.file(join(volumeDir, "volume.json")).exists()).toBe(false);
-    } finally {
-      await rm(root, { recursive: true, force: true });
-    }
-  });
-
-  test("reads a legacy volume.json volume written before VOLUME.md existed", async () => {
-    const root = await makeTempRoot();
-    try {
-      const store = new FileSystemVolumeStore(root);
-      const volume = toVolumeSlug("legacy-vol");
-      const volumeDir = join(root, "volumes", volume);
-      await mkdir(volumeDir, { recursive: true });
-      await Bun.write(
-        join(volumeDir, "volume.json"),
-        `${JSON.stringify(
-          {
-            slug: "legacy-vol",
-            title: "Legacy Volume",
-            description: "written by an earlier version",
-            createdAt: "2026-01-01T00:00:00.000Z",
-            updatedAt: "2026-01-02T00:00:00.000Z",
-          },
-          null,
-          2,
-        )}\n`,
-      );
-
-      const read = await store.getVolume(volume);
-      expect(read.title).toBe("Legacy Volume");
-      expect(read.description).toBe("written by an earlier version");
-      // A legacy volume has no frontmatter concept; it reads as empty.
-      expect(read.frontmatter).toEqual({});
-      expect(read.createdAt.toISOString()).toBe("2026-01-01T00:00:00.000Z");
-    } finally {
-      await rm(root, { recursive: true, force: true });
-    }
-  });
-
-  test("migrates a legacy volume to VOLUME.md on update, removing the stale volume.json", async () => {
-    const root = await makeTempRoot();
-    try {
-      const store = new FileSystemVolumeStore(root);
-      const volume = toVolumeSlug("migrate-me");
-      const volumeDir = join(root, "volumes", volume);
-      await mkdir(volumeDir, { recursive: true });
-      await Bun.write(
-        join(volumeDir, "volume.json"),
-        `${JSON.stringify({
-          slug: "migrate-me",
-          title: "Before",
-          description: "",
-          createdAt: "2026-01-01T00:00:00.000Z",
-          updatedAt: "2026-01-01T00:00:00.000Z",
-        })}\n`,
-      );
-
-      await store.updateVolume(volume, { title: "After" });
-
-      expect(await Bun.file(join(volumeDir, "VOLUME.md")).exists()).toBe(true);
-      expect(await Bun.file(join(volumeDir, "volume.json")).exists()).toBe(false);
-      expect((await store.getVolume(volume)).title).toBe("After");
     } finally {
       await rm(root, { recursive: true, force: true });
     }

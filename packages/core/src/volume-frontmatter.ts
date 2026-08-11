@@ -22,12 +22,10 @@
  * `not_for`, `keywords`, ...) that this package must never touch or drop
  * (`docs/INDEXING.md`).
  *
- * The body after the closing fence is the volume's `description` — the
- * same free-text field `volume.json` (the legacy format still read by
- * `FileSystemVolumeStore` for backward compatibility) stored as a JSON
- * string. Moving it to the document body rather than a frontmatter field
- * keeps this format's shape identical to a chapter's: typed fields in
- * frontmatter, prose as the body.
+ * The body after the closing fence is the volume's `description` — moving it
+ * to the document body rather than a frontmatter field keeps this format's
+ * shape identical to a chapter's: typed fields in frontmatter, prose as the
+ * body.
  *
  * Uses `Bun.YAML` (bundled with the Bun runtime since 1.3 — see D7) rather
  * than a YAML dependency.

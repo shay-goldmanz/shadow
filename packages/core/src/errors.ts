@@ -86,3 +86,32 @@ export class VolumeParseError extends ShadowCoreError {
     super(`Failed to parse volume "${volumeSlug}": ${reason}`);
   }
 }
+
+/**
+ * `putChapter`/`createVolume`/`updateVolume` was given an open `frontmatter`
+ * record that sets one of the reserved document keys (`title`, `createdAt`,
+ * `updatedAt`). Those are typed fields this package owns, not part of the
+ * open record — letting one through would let a caller silently overwrite
+ * the document's real title/timestamps on write (`serializeChapterDocument`/
+ * `serializeVolumeDocument` write typed fields first, open record second),
+ * or write a value (e.g. a non-string `createdAt`) that this package can no
+ * longer parse back on the very next read. Rejected rather than silently
+ * stripped: silently discarding operator/agent-authored frontmatter is its
+ * own failure mode, and a caller that meant to set the real title should
+ * see that immediately rather than have it vanish.
+ */
+export class ReservedFrontmatterKeyError extends ShadowCoreError {
+  override readonly name = "ReservedFrontmatterKeyError";
+
+  constructor(
+    public readonly kind: "chapter" | "volume",
+    public readonly slug: string,
+    public readonly keys: readonly string[],
+  ) {
+    super(
+      `Cannot write ${kind} "${slug}": frontmatter must not set reserved key(s) ` +
+        `${keys.map((key) => JSON.stringify(key)).join(", ")} — title/createdAt/updatedAt are ` +
+        `typed fields owned by @shadow/core, not part of the open frontmatter record.`,
+    );
+  }
+}

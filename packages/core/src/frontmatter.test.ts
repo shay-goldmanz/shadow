@@ -1,7 +1,8 @@
 import { describe, expect, test } from "bun:test";
-import { ChapterParseError } from "./errors.ts";
+import { ChapterParseError, VolumeParseError } from "./errors.ts";
 import { parseChapterDocument, serializeChapterDocument } from "./frontmatter.ts";
-import { toChapterSlug } from "./slug.ts";
+import { toChapterSlug, toVolumeSlug } from "./slug.ts";
+import { parseVolumeDocument } from "./volume-frontmatter.ts";
 
 const slug = toChapterSlug("chapter-one");
 
@@ -117,5 +118,41 @@ describe("serializeChapterDocument / parseChapterDocument", () => {
     const missingTitle =
       "---\ncreatedAt: 2026-01-01T00:00:00.000Z\nupdatedAt: 2026-01-01T00:00:00.000Z\n---\nbody\n";
     expect(() => parseChapterDocument(slug, missingTitle)).toThrow(ChapterParseError);
+  });
+
+  test("an empty frontmatter block (fences with nothing between them) is syntactically valid delimiting, but still rejected for missing required fields", () => {
+    // `---\n---\n` only ever occurs in a hand-edited file (D4) — this
+    // package always writes at least `title`. Decision: don't accept it as
+    // a valid Chapter (title/createdAt/updatedAt are still mandatory), but
+    // the delimiter regex must recognize it as *present-but-empty*
+    // frontmatter rather than misreporting "missing frontmatter block", so
+    // the error an operator sees names the actual problem.
+    let error: unknown;
+    try {
+      parseChapterDocument(slug, "---\n---\nbody");
+    } catch (caught) {
+      error = caught;
+    }
+    expect(error).toBeInstanceOf(ChapterParseError);
+    expect((error as ChapterParseError).reason).toContain("must be a mapping");
+    expect((error as ChapterParseError).reason).not.toContain("missing YAML frontmatter");
+  });
+});
+
+// `FRONTMATTER_PATTERN` (`frontmatter-shared.ts`) is shared verbatim between
+// the chapter and volume document formats — confirm the empty-block fix
+// applies to `parseVolumeDocument` too, not just its chapter counterpart.
+describe("parseVolumeDocument shares the same empty-frontmatter-block fix", () => {
+  test("an empty frontmatter block is syntactically valid delimiting, but still rejected for missing required fields", () => {
+    const volumeSlug = toVolumeSlug("vol-one");
+    let error: unknown;
+    try {
+      parseVolumeDocument(volumeSlug, "---\n---\ndescription");
+    } catch (caught) {
+      error = caught;
+    }
+    expect(error).toBeInstanceOf(VolumeParseError);
+    expect((error as VolumeParseError).reason).toContain("must be a mapping");
+    expect((error as VolumeParseError).reason).not.toContain("missing YAML frontmatter");
   });
 });

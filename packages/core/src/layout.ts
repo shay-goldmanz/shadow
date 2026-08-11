@@ -5,7 +5,7 @@
  * <root>/
  *   index.json                    corpus-wide index, spans every volume
  *   volumes/<volume-slug>/
- *     VOLUME.md                   frontmatter + description (legacy volume.json still read)
+ *     VOLUME.md                   frontmatter + description
  *     chapters/<chapter-slug>.md
  *     index.json                  per-volume index
  *     evidence/
@@ -31,11 +31,6 @@ export class VolumeLayout {
 
   volumeDir(slug: VolumeSlug): string {
     return join(this.volumesDir(), toVolumeSlug(slug));
-  }
-
-  /** Legacy on-disk volume record, superseded by `volumeDocPath` — still read for backward compatibility. */
-  volumeMetaPath(slug: VolumeSlug): string {
-    return join(this.volumeDir(slug), "volume.json");
   }
 
   /** Canonical on-disk volume document: Markdown + YAML frontmatter, matching a chapter's shape. */

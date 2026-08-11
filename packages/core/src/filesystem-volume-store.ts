@@ -4,26 +4,13 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 import { ChapterNotFoundError, VolumeAlreadyExistsError, VolumeNotFoundError } from "./errors.ts";
 import { parseChapterDocument, serializeChapterDocument } from "./frontmatter.ts";
+import { assertNoReservedFrontmatterKeys } from "./frontmatter-shared.ts";
 import { VolumeLayout } from "./layout.ts";
 import type { ChapterSlug, VolumeSlug } from "./slug.ts";
 import { isValidChapterSlug, isValidVolumeSlug, toChapterSlug, toVolumeSlug } from "./slug.ts";
 import type { Chapter, ChapterInput, Volume, VolumeInput, VolumeUpdate } from "./types.ts";
 import { parseVolumeDocument, serializeVolumeDocument } from "./volume-frontmatter.ts";
 import type { VolumeStore } from "./volume-store.ts";
-
-/**
- * Legacy on-disk shape of `volume.json`, from before `VOLUME.md` existed.
- * Dates are ISO strings; everything else matches `Volume` minus
- * `frontmatter`, which legacy volumes don't have (treated as `{}` on read).
- * Still read for backward compatibility; never written by this version.
- */
-interface VolumeRecord {
-  slug: string;
-  title: string;
-  description: string;
-  createdAt: string;
-  updatedAt: string;
-}
 
 function isErrnoException(error: unknown): error is NodeJS.ErrnoException {
   return error instanceof Error && "code" in error;
@@ -60,12 +47,14 @@ export class FileSystemVolumeStore implements VolumeStore {
     if (await this.volumeRecordExists(input.slug)) {
       throw new VolumeAlreadyExistsError(input.slug);
     }
+    const frontmatter = input.frontmatter ?? {};
+    assertNoReservedFrontmatterKeys(frontmatter, "volume", input.slug);
     const now = new Date();
     const volume: Volume = {
       slug: input.slug,
       title: input.title,
       description: input.description ?? "",
-      frontmatter: input.frontmatter ?? {},
+      frontmatter,
       createdAt: now,
       updatedAt: now,
     };
@@ -87,7 +76,7 @@ export class FileSystemVolumeStore implements VolumeStore {
       try {
         volumes.push(await this.readVolumeRecord(toVolumeSlug(entry.name)));
       } catch (error) {
-        // A directory without a volume.json is not a volume (e.g. a
+        // A directory without a VOLUME.md is not a volume (e.g. a
         // partially-cleaned-up delete). Skip it rather than fail the listing.
         if (error instanceof VolumeNotFoundError) {
           continue;
@@ -100,6 +89,9 @@ export class FileSystemVolumeStore implements VolumeStore {
   }
 
   async updateVolume(slug: VolumeSlug, patch: VolumeUpdate): Promise<Volume> {
+    if (patch.frontmatter) {
+      assertNoReservedFrontmatterKeys(patch.frontmatter, "volume", slug);
+    }
     const existing = await this.readVolumeRecord(slug);
     const updated: Volume = {
       ...existing,
@@ -122,6 +114,9 @@ export class FileSystemVolumeStore implements VolumeStore {
   async putChapter(volume: VolumeSlug, input: ChapterInput): Promise<Chapter> {
     await this.readVolumeRecord(volume); // throws VolumeNotFoundError if missing
 
+    const frontmatter = input.frontmatter ?? {};
+    assertNoReservedFrontmatterKeys(frontmatter, "chapter", input.slug);
+
     const path = this.layout.chapterPath(volume, input.slug);
     const now = new Date();
     let createdAt = now;
@@ -136,7 +131,7 @@ export class FileSystemVolumeStore implements VolumeStore {
       slug: input.slug,
       title: input.title,
       body: input.body,
-      frontmatter: input.frontmatter ?? {},
+      frontmatter,
       createdAt,
       updatedAt: now,
     };
@@ -233,48 +228,20 @@ export class FileSystemVolumeStore implements VolumeStore {
 
   // ---- internals ----------------------------------------------------------
 
-  /** Existence check across both the canonical (`VOLUME.md`) and legacy (`volume.json`) formats. */
   private async volumeRecordExists(slug: VolumeSlug): Promise<boolean> {
-    if (await Bun.file(this.layout.volumeDocPath(slug)).exists()) {
-      return true;
-    }
-    return Bun.file(this.layout.volumeMetaPath(slug)).exists();
+    return Bun.file(this.layout.volumeDocPath(slug)).exists();
   }
 
   private async readVolumeRecord(slug: VolumeSlug): Promise<Volume> {
     const docFile = Bun.file(this.layout.volumeDocPath(slug));
-    if (await docFile.exists()) {
-      return parseVolumeDocument(slug, await docFile.text());
-    }
-
-    // Backward compatibility: a volume written before VOLUME.md existed has
-    // only volume.json, with no frontmatter concept — treated as `{}`.
-    const legacyFile = Bun.file(this.layout.volumeMetaPath(slug));
-    if (!(await legacyFile.exists())) {
+    if (!(await docFile.exists())) {
       throw new VolumeNotFoundError(slug);
     }
-    // Trust boundary: volume.json was written only by this package's own
-    // (now-retired) writer, so this shape is trusted rather than
-    // schema-validated at read time — same posture as the VOLUME.md path.
-    const record = (await legacyFile.json()) as VolumeRecord;
-    return {
-      slug: toVolumeSlug(record.slug),
-      title: record.title,
-      description: record.description,
-      frontmatter: {},
-      createdAt: new Date(record.createdAt),
-      updatedAt: new Date(record.updatedAt),
-    };
+    return parseVolumeDocument(slug, await docFile.text());
   }
 
   private async writeVolumeRecord(volume: Volume): Promise<void> {
     await Bun.write(this.layout.volumeDocPath(volume.slug), serializeVolumeDocument(volume));
-    // Migration cleanup: once VOLUME.md is written, a volume.json left over
-    // from before this format existed is stale and would otherwise sit
-    // there unread. Best-effort removal — `force: true` no-ops if it was
-    // never there, so this never fails create/update on a volume that was
-    // already on the new format.
-    await rm(this.layout.volumeMetaPath(volume.slug), { force: true });
   }
 
   private async readChapterDocument(volume: VolumeSlug, chapter: ChapterSlug): Promise<Chapter> {
