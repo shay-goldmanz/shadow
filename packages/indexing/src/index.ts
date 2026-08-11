@@ -9,8 +9,13 @@
 
 export type { Bm25Document, Bm25Fields, Bm25Hit } from "./bm25.ts";
 export { BM25_B, BM25_FIELD_BOOSTS, BM25_K1, Bm25Index } from "./bm25.ts";
-export type { DisagreementSignal } from "./bm25-fallback.ts";
-export { bm25Fallback, buildFallbackIndex, detectDisagreement } from "./bm25-fallback.ts";
+export type { DisagreementSignal, RollupPromotion } from "./bm25-fallback.ts";
+export {
+  bm25Fallback,
+  buildFallbackIndex,
+  detectDisagreement,
+  rollupFallbackPromotion,
+} from "./bm25-fallback.ts";
 export { byteLength, bytesToText, sliceBytesToText, toBytes } from "./byte-text.ts";
 export type { BuildChapterIndexNodeInput } from "./chapter-index.ts";
 // ---- building blocks, exported for T2.3/T2.6 and for direct unit testing ---
