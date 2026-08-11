@@ -1,4 +1,7 @@
 import { describe, expect, test } from "bun:test";
+import { mkdtemp, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { run } from "./cli.ts";
 import { buildSmallFixture, withStore } from "./test-fixture.ts";
 
@@ -263,6 +266,81 @@ describe("run — dispatch, exit codes, and the stdout/stderr split", () => {
         writeErr: cap.writeErr,
       });
       expect(code).toBe(5);
+    });
+  });
+
+  test("`install --target <dir>` writes the skill and reports it, exit 0", async () => {
+    await withStore(async (store, root) => {
+      const target = await mkdtemp(join(tmpdir(), "shadow-cli-install-test-"));
+      try {
+        const cap = capture();
+        const code = await run(["install", "--target", target], {
+          store,
+          root,
+          write: cap.write,
+          writeErr: cap.writeErr,
+        });
+        expect(code).toBe(0);
+        const parsed = JSON.parse(cap.stdout.join(""));
+        expect(parsed.skill).toBe("shadow-volumes");
+        expect(parsed.written).toBe(
+          join(target, ".claude", "skills", "shadow-volumes", "SKILL.md"),
+        );
+        expect(parsed.next_steps.length).toBeGreaterThan(0);
+      } finally {
+        await rm(target, { recursive: true, force: true });
+      }
+    });
+  });
+
+  test("`install --target <dir>` twice without --force is a clobber-refused error", async () => {
+    await withStore(async (store, root) => {
+      const target = await mkdtemp(join(tmpdir(), "shadow-cli-install-test-"));
+      try {
+        await run(["install", "--target", target], {
+          store,
+          root,
+          write: () => {},
+          writeErr: () => {},
+        });
+        const cap = capture();
+        const code = await run(["install", "--target", target], {
+          store,
+          root,
+          write: cap.write,
+          writeErr: cap.writeErr,
+        });
+        expect(code).toBe(6);
+        const parsed = JSON.parse(cap.stderr.join(""));
+        expect(parsed.error.name).toBe("SkillAlreadyInstalledError");
+        expect(parsed.next_steps.length).toBeGreaterThan(0);
+      } finally {
+        await rm(target, { recursive: true, force: true });
+      }
+    });
+  });
+
+  test("`install --target <dir> --force` overwrites, exit 0", async () => {
+    await withStore(async (store, root) => {
+      const target = await mkdtemp(join(tmpdir(), "shadow-cli-install-test-"));
+      try {
+        await run(["install", "--target", target], {
+          store,
+          root,
+          write: () => {},
+          writeErr: () => {},
+        });
+        const cap = capture();
+        const code = await run(["install", "--target", target, "--force"], {
+          store,
+          root,
+          write: cap.write,
+          writeErr: cap.writeErr,
+        });
+        expect(code).toBe(0);
+      } finally {
+        await rm(target, { recursive: true, force: true });
+      }
     });
   });
 

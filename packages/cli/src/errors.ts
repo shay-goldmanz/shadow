@@ -126,6 +126,25 @@ export class NodeLookupError extends ShadowCliError {
   }
 }
 
+/** `shadow install` found an existing skill file at the destination and `--force` was not given. */
+export class SkillAlreadyInstalledError extends ShadowCliError {
+  override readonly name = "SkillAlreadyInstalledError";
+  override readonly exitCode = 6;
+  override readonly nextSteps: readonly string[];
+
+  constructor(public readonly path: string) {
+    super(`A skill is already installed at ${path}`);
+    this.nextSteps = [
+      "Run `shadow install --force` to overwrite the existing file.",
+      `Or inspect ${path} yourself to see whether it differs from the shipped skill.`,
+    ];
+  }
+
+  protected override extraFields(): Record<string, unknown> {
+    return { path: this.path };
+  }
+}
+
 /** Anything not already one of the above — still exits non-zero with `next_steps`, never a bare stack trace. */
 export class UnexpectedCliError extends ShadowCliError {
   override readonly name = "UnexpectedCliError";

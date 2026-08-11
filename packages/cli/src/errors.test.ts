@@ -5,6 +5,7 @@ import {
   IndexMissingError,
   NodeLookupError,
   ShadowCliError,
+  SkillAlreadyInstalledError,
   StaleIndexError,
   UnexpectedCliError,
   UsageError,
@@ -18,6 +19,7 @@ const ALL_ERRORS: readonly ShadowCliError[] = [
   new StaleIndexError("sha256:aaa", "sha256:bbb"),
   new VolumeLookupError(new VolumeNotFoundError("missing-volume")),
   new NodeLookupError(new NodeNotFoundError("bad-node-id")),
+  new SkillAlreadyInstalledError("/tmp/repo/.claude/skills/shadow-volumes/SKILL.md"),
   new UnexpectedCliError(new Error("boom")),
 ];
 
@@ -54,6 +56,7 @@ describe("every ShadowCliError", () => {
     expect(new StaleIndexError(undefined, "h").exitCode).toBe(5);
     expect(new VolumeLookupError(new VolumeNotFoundError("v")).exitCode).toBe(3);
     expect(new NodeLookupError(new NodeNotFoundError("n")).exitCode).toBe(3);
+    expect(new SkillAlreadyInstalledError("/tmp/x/SKILL.md").exitCode).toBe(6);
     expect(new UnexpectedCliError(new Error("e")).exitCode).toBe(1);
   });
 });

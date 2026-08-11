@@ -14,6 +14,7 @@ import type { VolumeStore } from "@shadow/core";
 import { runChapters } from "./commands/chapters.ts";
 import { runFind } from "./commands/find.ts";
 import { runGrep } from "./commands/grep.ts";
+import { runInstall } from "./commands/install.ts";
 import { runRead } from "./commands/read.ts";
 import { runIndexCommand } from "./commands/reindex.ts";
 import { runVolumes } from "./commands/volumes.ts";
@@ -36,6 +37,8 @@ const USAGE = {
     read: "shadow read <node_id> [--with-parents]      # body + heading path + hash",
     grep: 'shadow grep "<terms>"                        # raw BM25 escape hatch',
     index: "shadow index [--check]                       # rebuild; --check fails if stale",
+    install:
+      "shadow install [--target dir] [--force]     # install the shadow-volumes skill into a repo",
   },
   next_steps: [
     'Start with `shadow volumes` or `shadow find "<task>"` to discover what exists.',
@@ -162,6 +165,19 @@ async function dispatch(argv: readonly string[], deps: RunDeps): Promise<unknown
       return runIndexCommand(deps.store, { check: values.check ?? false });
     }
 
+    case "install": {
+      const { values } = parseArgs({
+        args: [...rest],
+        options: {
+          target: { type: "string" },
+          force: { type: "boolean" },
+          json: { type: "boolean" },
+        },
+        strict: true,
+      });
+      return runInstall({ target: values.target, force: values.force ?? false });
+    }
+
     case undefined:
     case "help":
     case "--help":
@@ -172,7 +188,7 @@ async function dispatch(argv: readonly string[], deps: RunDeps): Promise<unknown
       throw new UsageError(
         "",
         `unknown command "${command}"`,
-        "shadow <volumes|chapters|find|read|grep|index>",
+        "shadow <volumes|chapters|find|read|grep|index|install>",
       );
   }
 }
