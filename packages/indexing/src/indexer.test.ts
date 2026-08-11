@@ -1,0 +1,250 @@
+import { describe, expect, test } from "bun:test";
+import { mkdtemp, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { FileSystemVolumeStore, toChapterSlug, toVolumeSlug, type VolumeStore } from "@shadow/core";
+import { StructuralIndexer } from "./indexer.ts";
+import type { IndexDocument } from "./types.ts";
+import { isValidUlid } from "./ulid.ts";
+
+async function withStore(fn: (store: VolumeStore) => Promise<void>): Promise<void> {
+  const root = await mkdtemp(join(tmpdir(), "shadow-indexing-test-"));
+  try {
+    await fn(new FileSystemVolumeStore(root));
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+}
+
+describe("StructuralIndexer — ULID minting and write-back (D13)", () => {
+  test("mints a ULID for a chapter with no `id` and writes it back to frontmatter", async () => {
+    await withStore(async (store) => {
+      const volume = toVolumeSlug("ui-design");
+      await store.createVolume({ slug: volume, title: "Interface Design" });
+      await store.putChapter(volume, {
+        slug: toChapterSlug("density"),
+        title: "Density",
+        body: "Some prose about density.\n",
+      });
+
+      const indexer = new StructuralIndexer();
+      const { document, mintedIds } = await indexer.build(store);
+
+      expect(mintedIds).toHaveLength(1);
+      expect(mintedIds[0]?.chapterSlug).toBe("density");
+      expect(isValidUlid(mintedIds[0]?.id)).toBe(true);
+
+      const chapterNode = document.volumes[0]?.chapters[0];
+      expect(chapterNode?.node_id).toBe(mintedIds[0]?.id);
+
+      const onDisk = await store.getChapter(volume, toChapterSlug("density"));
+      const mintedId: string | undefined = mintedIds[0]?.id;
+      expect(onDisk.frontmatter.id).toBe(mintedId);
+    });
+  });
+
+  test("a second build does not change a previously minted id, and mints nothing new", async () => {
+    await withStore(async (store) => {
+      const volume = toVolumeSlug("ui-design");
+      await store.createVolume({ slug: volume, title: "Interface Design" });
+      await store.putChapter(volume, {
+        slug: toChapterSlug("density"),
+        title: "Density",
+        body: "Some prose about density.\n",
+      });
+
+      const indexer = new StructuralIndexer();
+      const first = await indexer.build(store);
+      const mintedId = first.mintedIds[0]?.id;
+
+      const second = await indexer.build(store);
+      expect(second.mintedIds).toEqual([]);
+      expect(second.document.volumes[0]?.chapters[0]?.node_id).toBe(mintedId);
+    });
+  });
+
+  test("other frontmatter keys survive minting intact, including their order", async () => {
+    await withStore(async (store) => {
+      const volume = toVolumeSlug("ui-design");
+      await store.createVolume({ slug: volume, title: "Interface Design" });
+      const frontmatter = {
+        when_to_use: "Designing dense tables",
+        not_for: "marketing pages",
+        keywords: ["density", "tables"],
+        confidence: "high",
+        custom_field: "preserved verbatim",
+      };
+      await store.putChapter(volume, {
+        slug: toChapterSlug("density"),
+        title: "Density",
+        body: "prose\n",
+        frontmatter,
+      });
+
+      const indexer = new StructuralIndexer();
+      await indexer.build(store);
+
+      const onDisk = await store.getChapter(volume, toChapterSlug("density"));
+      for (const [key, value] of Object.entries(frontmatter)) {
+        expect(onDisk.frontmatter[key]).toEqual(value);
+      }
+      expect(onDisk.frontmatter.id).toBeDefined();
+      // The pre-existing keys keep their original relative order; `id` is appended.
+      expect(Object.keys(onDisk.frontmatter).slice(0, -1)).toEqual(Object.keys(frontmatter));
+    });
+  });
+
+  test("a chapter that already has an id is left untouched (not re-minted)", async () => {
+    await withStore(async (store) => {
+      const volume = toVolumeSlug("ui-design");
+      await store.createVolume({ slug: volume, title: "Interface Design" });
+      const existingId = "01J8X7QK3M2F5R7T9V0W1Y2Z3A";
+      await store.putChapter(volume, {
+        slug: toChapterSlug("density"),
+        title: "Density",
+        body: "prose\n",
+        frontmatter: { id: existingId },
+      });
+
+      const indexer = new StructuralIndexer();
+      const { document, mintedIds } = await indexer.build(store);
+
+      expect(mintedIds).toEqual([]);
+      expect(document.volumes[0]?.chapters[0]?.node_id).toBe(existingId);
+    });
+  });
+});
+
+describe("StructuralIndexer — end to end via VolumeStore", () => {
+  test("builds and persists the full index.json shape over a small fixture volume", async () => {
+    await withStore(async (store) => {
+      const volume = toVolumeSlug("ui-design");
+      await store.createVolume({
+        slug: volume,
+        title: "Interface Design",
+        description: "How Linear and Notion design interfaces.",
+      });
+
+      await store.putChapter(volume, {
+        slug: toChapterSlug("linear-density"),
+        title: "How Linear handles information density",
+        body: [
+          "## Density vs whitespace",
+          "x".repeat(4000),
+          "### Row height",
+          "y".repeat(200),
+          "## Truncation rules",
+          "z".repeat(200),
+        ].join("\n"),
+        frontmatter: {
+          when_to_use: "Designing list views, tables, dashboards.",
+          not_for: "marketing pages, onboarding flows",
+          keywords: ["density", "list view", "row height"],
+          confidence: "high",
+        },
+      });
+
+      await store.putChapter(volume, {
+        slug: toChapterSlug("short-note"),
+        title: "A short note",
+        body: "## Just one small heading\nBrief content.\n",
+      });
+
+      const indexer = new StructuralIndexer();
+      const { document } = await indexer.reindex(store);
+
+      // --- top-level shape ---
+      expect(document.schema_version).toBe(1);
+      expect(typeof document.generated_at).toBe("string");
+      expect(document.corpus_hash).toMatch(/^sha256:[0-9a-f]{64}$/);
+      expect(document.stats).toEqual({ volumes: 1, chapters: 2, tokens: expect.any(Number) });
+
+      // --- volume shape ---
+      expect(document.volumes).toHaveLength(1);
+      const volumeNode = document.volumes[0];
+      expect(volumeNode?.volume_id).toBe("ui-design");
+      expect(volumeNode?.title).toBe("Interface Design");
+      expect(volumeNode?.chapter_count).toBe(2);
+      expect(volumeNode?.volume_hash).toMatch(/^sha256:[0-9a-f]{64}$/);
+
+      // --- chapter shape (sorted by slug: "linear-density" < "short-note") ---
+      const [linear, short] = volumeNode?.chapters ?? [];
+      expect(linear?.kind).toBe("chapter");
+      expect(isValidUlid(linear?.node_id)).toBe(true);
+      expect(linear?.slug).toBe("linear-density");
+      expect(linear?.path).toEqual(["Interface Design", "How Linear handles information density"]);
+      expect(linear?.file).toBe("volumes/ui-design/chapters/linear-density.md");
+      expect(linear?.when_to_use).toBe("Designing list views, tables, dashboards.");
+      expect(linear?.not_for).toBe("marketing pages, onboarding flows");
+      expect(linear?.keywords).toEqual(["density", "list view", "row height"]);
+      expect(linear?.confidence).toBe("high");
+      expect(linear?.content_hash).toMatch(/^sha256:[0-9a-f]{64}$/);
+      expect(linear?.subtree_hash).toMatch(/^sha256:[0-9a-f]{64}$/);
+
+      // --- section shape (over-threshold chapter) ---
+      expect(linear?.sections).toBeDefined();
+      expect(linear?.sections?.[0]?.title).toBe("Density vs whitespace");
+      expect(linear?.sections?.[0]?.kind).toBe("section");
+      expect(linear?.sections?.[0]?.node_id).toBe(`${linear?.node_id}#density-vs-whitespace`);
+      expect(linear?.sections?.[0]?.sections?.map((s) => s.title)).toEqual(["Row height"]);
+      // Non-overlap and union semantics, asserted at the full-document level too.
+      const topSpans = linear?.sections?.map((s) => s.span) ?? [];
+      expect(topSpans[0]?.end_byte).toBe(topSpans[1]?.start_byte);
+      const parent = linear?.sections?.[0];
+      const child = parent?.sections?.[0];
+      expect(child?.span.start_byte).toBeGreaterThanOrEqual(parent?.span.start_byte ?? 0);
+      expect(child?.span.end_byte).toBeLessThanOrEqual(parent?.span.end_byte ?? 0);
+
+      // --- under-threshold chapter: key_items, no sections ---
+      expect(short?.sections).toBeUndefined();
+      expect(short?.key_items).toEqual(["Just one small heading"]);
+
+      // --- persisted: reading it back via VolumeStore matches what was returned ---
+      const persisted = await store.readIndex<IndexDocument>(volume);
+      expect(persisted).toEqual(document);
+    });
+  });
+
+  test("reindex persists the same corpus-wide document into every volume's own index.json", async () => {
+    await withStore(async (store) => {
+      const volA = toVolumeSlug("volume-a");
+      const volB = toVolumeSlug("volume-b");
+      await store.createVolume({ slug: volA, title: "Volume A" });
+      await store.createVolume({ slug: volB, title: "Volume B" });
+      await store.putChapter(volA, { slug: toChapterSlug("a1"), title: "A1", body: "prose\n" });
+      await store.putChapter(volB, { slug: toChapterSlug("b1"), title: "B1", body: "prose\n" });
+
+      const indexer = new StructuralIndexer();
+      const { document } = await indexer.reindex(store);
+
+      expect(document.volumes).toHaveLength(2);
+      const persistedA = await store.readIndex<IndexDocument>(volA);
+      const persistedB = await store.readIndex<IndexDocument>(volB);
+      expect(persistedA).toEqual(document);
+      expect(persistedB).toEqual(document);
+    });
+  });
+
+  test("build() does not write index.json; only reindex() does", async () => {
+    await withStore(async (store) => {
+      const volume = toVolumeSlug("v");
+      await store.createVolume({ slug: volume, title: "V" });
+      await store.putChapter(volume, { slug: toChapterSlug("c"), title: "C", body: "prose\n" });
+
+      const indexer = new StructuralIndexer();
+      await indexer.build(store);
+
+      expect(await store.readIndex(volume)).toBeUndefined();
+    });
+  });
+
+  test("an empty corpus (no volumes) builds a valid, empty document without error", async () => {
+    await withStore(async (store) => {
+      const indexer = new StructuralIndexer();
+      const { document, mintedIds } = await indexer.build(store);
+      expect(document.volumes).toEqual([]);
+      expect(document.stats).toEqual({ volumes: 0, chapters: 0, tokens: 0 });
+      expect(mintedIds).toEqual([]);
+    });
+  });
+});
