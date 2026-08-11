@@ -1,17 +1,42 @@
 /**
- * Tier 2 ports — defined, not implemented (T2.4/T2.5 own the
- * implementations, behind `@shadow/model`). Each port is the narrow LLM
- * capability one Tier 2 check needs; none of them import `@shadow/model` or
- * any AI SDK, so this package stays offline-testable end to end (D20: "the
- * entire completeness property and the entire anti-fabrication property
- * live in Tier 0" — these ports are exactly the boundary past which that
- * guarantee stops applying).
+ * Tier 2 ports — the narrow LLM capability each Tier 2 check needs, backed
+ * by `@shadow/model`'s `StructuredGenerationPort` (Zod-typed, tool-less).
+ * None of them import `@shadow/model` or any AI SDK from *this* file, so
+ * this package stays offline-testable end to end (D20: "the entire
+ * completeness property and the entire anti-fabrication property live in
+ * Tier 0" — these ports are exactly the boundary past which that guarantee
+ * stops applying). The concrete adapters live in `checks/tier2-adapters.ts`,
+ * which *does* import `@shadow/model`'s port type.
  *
- * How a Tier 2 check built on these ports slots into the audit: implement
- * `EvidenceCheck<TInput>` (`checks/types.ts`) with a `run` that calls the
- * relevant port, wrapping its verdict as a `CheckOutcome`. That check is
- * then just another entry in the list passed to `runChecks` — see
- * `checks/audit.ts`'s module doc for the composition contract.
+ * **Batch-shaped, not per-item (T2.4/T2.5 amendment).** T1.3 shipped these
+ * as one-input-in, one-verdict-out methods. D20's entire cost argument is
+ * "one batched session" — a single `generate()` call judging every claim
+ * that needs it, not one call per claim (D6: a fresh call pays ~18k tokens
+ * of preamble). A per-item method signature makes that impossible to
+ * express at the port boundary: any caller iterating `classify(one)` in a
+ * loop pays for N calls no matter how disciplined the orchestrator above it
+ * is. So every method here takes `readonly Input[]` and returns
+ * `readonly Verdict[]`, same length, same order — "batch of one" for a
+ * single item, "batch of everything this audit needs" for the real case.
+ * See `checks/tier2-adapters.ts` for how one array turns into one
+ * `generate()` call via a length-pinned Zod array schema.
+ *
+ * **`EntailmentRelevanceJudge` is new.** D15 says C5 "shares C3's prompt
+ * turn" — literally the same `generate()` call judging both entailment and
+ * relevance for a claim, not two calls. `EntailmentJudge`/`RelevanceClassifier`
+ * stay as standalone, independently testable contracts (and as a home for
+ * simple non-batched adapters), but the audit orchestrator
+ * (`checks/tier2.ts`) uses `EntailmentRelevanceJudge` exclusively so C3 and
+ * C5 for a given batch of claims cost exactly one call between them.
+ *
+ * **`EntailmentVerdict.conflictsWith` is `string[]`, not `ClaimId[]`
+ * (bugfix).** `types.ts`'s `Verification.conflictsWith` is documented and
+ * typed as claim *labels* — the same "labels, not tooling-minted ids the
+ * writer can't know ahead of time" reasoning `docs/EVIDENCE.md`'s amendment
+ * 1 gives for `supports[]`. The original port typed this `ClaimId[]`, which
+ * would have forced a label→id lookup the judge has no way to perform (it
+ * only ever sees decontextualized claim *text*, never ids). Fixed to match
+ * `Verification.conflictsWith`.
  */
 
 import type { ClaimId, SourceId } from "./ids.ts";
@@ -33,9 +58,9 @@ export interface CheckWorthinessVerdict {
   readonly rationale: string;
 }
 
-/** C1b (Tier 2): independently classifies every unmarked sentence as check-required or not. */
+/** C1b (Tier 2): independently classifies every unmarked sentence as check-required or not. Batched — see module doc. */
 export interface CheckWorthinessClassifier {
-  classify(input: CheckWorthinessInput): Promise<CheckWorthinessVerdict>;
+  classify(inputs: readonly CheckWorthinessInput[]): Promise<readonly CheckWorthinessVerdict[]>;
 }
 
 // ---- C3 — span entailment --------------------------------------------------
@@ -57,7 +82,8 @@ export interface EntailmentInput {
 export interface EntailmentVerdict {
   readonly status: VerificationStatus;
   readonly rationale: string;
-  readonly conflictsWith?: readonly ClaimId[];
+  /** Labels of conflicting claims — see module doc's bugfix note. */
+  readonly conflictsWith?: readonly string[];
   /** `derived` only. */
   readonly overgeneralizationRisk?: OvergeneralizationRisk;
 }
@@ -66,10 +92,47 @@ export interface EntailmentVerdict {
  * C3 (Tier 2): does the resolved span support the decontextualized claim?
  * For `derived`, does the conclusion follow from `supports[]` without
  * overgeneralizing? "The gap Science One explicitly names as future work"
- * (`docs/EVIDENCE.md`).
+ * (`docs/EVIDENCE.md`). Batched — see module doc.
  */
 export interface EntailmentJudge {
-  judge(input: EntailmentInput): Promise<EntailmentVerdict>;
+  judge(inputs: readonly EntailmentInput[]): Promise<readonly EntailmentVerdict[]>;
+}
+
+// ---- C5 — chapter relevance (non-blocking, D15) ----------------------------
+
+export interface RelevanceInput {
+  readonly decontextualized: string;
+  readonly chapterSubject: string;
+  readonly whenToUse?: string;
+}
+
+export interface RelevanceVerdict {
+  readonly relevance: Relevance;
+  readonly rationale: string;
+}
+
+/** C5 (Tier 2, non-blocking, D15): does this claim serve the chapter's stated subject? Batched — see module doc. */
+export interface RelevanceClassifier {
+  classify(inputs: readonly RelevanceInput[]): Promise<readonly RelevanceVerdict[]>;
+}
+
+// ---- C3 + C5 combined — one prompt turn (D15) ------------------------------
+
+export interface EntailmentRelevanceInput extends EntailmentInput {
+  readonly chapterSubject: string;
+  readonly whenToUse?: string;
+}
+
+export interface EntailmentRelevanceVerdict {
+  readonly entailment: EntailmentVerdict;
+  readonly relevance: RelevanceVerdict;
+}
+
+/** The production seam for C3+C5: one batched `generate()` call judges both dimensions for every claim in `inputs`. See module doc. */
+export interface EntailmentRelevanceJudge {
+  judge(
+    inputs: readonly EntailmentRelevanceInput[],
+  ): Promise<readonly EntailmentRelevanceVerdict[]>;
 }
 
 // ---- C4 — index alignment ---------------------------------------------------
@@ -87,25 +150,37 @@ export interface IndexAlignmentVerdict {
   readonly unsupportedAssertions: readonly string[];
 }
 
-/** C4 (Tier 2): every claim in an index node summary or `when_to_use` appears in, or is entailed by, the chapter beneath it. */
+/** C4 (Tier 2): every claim in an index node summary or `when_to_use` appears in, or is entailed by, the chapter beneath it. Batched — see module doc. */
 export interface IndexAlignmentChecker {
-  check(input: IndexAlignmentInput): Promise<IndexAlignmentVerdict>;
+  check(inputs: readonly IndexAlignmentInput[]): Promise<readonly IndexAlignmentVerdict[]>;
 }
 
-// ---- C5 — chapter relevance (non-blocking, D15) ----------------------------
+// ---- Repair loop (D9/D21): restatement proposal ----------------------------
 
-export interface RelevanceInput {
+/**
+ * One claim's restatement request. `evidenceExcerpts` carries whatever the
+ * rewrite should be conservative *against*: cited spans for
+ * `partial`/`unsupported`, both sides' spans for `conflicted` (the prose
+ * must surface both, per `docs/EVIDENCE.md`'s "Conflict, recency, repair").
+ * `off-topic` claims (C5) are deliberately not modeled here — D15 says
+ * off-topic never auto-rewrites, so there is no restatement input shape for
+ * it; that verdict only ever produces a warning for the operator to act on.
+ */
+export interface RestatementCandidateInput {
+  readonly claimId: ClaimId;
+  readonly label: string;
+  readonly verdict: VerificationStatus;
+  readonly text: string;
   readonly decontextualized: string;
-  readonly chapterSubject: string;
-  readonly whenToUse?: string;
+  readonly evidenceExcerpts: readonly string[];
 }
 
-export interface RelevanceVerdict {
-  readonly relevance: Relevance;
-  readonly rationale: string;
+export interface RestatementProposal {
+  readonly to: string;
+  readonly reason: string;
 }
 
-/** C5 (Tier 2, non-blocking, D15): does this claim serve the chapter's stated subject? */
-export interface RelevanceClassifier {
-  classify(input: RelevanceInput): Promise<RelevanceVerdict>;
+/** Proposes a conservative restatement for one or more claims. The preservation-bound guardrail (D21) is applied afterward, in `repair.ts` — this port only proposes; it never decides accept/reject. Batched. */
+export interface ClaimRestater {
+  restate(inputs: readonly RestatementCandidateInput[]): Promise<readonly RestatementProposal[]>;
 }

@@ -79,6 +79,18 @@ export interface AuditRecord {
   readonly chapter: string;
   readonly auditedAt: string;
   readonly verdict: AuditVerdict;
+  /**
+   * **T2.4 amendment.** C4's memoization is all-or-nothing at the routing-
+   * metadata level ("C4 runs only if the chapter's routing metadata
+   * changed" — `docs/EVIDENCE.md`), unlike C3/C5's per-claim `inputHash` or
+   * C1b's per-sentence hash. That requires persisting *something* between
+   * audits to diff against; `verification.inputHash` and `narrative`'s
+   * classifications live on claims and sentences respectively, and routing
+   * metadata belongs to neither. This is the hash of the index node
+   * summaries/`when_to_use` text C4 last judged — see
+   * `checks/index-alignment.ts`'s `computeRoutingMetadataHash`.
+   */
+  readonly routingMetadataHash?: Sha256Digest;
 }
 
 /** Run every Tier 0 check over one chapter and compute the resulting per-claim `inputHash`es. Pure — no filesystem. */

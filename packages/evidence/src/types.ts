@@ -173,10 +173,29 @@ export interface Claim {
   readonly overgeneralizationRisk?: OvergeneralizationRisk;
 }
 
+/**
+ * One unmarked sentence's C1b verdict, keyed by a hash of its judged inputs
+ * — the memoization record `docs/EVIDENCE.md`'s "only unmarked sentences
+ * that are new or changed" requires. **T2.4/T2.5 amendment**: unlike marked
+ * claims, an unmarked sentence has no stable label to key off (D18's label
+ * machinery is for the writer's citations, not the auditor's sweep), so its
+ * identity for memoization purposes is `sentenceHash = sha256(context ‖
+ * sentence ‖ chapterSubject)` (see `checks/check-worthiness.ts`) rather than
+ * a `[^label]`. A hash present in the previous audit's
+ * `narrative.classifications` means this exact sentence-in-context was
+ * already judged; only hashes absent from that list go into C1b's batch.
+ */
+export interface NarrativeSentenceClassification {
+  readonly sentenceHash: Sha256Digest;
+  readonly checkRequired: boolean;
+}
+
 export interface NarrativeSummary {
   readonly sentences: number;
   readonly ratio: number;
   readonly classifiedBy?: string;
+  /** Per-sentence C1b memoization record — see `NarrativeSentenceClassification`. */
+  readonly classifications?: readonly NarrativeSentenceClassification[];
 }
 
 /** `claims/<chapter-slug>.claims.json` — the sidecar for one chapter. */
@@ -206,6 +225,17 @@ export interface ClaimVerifiedEvent {
   readonly inputHash: Sha256Digest;
 }
 
+/**
+ * **`outcome` is a T2.5 amendment.** D21's preservation-bound guardrail can
+ * *reject* a proposed restatement (distance exceeds `max(80,
+ * 0.5×|from|)`) and escalate to the operator instead of applying it — and
+ * `docs/EVIDENCE.md` is explicit that this must be "log[ged] the distance
+ * either way." Without a field distinguishing the two, every line in the
+ * ledger would look like a restatement Shadow actually made, which is
+ * exactly backwards for the escalated case: that is the one the operator
+ * most needs to notice, since the claim was left unchanged pending their
+ * review.
+ */
 export interface ClaimRestatedEvent {
   readonly ts: string;
   readonly event: "claim.restated";
@@ -214,6 +244,8 @@ export interface ClaimRestatedEvent {
   readonly to: string;
   readonly reason: string;
   readonly levenshtein: number;
+  /** `"applied"` — within the preservation bound, `claim.text` was updated. `"escalated"` — bound exceeded; `from` is unchanged, flagged for operator review (D21). */
+  readonly outcome: "applied" | "escalated";
 }
 
 export interface SourceDriftedEvent {
