@@ -126,6 +126,23 @@ export async function postChat(deps: ApiDeps, req: BunRequest<"/api/chat">): Pro
       };
       send("session", { sessionId });
 
+      // Shadow can be legitimately silent for a long time — a research brief
+      // that fetches several pages, then a Tier 2 audit, can easily outlast any
+      // fixed server timeout. An SSE comment line is a no-op to every client
+      // (EventSource and our own parser both ignore lines beginning with ":")
+      // but counts as traffic, so it keeps both this connection and the dev
+      // proxy's from going idle. Without it the stream is severed mid-turn and
+      // the operator sees a bare "network error" rather than whatever Shadow
+      // was about to report.
+      const heartbeat = setInterval(() => {
+        if (closed) return;
+        try {
+          controller.enqueue(new TextEncoder().encode(": keepalive\n\n"));
+        } catch {
+          closed = true;
+        }
+      }, 5_000);
+
       // Correlates a `research-started` brief with its later `research-completed`
       // / `research-failed` counterpart — `ShadowEvent` carries the same
       // `ResearchBrief` object reference across both yields
@@ -246,6 +263,7 @@ export async function postChat(deps: ApiDeps, req: BunRequest<"/api/chat">): Pro
           send("error", { message: mapped.body.error.message, code: mapped.body.error.code });
         }
       } finally {
+        clearInterval(heartbeat);
         close();
       }
     },

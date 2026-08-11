@@ -25,10 +25,25 @@ export interface CreateServerOptions {
   readonly hostname?: string;
 }
 
+/**
+ * Bun's default request idle timeout is **10 seconds**, which is far too short
+ * for this server: a chat turn holds an SSE stream open while Shadow thinks,
+ * researches, and audits. Measured real audits already take 8–9.4s with no
+ * research at all, so the default severed essentially every turn mid-flight —
+ * the browser saw `ERR_INCOMPLETE_CHUNKED_ENCODING` and the operator saw a bare
+ * "network error" instead of whatever Shadow was actually reporting.
+ *
+ * 255 is Bun's maximum. It is a backstop, not the real mechanism: the chat
+ * handler sends SSE heartbeats to keep the connection alive across work that
+ * legitimately runs longer than any fixed ceiling.
+ */
+const IDLE_TIMEOUT_SECONDS = 255;
+
 export function createServer(deps: ApiDeps, options: CreateServerOptions = {}) {
   return Bun.serve({
     port: options.port ?? 0,
     hostname: options.hostname ?? "127.0.0.1",
+    idleTimeout: IDLE_TIMEOUT_SECONDS,
     routes: buildRoutes(deps),
     fetch: notFoundFallback,
   });

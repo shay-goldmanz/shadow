@@ -53,7 +53,17 @@ async function proxyToApi(request: Request): Promise<Response> {
 
 const server = Bun.serve({
   port,
-  development: true,
+  // Bun's default request idle timeout is 10s, which severs a chat SSE stream
+  // while Shadow is still thinking. 255 is Bun's maximum; the API's heartbeat
+  // is what actually keeps long turns alive, this just stops the proxy hop
+  // from being the shorter of the two ceilings.
+  idleTimeout: 255,
+  // NOT `development: true`. That injects Bun's HMR client, which renders a
+  // full-width red "Unhandled Promise Rejection" modal over the interface and
+  // — worse — intercepts pointer events, so the operator cannot click through
+  // it. This is the entry point the operator actually uses; `dev-server.ts` is
+  // where hot reload belongs.
+  development: false,
   routes: {
     // `"/api/*"`'s literal prefix beats the trailing wildcard below for any
     // matching request (Bun's router prefers the more specific pattern), so
