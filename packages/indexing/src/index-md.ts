@@ -82,6 +82,10 @@ export function generateVolumeIndexMd(volume: VolumeIndexNode): string {
 function chapterDescription(chapter: ChapterIndexNode): string {
   const parts: string[] = [];
 
+  if (chapter.type === "Attested Computation") {
+    parts.push("[Attested]");
+  }
+
   if (chapter.when_to_use) {
     // Take the first ~120 chars of when_to_use as the description snippet.
     const snippet =

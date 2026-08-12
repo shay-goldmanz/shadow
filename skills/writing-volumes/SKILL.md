@@ -221,3 +221,90 @@ out.
    narrative — not a claim you left silent?
 5. Does the chapter read like something worth reading, or like a wall of
    citations?
+
+## 6. Writing Attested Computations (OKF §10)
+
+When the operator asks you to capture a computation that agents should run
+in a sanctioned way rather than improvising, write a chapter with
+`type: Attested Computation`.
+
+An Attested Computation chapter carries additional frontmatter fields
+that tell a consumer how to run and verify the computation:
+
+```yaml
+---
+type: Attested Computation
+title: Revenue for fiscal year
+description: Recognized revenue for a fiscal year, per Finance's definition.
+status: stable
+generated:
+  by: shadow/1.0
+  at: 2026-08-11T10:47:00Z
+verified: []
+runtime: bigquery
+parameters:
+  - { name: year, type: integer, required: true }
+executor:
+  resource: references/skills/run-on-bq.md
+  receipt: [job_id, executed_sql, result]
+attester:
+  resource: references/attesters/revenue.py
+stale_after: 2026-09-23
+---
+```
+
+**Required fields for Attested Computation:**
+
+- **`runtime`** — how to run the computation (`bigquery`, `python`,
+  `postgres`, `dbt`, `Looker`, etc.). This determines what `parameters`
+  mean: a `year` parameter is a SQL bind variable under `runtime: bigquery`
+  and a Python argument under `runtime: python`.
+- **`parameters`** — a list of typed, named holes the agent may fill.
+  Each entry: `{ name, type, required }`. The agent may ONLY supply values
+  for the declared parameters; it MUST NOT author or edit the computation
+  itself.
+- **`executor`** — how the computation is run. `resource` names run
+  instructions or code; `receipt` declares the fields a run must return
+  (e.g. `[job_id, executed_sql, result]`).
+- **`attester`** — deterministic (no-LLM) code that inspects a receipt
+  and returns a verdict. `resource` names the code.
+
+**The computation itself** goes in one of two places:
+
+1. **Inline** — a fenced code block in the body under `# Computation`:
+
+   ```markdown
+   # Computation
+
+   ```sql
+   SELECT SUM(amount) AS revenue
+   FROM finance.recognized_revenue
+   WHERE fiscal_year = @year
+   ```
+
+   ```
+
+   Use this for short computations reviewed alongside the contract.
+
+2. **In a file** — set `computation:` to a path and omit the body fence:
+
+   ```yaml
+   runtime: bigquery
+   computation: references/computations/revenue.sql
+   parameters:
+     - { name: year, type: integer, required: true }
+   ```
+
+   Use this for long computations, generated ones, or files already shared
+   with non-OKF tooling.
+
+**Why one computation, one chapter.** A concept (`type: Metric`) that uses
+several computations links to one `Attested Computation` per figure rather
+than listing them all in its own frontmatter. Revenue, profit, and margin
+each verify and attest independently, so they deserve three chapters.
+
+**Verification vs. attestation:** `verified` (standard OKF) confirms the
+*definition* still matches policy — it is slow and recorded in the bundle.
+Attestation confirms a single *run* produced the value the sanctioned way —
+it is per-call, runtime, and not stored in the bundle. Both exist, and a
+chapter needs both.

@@ -201,6 +201,7 @@ export class StructuralIndexer implements Indexer {
               chapterTitle: ensured.chapter.title,
               body: ensured.chapter.body,
               frontmatter: ensured.chapter.frontmatter,
+              type: ensured.chapter.type,
               status: ensured.chapter.status,
               file: store.chapterRelativePath(volume.slug, ensured.chapter.slug),
             }),
