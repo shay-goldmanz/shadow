@@ -46,6 +46,14 @@ export { buildHeadingTree, extractHeadings, parseHeadingTree } from "./heading-t
 // ---- OKF index.md / log.md generation (Phase 2) ----------------------------
 export { generateRootIndexMd, generateVolumeIndexMd } from "./index-md.ts";
 export { generateRootLogMd, generateVolumeLogMd } from "./log-md.ts";
+// ---- OKF conformance validation (Phase 3) -----------------------------------
+export type {
+  OkfBundleArtifacts,
+  OkfChapterRecord,
+  OkfConformanceInput,
+  OkfVolumeRecord,
+} from "./lint-okf.ts";
+export { checkOkfConformance, okfConformanceCheck } from "./lint-okf.ts";
 // ---- the build port -------------------------------------------------------
 export type { BuildIndexResult, Indexer, MintedId } from "./indexer.ts";
 export { StructuralIndexer } from "./indexer.ts";
