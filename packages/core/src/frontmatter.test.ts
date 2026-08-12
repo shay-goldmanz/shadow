@@ -2,11 +2,30 @@ import { describe, expect, test } from "bun:test";
 import { ChapterParseError, VolumeParseError } from "./errors.ts";
 import { parseChapterDocument, serializeChapterDocument } from "./frontmatter.ts";
 import { toChapterSlug, toVolumeSlug } from "./slug.ts";
+import type { OkfStatus } from "./types.ts";
 import { parseVolumeDocument } from "./volume-frontmatter.ts";
 
 const slug = toChapterSlug("chapter-one");
 
-function roundTrip(chapter: Parameters<typeof serializeChapterDocument>[0]) {
+type ChapterDoc = Parameters<typeof serializeChapterDocument>[0];
+
+function mkChapter(
+  overrides: Partial<ChapterDoc> & Pick<ChapterDoc, "title" | "body">,
+): ChapterDoc {
+  return {
+    type: "Concept",
+    status: "draft" as OkfStatus,
+    staleAfter: null,
+    generated: { by: "test", at: new Date("2026-01-01T00:00:00.000Z") },
+    verified: [],
+    frontmatter: {},
+    createdAt: new Date("2026-01-01T00:00:00.000Z"),
+    updatedAt: new Date("2026-01-01T00:00:00.000Z"),
+    ...overrides,
+  };
+}
+
+function roundTrip(chapter: ChapterDoc) {
   const document = serializeChapterDocument(chapter);
   return { document, parsed: parseChapterDocument(slug, document) };
 }
@@ -15,19 +34,88 @@ describe("serializeChapterDocument / parseChapterDocument", () => {
   test("round-trips title, timestamps, and a plain body", () => {
     const createdAt = new Date("2026-01-01T00:00:00.000Z");
     const updatedAt = new Date("2026-01-02T00:00:00.000Z");
-    const { parsed } = roundTrip({
-      title: "Designing One-Pagers",
-      body: "Some body text.\n",
-      frontmatter: {},
-      createdAt,
-      updatedAt,
-    });
+    const { parsed } = roundTrip(
+      mkChapter({
+        title: "Designing One-Pagers",
+        body: "Some body text.\n",
+        createdAt,
+        updatedAt,
+      }),
+    );
 
     expect(parsed.title).toBe("Designing One-Pagers");
     expect(parsed.body).toBe("Some body text.\n");
     expect(parsed.createdAt.getTime()).toBe(createdAt.getTime());
     expect(parsed.updatedAt.getTime()).toBe(updatedAt.getTime());
     expect(parsed.frontmatter).toEqual({});
+  });
+
+  test("round-trips OKF typed fields", () => {
+    const createdAt = new Date("2026-01-01T00:00:00.000Z");
+    const updatedAt = new Date("2026-01-02T00:00:00.000Z");
+    const generatedAt = new Date("2026-01-01T12:00:00.000Z");
+    const verifiedAt = new Date("2026-01-03T00:00:00.000Z");
+    const staleAfter = new Date("2026-09-23");
+
+    const { parsed } = roundTrip({
+      title: "Designing One-Pagers",
+      type: "Design Guidance",
+      status: "stable",
+      staleAfter,
+      generated: { by: "shadow/1.0", at: generatedAt },
+      verified: [{ by: "human:alice", at: verifiedAt }],
+      body: "Some body text.\n",
+      frontmatter: {},
+      createdAt,
+      updatedAt,
+    });
+
+    expect(parsed.type).toBe("Design Guidance");
+    expect(parsed.status).toBe("stable");
+    expect(parsed.staleAfter?.getTime()).toBe(staleAfter.getTime());
+    expect(parsed.generated.by).toBe("shadow/1.0");
+    expect(parsed.generated.at.getTime()).toBe(generatedAt.getTime());
+    expect(parsed.verified).toHaveLength(1);
+    expect(parsed.verified[0]!.by).toBe("human:alice");
+    expect(parsed.verified[0]!.at.getTime()).toBe(verifiedAt.getTime());
+  });
+
+  test("OKF fields default gracefully when absent from YAML", () => {
+    const raw = [
+      "---",
+      "title: T",
+      "type: Reference",
+      "createdAt: 2026-01-01T00:00:00.000Z",
+      "updatedAt: 2026-01-01T00:00:00.000Z",
+      "---",
+      "body",
+    ].join("\n");
+
+    const parsed = parseChapterDocument(slug, raw);
+    expect(parsed.type).toBe("Reference");
+    expect(parsed.status).toBe("draft"); // default
+    expect(parsed.staleAfter).toBeNull();
+    expect(parsed.generated.by).toBe("unknown"); // default
+    expect(parsed.verified).toEqual([]);
+  });
+
+  test("OKF verified accepts single mapping (OKF §5.2)", () => {
+    const raw = [
+      "---",
+      "title: T",
+      "type: Reference",
+      "createdAt: 2026-01-01T00:00:00.000Z",
+      "updatedAt: 2026-01-01T00:00:00.000Z",
+      "verified:",
+      "  by: human:alice",
+      "  at: 2026-06-25T09:00:00Z",
+      "---",
+      "body",
+    ].join("\n");
+
+    const parsed = parseChapterDocument(slug, raw);
+    expect(parsed.verified).toHaveLength(1);
+    expect(parsed.verified[0]!.by).toBe("human:alice");
   });
 
   test("round-trips a multi-line body with special characters exactly, including an embedded '---'", () => {
@@ -44,13 +132,12 @@ describe("serializeChapterDocument / parseChapterDocument", () => {
       "",
     ].join("\n");
 
-    const { parsed } = roundTrip({
-      title: "T",
-      body,
-      frontmatter: {},
-      createdAt: new Date(),
-      updatedAt: new Date(),
-    });
+    const { parsed } = roundTrip(
+      mkChapter({
+        title: "T",
+        body,
+      }),
+    );
 
     expect(parsed.body).toBe(body);
   });
@@ -67,39 +154,44 @@ describe("serializeChapterDocument / parseChapterDocument", () => {
       num_field: 3.14,
     };
 
-    const { parsed } = roundTrip({
-      title: "T",
-      body: "body",
-      frontmatter,
-      createdAt: new Date("2026-01-01T00:00:00.000Z"),
-      updatedAt: new Date("2026-01-01T00:00:00.000Z"),
-    });
+    const { parsed } = roundTrip(
+      mkChapter({
+        title: "T",
+        body: "body",
+        frontmatter,
+      }),
+    );
 
     expect(parsed.frontmatter).toEqual(frontmatter);
     expect(Object.keys(parsed.frontmatter)).toEqual(Object.keys(frontmatter));
   });
 
   test("frontmatter never leaks the reserved title/createdAt/updatedAt keys back into the open record", () => {
-    const { parsed } = roundTrip({
-      title: "T",
-      body: "body",
-      frontmatter: { custom: 1 },
-      createdAt: new Date(),
-      updatedAt: new Date(),
-    });
+    const { parsed } = roundTrip(
+      mkChapter({
+        title: "T",
+        body: "body",
+        frontmatter: { custom: 1 },
+      }),
+    );
     expect(parsed.frontmatter).not.toHaveProperty("title");
     expect(parsed.frontmatter).not.toHaveProperty("createdAt");
     expect(parsed.frontmatter).not.toHaveProperty("updatedAt");
+    // OKF fields must also never leak into frontmatter
+    expect(parsed.frontmatter).not.toHaveProperty("type");
+    expect(parsed.frontmatter).not.toHaveProperty("status");
+    expect(parsed.frontmatter).not.toHaveProperty("stale_after");
+    expect(parsed.frontmatter).not.toHaveProperty("generated");
+    expect(parsed.frontmatter).not.toHaveProperty("verified");
   });
 
   test("empty body round-trips as an empty string", () => {
-    const { parsed } = roundTrip({
-      title: "T",
-      body: "",
-      frontmatter: {},
-      createdAt: new Date(),
-      updatedAt: new Date(),
-    });
+    const { parsed } = roundTrip(
+      mkChapter({
+        title: "T",
+        body: "",
+      }),
+    );
     expect(parsed.body).toBe("");
   });
 
@@ -120,13 +212,13 @@ describe("serializeChapterDocument / parseChapterDocument", () => {
     expect(() => parseChapterDocument(slug, missingTitle)).toThrow(ChapterParseError);
   });
 
+  test("parseChapterDocument rejects frontmatter missing type field", () => {
+    const missingType =
+      "---\ntitle: T\ncreatedAt: 2026-01-01T00:00:00.000Z\nupdatedAt: 2026-01-01T00:00:00.000Z\n---\nbody\n";
+    expect(() => parseChapterDocument(slug, missingType)).toThrow(ChapterParseError);
+  });
+
   test("an empty frontmatter block (fences with nothing between them) is syntactically valid delimiting, but still rejected for missing required fields", () => {
-    // `---\n---\n` only ever occurs in a hand-edited file (D4) — this
-    // package always writes at least `title`. Decision: don't accept it as
-    // a valid Chapter (title/createdAt/updatedAt are still mandatory), but
-    // the delimiter regex must recognize it as *present-but-empty*
-    // frontmatter rather than misreporting "missing frontmatter block", so
-    // the error an operator sees names the actual problem.
     let error: unknown;
     try {
       parseChapterDocument(slug, "---\n---\nbody");
@@ -139,9 +231,6 @@ describe("serializeChapterDocument / parseChapterDocument", () => {
   });
 });
 
-// `FRONTMATTER_PATTERN` (`frontmatter-shared.ts`) is shared verbatim between
-// the chapter and volume document formats — confirm the empty-block fix
-// applies to `parseVolumeDocument` too, not just its chapter counterpart.
 describe("parseVolumeDocument shares the same empty-frontmatter-block fix", () => {
   test("an empty frontmatter block is syntactically valid delimiting, but still rejected for missing required fields", () => {
     const volumeSlug = toVolumeSlug("vol-one");

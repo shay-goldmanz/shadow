@@ -1,5 +1,6 @@
 ---
 title: A decision record captures why, so it doesn't get re-litigated
+type: Design Guidance
 createdAt: 2026-01-01T00:00:00.000Z
 updatedAt: 2026-01-01T00:00:00.000Z
 when_to_use: >

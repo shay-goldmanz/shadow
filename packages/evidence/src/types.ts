@@ -80,6 +80,16 @@ export interface SourceRecord {
   readonly snapshot: SnapshotInfo;
   readonly authority: AuthorityInfo;
   readonly volatility: Volatility;
+
+  // ---- OKF v0.2 credibility signals (§5.1) ----
+  /** OKF `sources[].id` — a stable key used to attribute individual claims via markdown footnotes. Maps into OKF's per-claim attribution model (`docs/OKF_INTEGRATION.md` §1.5). */
+  readonly okfSourceId?: string | null;
+  /** OKF `sources[].usage_count` — how often the resource was exercised over `usageWindow`. An adoption/liveness signal, not a score. */
+  readonly usageCount?: number | null;
+  /** OKF `sources[].last_modified` — when the source itself last changed. A recency signal, distinct from `generated.at`. */
+  readonly lastModified?: string | null;
+  /** OKF `usage_window` — frames every `usageCount` with a `{ from, to }` date range. */
+  readonly usageWindow?: { readonly from: string; readonly to: string } | null;
 }
 
 // ---- evidence spans (W3C Web Annotation selectors) -------------------------
