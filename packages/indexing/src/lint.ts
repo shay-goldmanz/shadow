@@ -106,18 +106,18 @@ export async function runLint(
     checks.push(await checkContradiction(document, deps.store, deps.port, options.contradiction));
   }
 
-    checks.push(checkOrphans(document, coverage));
+  checks.push(checkOrphans(document, coverage));
 
-    if (options.okf) {
-      checks.push(
-        checkOkfConformance({
-          index: document,
-          chapters: options.okf.chapters,
-          volumes: options.okf.volumes,
-          artifacts: options.okf.artifacts,
-        }),
-      );
-    }
+  if (options.okf) {
+    checks.push(
+      checkOkfConformance({
+        index: document,
+        chapters: options.okf.chapters,
+        volumes: options.okf.volumes,
+        artifacts: options.okf.artifacts,
+      }),
+    );
+  }
 
-    return { offline, checks, probes };
+  return { offline, checks, probes };
 }
