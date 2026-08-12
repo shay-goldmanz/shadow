@@ -6,6 +6,7 @@ import {
   type Claim,
   issuesOf,
   type LedgerEvent,
+  type OkfStatus,
 } from "../api/types.ts";
 import { AuditBanner, type AuditSummary } from "../components/AuditBanner.tsx";
 import { ChapterProse } from "../components/ChapterProse.tsx";
@@ -20,6 +21,12 @@ interface ChapterData {
 }
 
 type ClaimRestatedEvent = Extract<LedgerEvent, { event: "claim.restated" }>;
+
+const statusLabels: Record<OkfStatus, string> = {
+  draft: "Draft",
+  stable: "Stable",
+  deprecated: "Deprecated",
+};
 
 /** Builds `AuditBanner`'s normalized props from the real `GET .../chapters/:chapter` `AuditRecord` — `verdict.passed`, not a `"pass"`/`"fail"` string; issues nest under `verdict.outcomes[].issues[]`, not a flat `findings[]`. */
 function auditSummaryOf(audit: AuditRecord): AuditSummary {
@@ -117,6 +124,12 @@ export function ChapterPage({
     (auditSummary?.findings ?? []).flatMap((f) => (f.label ? [f.label] : [])),
   );
 
+  const isStale =
+    data.chapter.staleAfter !== null &&
+    typeof data.chapter.staleAfter === "string" &&
+    new Date(data.chapter.staleAfter) <= new Date();
+  const statusLabel = statusLabels[data.chapter.status];
+
   return (
     <div className="page chapter-page">
       <header className="page__header">
@@ -128,6 +141,22 @@ export function ChapterPage({
           ← {slug}
         </button>
         <h1>{data.chapter.title}</h1>
+        <div className="chapter-page__meta">
+          <span
+            className={`chapter-page__status chapter-page__status--${data.chapter.status}`}
+            aria-label={`Status: ${statusLabel}`}
+          >
+            {statusLabel}
+          </span>
+          {isStale && (
+            <span className="chapter-page__stale" role="alert">
+              Stale since {data.chapter.staleAfter}
+            </span>
+          )}
+          {data.chapter.generated.by && data.chapter.generated.by !== "unknown" && (
+            <span className="chapter-page__author">Written by {data.chapter.generated.by}</span>
+          )}
+        </div>
       </header>
 
       {auditSummary && <AuditBanner audit={auditSummary} />}

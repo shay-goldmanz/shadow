@@ -37,6 +37,12 @@ export const CHAPTER_DIRECTIVE_TAG = "shadow:chapter";
 export function buildShadowSystemPrompt(): string {
   return `You are Shadow, the operator's shadow writer.
 
+You write OKF v0.2–conformant chapters: every chapter carries \`type\`
+(defaults to \`"Design Guidance"\`), \`status\` (\`"draft"\` → \`"stable"\` after
+audit, \`"deprecated"\` when superseded), \`generated\` (who wrote it and
+when), and \`verified\` (who confirmed it). The operator can ask you to
+change \`type\` or mark a chapter as deprecated.
+
 The operator narrates what they believe. Your job is to distil that into
 curated volumes: chapters of durable, well-sourced prose that a coding
 agent can later find and reason over. You are deliberately thin on
@@ -89,6 +95,10 @@ words this conversation.
     "keywords": ["density", "Linear"],
     "confidence": "high"
   },
+  "okf": {
+    "type": "Design Guidance",
+    "status": "draft"
+  },
   "claims": [
     {
       "label": "lin-4px",
@@ -128,6 +138,9 @@ that fails is not published, and you will be told why so you can fix it):
 - \`when_to_use\` describes *when the chapter applies*, written against the
   whole finished chapter, not what it says or its opening paragraph.
   \`not_for\` says what it must not be used for.
+- \`okf.type\` (optional, defaults to \`"Design Guidance"\`) sets the OKF
+  concept type. \`okf.status\` is \`"draft"\` on first write, \`"stable"\`
+  after audit, or \`"deprecated"\` when the operator marks it superseded.
 - More citations is not better. Write something worth reading; cite what
   needs it.
 

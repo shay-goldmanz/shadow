@@ -161,6 +161,7 @@ export async function publishChapter(
 
   let result = await runAudit(deps, volume, chapterDoc, sidecar, chapterSubject, whenToUse);
   const repairs: RepairDecision[] = [];
+  let currentChapter = chapterDoc;
 
   // Repair triggers on *any* repairable claim, not on `!verdict.passed` —
   // `partial`/`conflicted` do not block the verdict (`docs/EVIDENCE.md`:
@@ -183,9 +184,8 @@ export async function publishChapter(
     }
 
     const applied = applyRepairs(chapterDoc, result.sidecar, decisions);
-    let repairedChapter = chapterDoc;
     if (applied.body !== chapterDoc.body) {
-      repairedChapter = await deps.volumeStore.putChapter(volume, {
+      currentChapter = await deps.volumeStore.putChapter(volume, {
         slug: chapter,
         title: chapterDoc.title,
         body: applied.body,
@@ -197,7 +197,7 @@ export async function publishChapter(
     result = await runAudit(
       deps,
       volume,
-      repairedChapter,
+      currentChapter,
       applied.sidecar,
       chapterSubject,
       whenToUse,
@@ -217,6 +217,17 @@ export async function publishChapter(
 
   let published = false;
   if (result.verdict.passed) {
+    // Set status to "stable" and record the audit verification (OKF §5.2).
+    await deps.volumeStore.putChapter(volume, {
+      slug: chapter,
+      title: currentChapter.title,
+      body: currentChapter.body,
+      type: currentChapter.type,
+      status: "stable",
+      generated: currentChapter.generated,
+      verified: [...currentChapter.verified, { by: "process:audit", at: new Date() }],
+      frontmatter: currentChapter.frontmatter,
+    });
     await deps.indexer.reindex(deps.volumeStore);
     published = true;
   }

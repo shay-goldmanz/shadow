@@ -26,6 +26,13 @@ Every chapter (and every `VOLUME.md`) opens with:
 ---
 id: 01J8X7QK3M2F5R7T9V0W1Y2Z3A       # minted by the indexer — never write this yourself
 title: How Linear handles information density
+type: Design Guidance                   # Design Guidance | Reference | Concept
+status: draft                           # draft | stable | deprecated
+generated:                              # who wrote this (OKF §5.2)
+  by: shadow/1.0
+  at: 2026-08-11T10:47:00Z
+verified: []                            # confirmed by the audit pass; [] = unverified
+stale_after:                            # optional; YYYY-MM-DD, null if none
 when_to_use: >
   Designing list views, tables, dashboards — any screen with many rows.
   Choosing between density and whitespace. Deciding what metadata belongs
@@ -35,6 +42,32 @@ keywords: [density, list view, table, row height, hover, Linear]
 confidence: high                      # high | medium | provisional
 ---
 ```
+
+**OKF v0.2 fields** — these are the standard metadata fields from the Open
+Knowledge Format. They sit alongside Shadow's own routing fields
+(`when_to_use`, `not_for`, etc.) and make the volume a conformant OKF bundle.
+
+- **`type`** — REQUIRED. What kind of concept this is. Use `Design Guidance`
+  for design/UI advice, `Reference` for factual references and
+  specifications, `Concept` for everything else. Volumes use `Volume`.
+- **`status`** — lifecycle: `draft` (not yet audited or in progress),
+  `stable` (audit passed, ready for consumption), `deprecated` (kept for
+  history, superseded by another chapter). Always `draft` on first write.
+- **`generated`** — who produced this content and when. Use `by:
+  shadow/1.0` with the current timestamp on every write.
+- **`verified`** — who confirmed it. `[]` (empty) means unverified; the
+  audit adds a `process:audit` entry on pass; a human reviewer adds
+  `human:<id>`. You never write these yourself — leave `verified: []` on
+  every new chapter.
+- **`stale_after`** — an absolute `YYYY-MM-DD` date after which the chapter
+  should be treated as stale. Set it when the operator tells you the
+  guidance has an expiry (e.g. a process that changes quarterly). Omit or
+  set to `null` if the chapter has no planned staleness.
+
+Shadow's own fields (`when_to_use`, `not_for`, `keywords`, `confidence`,
+`supersedes`, `aliases`) are OKF extensions — they live in the same
+frontmatter block alongside the OKF fields. Unknown keys are tolerated by
+the spec by design, which is what makes this cohabitation possible.
 
 **`when_to_use` describes *when the chapter applies*, not what it says.**
 This is not a stylistic preference — it is the entire retrieval design. A
@@ -79,7 +112,7 @@ pulled out of a sentence. Mark it with an ordinary Markdown reference
 footnote, keyed by *kind*:
 
 | Kind | Marker | Means |
-|---|---|---|
+| --- | --- | --- |
 | `sourced` | `[^label]` | An external source says this |
 | `derived` | `[^=label]` | This follows from other claims in this chapter |
 | `operator` | `[^~label]` | The operator said this, in this session |
@@ -96,6 +129,7 @@ decision.[^=derived-systemic]
 ```
 
 **Label rules, and they are not cosmetic:**
+
 - lowercase kebab-case (`lin-4px`, not `Lin4px` or `lin_4px`)
 - unique within the chapter
 - **never reused after a claim is deleted** — the evidence ledger references
@@ -110,7 +144,7 @@ decision.[^=derived-systemic]
 ## 3. What needs evidence — and who decides
 
 | kind | Requires |
-|---|---|
+| --- | --- |
 | `sourced` | ≥1 evidence span, from a source actually retrieved, that entails the claim |
 | `derived` | ≥1 claim in *this same chapter* it follows from, and no scope beyond what those claims support |
 | `operator` | a citation into **the session turn where the operator actually said it** |

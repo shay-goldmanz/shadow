@@ -32,6 +32,8 @@ export function shouldSkipRouting(document: IndexDocument): boolean {
 export interface VolumeManifestRow {
   readonly volume_id: string;
   readonly title: string;
+  /** OKF v0.2 concept type (OKF §4.1). */
+  readonly type?: string;
   readonly when_to_use?: string;
   readonly not_for?: string;
   readonly keywords?: readonly string[];
@@ -65,6 +67,7 @@ function toVolumeManifestRow(volume: VolumeIndexNode): VolumeManifestRow {
   return {
     volume_id: volume.volume_id,
     title: volume.title,
+    type: volume.type,
     when_to_use: volume.when_to_use,
     not_for: volume.not_for,
     keywords: volume.keywords,
@@ -104,6 +107,8 @@ export interface ChapterIndexRow {
   readonly tokens: number;
   readonly updated?: string;
   readonly confidence?: Confidence;
+  /** OKF v0.2 lifecycle status — `draft`, `stable`, or `deprecated` (OKF §5.4). */
+  readonly status?: string;
   /** The `node_id` of the chapter that supersedes this one, if any — derived from *other* chapters' `supersedes` lists, not authored on this chapter directly. */
   readonly superseded_by?: string;
 }
@@ -167,6 +172,7 @@ export function buildNavigatePayload(
         tokens: chapter.tokens,
         updated: chapter.updated,
         confidence: chapter.confidence,
+        status: chapter.status,
         superseded_by: supersededBy.get(chapter.node_id),
       }),
     );
