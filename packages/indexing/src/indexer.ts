@@ -201,6 +201,7 @@ export class StructuralIndexer implements Indexer {
               chapterTitle: ensured.chapter.title,
               body: ensured.chapter.body,
               frontmatter: ensured.chapter.frontmatter,
+              status: ensured.chapter.status,
               file: store.chapterRelativePath(volume.slug, ensured.chapter.slug),
             }),
           );
@@ -213,6 +214,7 @@ export class StructuralIndexer implements Indexer {
         buildVolumeIndexNode({
           volumeSlug: volume.slug,
           volumeTitle: volume.title,
+          volumeType: volume.type,
           // @shadow/core's Volume now carries an open `frontmatter` record
           // (T1.4/f02692f), the volume-level counterpart of a chapter's
           // frontmatter — VOLUME.md round-trips `when_to_use`/`not_for`/

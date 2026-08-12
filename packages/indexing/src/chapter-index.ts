@@ -27,6 +27,8 @@ export interface BuildChapterIndexNodeInput {
   readonly chapterTitle: string;
   readonly body: string;
   readonly frontmatter: Readonly<Record<string, unknown>>;
+  /** OKF v0.2 lifecycle status from the chapter's typed fields (OKF §5.4). */
+  readonly status?: string;
   /** Volume-relative location, e.g. `volumes/<slug>/chapters/<slug>.md`. */
   readonly file: string;
 }
@@ -115,6 +117,7 @@ export function buildChapterIndexNode(input: BuildChapterIndexNodeInput): Chapte
     confidence: coerceConfidence(input.frontmatter.confidence),
     supersedes: coerceStringArray(input.frontmatter.supersedes),
     aliases: coerceStringArray(input.frontmatter.aliases),
+    status: input.status,
     updated: coerceDateLike(input.frontmatter.updated),
     tokens,
     span,

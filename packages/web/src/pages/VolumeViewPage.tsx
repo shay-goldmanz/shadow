@@ -78,6 +78,13 @@ export function VolumeViewPage({
   if (error) return <p role="alert">Could not load this volume: {error}</p>;
   if (!data) return <p aria-live="polite">Loading volume…</p>;
 
+  const volumeStatusLabel =
+    data.volume.status === "stable"
+      ? "Stable"
+      : data.volume.status === "deprecated"
+        ? "Deprecated"
+        : "Draft";
+
   return (
     <div className="page volume-view-page">
       <header className="page__header">
@@ -85,6 +92,17 @@ export function VolumeViewPage({
           ← Volumes
         </button>
         <h1>{data.volume.title}</h1>
+        <div className="volume-view-page__meta">
+          <span
+            className={`volume-view-page__status volume-view-page__status--${data.volume.status}`}
+            aria-label={`Status: ${volumeStatusLabel}`}
+          >
+            {volumeStatusLabel}
+          </span>
+          {data.volume.type && data.volume.type !== "Concept" && (
+            <span className="volume-view-page__type">{data.volume.type}</span>
+          )}
+        </div>
         {data.volume.description && <p className="page__subtitle">{data.volume.description}</p>}
         <button
           type="button"

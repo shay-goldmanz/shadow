@@ -28,6 +28,8 @@ export interface RankedChapterRow {
   readonly updated?: string;
   readonly confidence?: Confidence;
   readonly superseded_by?: string;
+  /** OKF v0.2 lifecycle status. */
+  readonly status?: string;
   /** Present only when `--rank` was given. */
   readonly score?: number;
 }

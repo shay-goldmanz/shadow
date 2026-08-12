@@ -30,21 +30,39 @@ Do this even if nobody asked you to. Not every task needs it — routine
 mechanical work doesn't — but design, writing, architecture, and process
 decisions do.
 
-## Rule 2 — every result and every error carries `next_steps`. Read it. Don't guess.
+### OKF fields on every chapter
+
+Chapters carry standard Open Knowledge Format (OKF v0.2) metadata alongside
+Shadow's own routing fields. When `shadow read` returns a chapter, you'll
+also see these:
+
+- **`type`** — what kind of concept: `Design Guidance`, `Reference`,
+  `Concept`, or `Volume`. Useful for disambiguation when search results are
+  mixed.
+- **`status`** — lifecycle: `draft` (not yet audited), `stable` (audit
+  passed, ready), `deprecated` (kept for history, superseded). **Prefer
+  `stable` chapters over `draft` ones.** A `draft` chapter may be
+  incomplete or unaudited; if you rely on one, note that it's provisional.
+- **`stale_after`** — an absolute `YYYY-MM-DD` date, or `null`. If
+  `today >= stale_after`, the chapter's guidance has an expiry and should
+  be treated as possibly outdated. Check this before citing a chapter as
+  authoritative.
+
+## Rule 2 — every result and every error carries `next_steps`. Read it. Don't guess
 
 Every `shadow` command emits JSON with a `next_steps` array — on success on
 stdout, on failure (non-zero exit) on stderr as `{ "error": {...},
 "next_steps": [...] }`. `next_steps` names the exact next command. Use it
 instead of inferring one from the shape of the result.
 
-## Rule 3 — `find` is multi-invocation. Drive the loop yourself.
+## Rule 3 — `find` is multi-invocation. Drive the loop yourself
 
 `find` does not return "the answer" in one call. Each call returns one
 `stage`, and each stage tells you the next call to make. You carry state
 (`--visited`, `--round`) forward — the CLI does not remember between calls.
 
 | `stage` | What it means | What you do |
-|---|---|---|
+| --- | --- | --- |
 | `route` | Corpus is large; pick a volume first | Read each volume's `when_to_use`/`not_for`, then `shadow find "<task>" --volumes <id1,id2>` |
 | `navigate` | Here are candidate chapters | Read each row's `when_to_use`/`not_for`/`keywords`, pick real candidates, `shadow read <node_id>` on them. If none fit and rounds remain: `shadow find "<task>" --visited <ids> --none` |
 | `promoted` | A keyword-fallback hit, not a routed one | **Weak signal — do not trust it as-is.** Verify with `shadow read <node_id>` before citing or relying on it |
