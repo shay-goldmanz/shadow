@@ -5,7 +5,7 @@
  * the real CLI accepts.
  *
  * `packages/cli/src/skill-drift.test.ts` (T3.2) already does an in-package
- * version of this against the *source* `skills/shadow-volumes/SKILL.md` by
+ * version of this against the *source* `skills/shadow-find/SKILL.md` by
  * driving `run()` in-process. This is deliberately not a reuse of that
  * file (`packages/cli` is off limits to modify, and importing its
  * internals would also violate this suite's own "argv in, JSON out"

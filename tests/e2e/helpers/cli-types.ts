@@ -1,7 +1,7 @@
 /**
  * Independently-declared shapes for `shadow`'s JSON output — the contract
  * documented in `docs/INDEXING.md` ("The retrieval trace") and
- * `skills/shadow-volumes/SKILL.md`, not types imported from
+ * `skills/shadow-find/SKILL.md`, not types imported from
  * `packages/cli/src/commands/*.ts`. A real coding agent parsing `shadow`'s
  * stdout has no access to this monorepo's TypeScript types either — it has
  * the JSON and the skill's prose description of it. Declaring the contract
@@ -37,7 +37,7 @@ export interface VerdictResult {
   readonly next_steps: readonly string[];
 }
 
-/** STAGE 0 (LOCATE) fallback hit (D11a) — a raw keyword/BM25 match, not a routed one. Per `skills/shadow-volumes/SKILL.md`: "Weak signal — do not trust it as-is." */
+/** STAGE 0 (LOCATE) fallback hit (D11a) — a raw keyword/BM25 match, not a routed one. Per `skills/shadow-find/SKILL.md`: "Weak signal — do not trust it as-is." */
 export interface PromotedResult {
   readonly stage: "promoted";
   readonly query: string;

@@ -19,7 +19,7 @@ const ALL_ERRORS: readonly ShadowCliError[] = [
   new StaleIndexError("sha256:aaa", "sha256:bbb"),
   new VolumeLookupError(new VolumeNotFoundError("missing-volume")),
   new NodeLookupError(new NodeNotFoundError("bad-node-id")),
-  new SkillAlreadyInstalledError("/tmp/repo/.claude/skills/shadow-volumes/SKILL.md"),
+  new SkillAlreadyInstalledError("/tmp/repo/.claude/skills/shadow-find/SKILL.md"),
   new UnexpectedCliError(new Error("boom")),
 ];
 

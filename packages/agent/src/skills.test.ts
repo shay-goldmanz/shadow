@@ -5,21 +5,21 @@ import { join } from "node:path";
 import { ensureWritingVolumesSkillInstalled } from "./skills.ts";
 
 describe("ensureWritingVolumesSkillInstalled", () => {
-  test("copies the canonical skills/writing-volumes/SKILL.md into <targetDir>/.claude/skills/writing-volumes/SKILL.md", async () => {
+  test("copies the canonical skills/shadow-write-volumes/SKILL.md into <targetDir>/.claude/skills/shadow-write-volumes/SKILL.md", async () => {
     const targetDir = await mkdtemp(join(tmpdir(), "shadow-agent-skill-install-"));
     try {
       const result = await ensureWritingVolumesSkillInstalled(targetDir);
-      expect(result.skill).toBe("writing-volumes");
-      expect(result.path).toBe(join(targetDir, ".claude", "skills", "writing-volumes", "SKILL.md"));
+      expect(result.skill).toBe("shadow-write-volumes");
+      expect(result.path).toBe(join(targetDir, ".claude", "skills", "shadow-write-volumes", "SKILL.md"));
 
       const written = await readFile(result.path, "utf8");
       const canonical = await readFile(
-        join(import.meta.dir, "..", "..", "..", "skills", "writing-volumes", "SKILL.md"),
+        join(import.meta.dir, "..", "..", "..", "skills", "shadow-write-volumes", "SKILL.md"),
         "utf8",
       );
       expect(written).toBe(canonical);
       // The canonical skill file's own frontmatter — spot-check it round-tripped verbatim.
-      expect(written).toContain("name: writing-volumes");
+      expect(written).toContain("name: shadow-write-volumes");
       expect(written).toContain("when_to_use");
     } finally {
       await rm(targetDir, { recursive: true, force: true });

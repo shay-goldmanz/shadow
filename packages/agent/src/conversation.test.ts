@@ -326,7 +326,7 @@ describe("ShadowConversation — critical path", () => {
         expect(options.disallowedTools).toContain("WebFetch");
         expect(options.disallowedTools).toContain("WebSearch");
         expect(options.disallowedTools).toContain("Bash");
-        expect(options.skills).toEqual(["writing-volumes"]);
+        expect(options.skills).toEqual(["shadow-write-volumes"]);
         expect(options.settingSources).toEqual(["project"]);
         expect(options.cwd).toBe(sessionCwd);
       });

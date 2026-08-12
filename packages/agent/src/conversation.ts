@@ -83,7 +83,7 @@ export interface ShadowAgentDeps {
   readonly entailmentRelevanceJudge: EntailmentRelevanceJudge;
   readonly claimRestater: ClaimRestater;
   /**
-   * Directory whose `.claude/skills/writing-volumes/SKILL.md` Shadow's
+   * Directory whose `.claude/skills/shadow-write-volumes/SKILL.md` Shadow's
    * session discovers (`skills.ts`), and the session's `cwd`. Defaults to
    * the operator's `~/.shadow` root (D4) — the one directory this stack
    * already treats as home. Tests should pass an isolated temp directory.
@@ -354,7 +354,7 @@ export class ShadowConversation {
       model: this.deps.model,
       cwd,
       systemPrompt: buildShadowSystemPrompt(),
-      skills: ["writing-volumes"],
+      skills: ["shadow-write-volumes"],
       settingSources: ["project"],
       allowedTools: ["Skill"],
       disallowedTools: ["WebFetch", "WebSearch", "Bash", "Read", "Write", "Edit", "Agent", "Task"],

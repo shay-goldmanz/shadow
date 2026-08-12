@@ -1,5 +1,5 @@
 ---
-name: writing-volumes
+name: shadow-write-volumes
 description: >-
   Use whenever Shadow is drafting, revising, or reviewing a volume chapter —
   writing new prose, adding a claim, editing frontmatter, or preparing a

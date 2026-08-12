@@ -42,7 +42,7 @@ const USAGE = {
     lint: "shadow lint [--offline]                      # index self-critique (D14); --offline skips model-backed checks",
     misses: "shadow misses                                # the operator's authoring backlog (D14)",
     install:
-      "shadow install [--target dir] [--force]     # install the shadow-volumes skill into a repo",
+      "shadow install [--target dir] [--force]     # install the shadow-find skill into a repo",
   },
   next_steps: [
     'Start with `shadow volumes` or `shadow find "<task>"` to discover what exists.',

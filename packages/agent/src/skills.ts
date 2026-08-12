@@ -1,5 +1,5 @@
 /**
- * Makes the `writing-volumes` skill (T3.2, `skills/writing-volumes/SKILL.md`)
+ * Makes the `shadow-write-volumes` skill (T3.2, `skills/shadow-write-volumes/SKILL.md`)
  * discoverable by Shadow's own agentic session.
  *
  * **How the session finds `skills/`.** The Agent SDK's `skills` option
@@ -8,13 +8,13 @@
  * Discovery is filesystem-based, under `<cwd>/.claude/skills/<name>/SKILL.md`
  * for project-scope skills (gated by `settingSources` including
  * `"project"`). The monorepo's canonical skill lives at the top-level
- * `skills/writing-volumes/SKILL.md`, *not* under `.claude/`, so Shadow's
+ * `skills/shadow-write-volumes/SKILL.md`, *not* under `.claude/`, so Shadow's
  * session cannot see it without a copy landing in the right place first —
  * exactly the same problem `@shadow/cli`'s `shadow install` solves for a
- * *coding agent* consuming `skills/shadow-volumes/SKILL.md` (see
+ * *coding agent* consuming `skills/shadow-find/SKILL.md` (see
  * `packages/cli/src/commands/install.ts`). This module is that same move,
  * aimed at Shadow itself: copy the canonical file into
- * `<targetDir>/.claude/skills/writing-volumes/SKILL.md` before creating a
+ * `<targetDir>/.claude/skills/shadow-write-volumes/SKILL.md` before creating a
  * session with `cwd: targetDir`.
  *
  * `targetDir` defaults (in `conversation.ts`) to the operator's `~/.shadow`
@@ -34,7 +34,7 @@ import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { SkillInstallError } from "./errors.ts";
 
-const SKILL_NAME = "writing-volumes";
+const SKILL_NAME = "shadow-write-volumes";
 
 // This file lives at packages/agent/src/skills.ts — two levels below the
 // repo root, where `skills/` lives alongside `packages/` (mirrors
@@ -54,8 +54,8 @@ export interface EnsureSkillInstalledResult {
 }
 
 /**
- * Copy the canonical `writing-volumes` skill into
- * `<targetDir>/.claude/skills/writing-volumes/SKILL.md`.
+ * Copy the canonical `shadow-write-volumes` skill into
+ * `<targetDir>/.claude/skills/shadow-write-volumes/SKILL.md`.
  *
  * @throws {SkillInstallError} if the canonical skill file cannot be read,
  *   or the destination cannot be written.

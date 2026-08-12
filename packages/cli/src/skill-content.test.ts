@@ -1,7 +1,7 @@
 /**
  * Validates the two skills that live in the top-level `skills/` directory
- * (`docs/PLAN.md` T3.2): `writing-volumes` (guides Shadow while authoring
- * chapters) and `shadow-volumes` (the consumer skill `shadow install`
+ * (`docs/PLAN.md` T3.2): `shadow-write-volumes` (guides Shadow while authoring
+ * chapters) and `shadow-find` (the consumer skill `shadow install`
  * ships into other repos). Lives here, in `@shadow/cli`, because this
  * package is what has Bun's native YAML parser and a test runner wired up
  * — `skills/` itself is plain Markdown with no build tooling of its own.
@@ -10,7 +10,7 @@
  * 1. Both files are valid `SKILL.md`s — YAML frontmatter + Markdown body —
  *    carrying at least `name` and `description`, per Claude Code's skill
  *    format.
- * 2. `shadow-volumes`'s `description` is what makes unprompted invocation
+ * 2. `shadow-find`'s `description` is what makes unprompted invocation
  *    happen at all (D3) — it must actually describe *when* to reach for the
  *    skill, not just what it is.
  */
@@ -43,7 +43,7 @@ async function parseSkill(name: string): Promise<ParsedSkill> {
   return { frontmatter: parsed as Record<string, unknown>, body: body ?? "" };
 }
 
-describe.each([["writing-volumes"], ["shadow-volumes"]])("skills/%s/SKILL.md", (name) => {
+describe.each([["shadow-write-volumes"], ["shadow-find"]])("skills/%s/SKILL.md", (name) => {
   test("parses as valid YAML frontmatter + Markdown body", async () => {
     const skill = await parseSkill(name);
     expect(typeof skill.frontmatter).toBe("object");
@@ -64,65 +64,65 @@ describe.each([["writing-volumes"], ["shadow-volumes"]])("skills/%s/SKILL.md", (
   });
 });
 
-describe("writing-volumes content", () => {
+describe("shadow-write-volumes content", () => {
   test("teaches the frontmatter contract: when_to_use is about applicability, not summary", async () => {
-    const { body } = await parseSkill("writing-volumes");
+    const { body } = await parseSkill("shadow-write-volumes");
     expect(body).toContain("when_to_use");
     expect(body).toContain("not_for");
     expect(body.toLowerCase()).toContain("0.85");
   });
 
   test("teaches claim marking: sourced/derived/operator footnote syntax", async () => {
-    const { body } = await parseSkill("writing-volumes");
+    const { body } = await parseSkill("shadow-write-volumes");
     expect(body).toContain("[^label]");
     expect(body).toContain("[^=label]");
     expect(body).toContain("[^~label]");
   });
 
   test("states plainly that the writer does not decide what needs evidence", async () => {
-    const { body } = await parseSkill("writing-volumes");
+    const { body } = await parseSkill("shadow-write-volumes");
     expect(body.toLowerCase()).toContain("you do not decide");
   });
 
   test("warns against citation padding, citing the extractiveness guardrail", async () => {
-    const { body } = await parseSkill("writing-volumes");
+    const { body } = await parseSkill("shadow-write-volumes");
     expect(body).toContain("−0.96");
   });
 });
 
-describe("shadow-volumes content", () => {
+describe("shadow-find content", () => {
   test("description drives unprompted invocation: mentions reaching for it before improvising", async () => {
-    const { frontmatter } = await parseSkill("shadow-volumes");
+    const { frontmatter } = await parseSkill("shadow-find");
     const description = (frontmatter.description as string).toLowerCase();
     expect(description).toContain("before");
     expect(description).toMatch(/design|writing|architecture|process/);
   });
 
   test("teaches reading next_steps rather than guessing the next command", async () => {
-    const { body } = await parseSkill("shadow-volumes");
+    const { body } = await parseSkill("shadow-find");
     expect(body).toContain("next_steps");
   });
 
   test("documents all four find stages", async () => {
-    const { body } = await parseSkill("shadow-volumes");
+    const { body } = await parseSkill("shadow-find");
     for (const stage of ["route", "navigate", "promoted", "verdict"]) {
       expect(body).toContain(stage);
     }
   });
 
   test("flags `promoted` as a weak signal to verify before trusting", async () => {
-    const { body } = await parseSkill("shadow-volumes");
+    const { body } = await parseSkill("shadow-find");
     expect(body.toLowerCase()).toContain("weak");
   });
 
   test("flags not-in-corpus verdicts as final for that query", async () => {
-    const { body } = await parseSkill("shadow-volumes");
+    const { body } = await parseSkill("shadow-find");
     expect(body).toContain("not-in-corpus");
     expect(body.toLowerCase()).toContain("final");
   });
 
   test("names grep and chapters --rank as escape hatches, not the default path", async () => {
-    const { body } = await parseSkill("shadow-volumes");
+    const { body } = await parseSkill("shadow-find");
     expect(body).toContain("shadow grep");
     expect(body).toContain("--rank");
     expect(body.toLowerCase()).toContain("escape hatch");
