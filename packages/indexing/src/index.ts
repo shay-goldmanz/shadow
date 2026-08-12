@@ -43,6 +43,9 @@ export {
 } from "./hashing.ts";
 export type { FlatHeading, HeadingNode } from "./heading-tree.ts";
 export { buildHeadingTree, extractHeadings, parseHeadingTree } from "./heading-tree.ts";
+// ---- OKF index.md / log.md generation (Phase 2) ----------------------------
+export { generateRootIndexMd, generateVolumeIndexMd } from "./index-md.ts";
+export { generateRootLogMd, generateVolumeLogMd } from "./log-md.ts";
 // ---- the build port -------------------------------------------------------
 export type { BuildIndexResult, Indexer, MintedId } from "./indexer.ts";
 export { StructuralIndexer } from "./indexer.ts";

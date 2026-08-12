@@ -11,6 +11,7 @@
   },
   "dependencies": {
     "@shadow/core": "workspace:*",
+    "@shadow/evidence": "workspace:*",
     "@shadow/model": "workspace:*",
     "zod": "^4.4.3"
   }
