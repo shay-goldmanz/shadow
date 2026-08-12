@@ -4,6 +4,26 @@ import { RestatementNotice } from "../components/RestatementNotice.tsx";
 import type { TranscriptItem } from "./chat-transcript.ts";
 
 /**
+ * A ` ```shadow:research {...}``` ` or ` ```shadow:chapter {...}``` ` fenced
+ * block (the two directive tags `@shadow/agent`'s `directives.ts` parses)
+ * is the model narrating its own tool call as text rather than a distinct
+ * event — the started/finished events already render that progress as
+ * their own rows below, and `shadow:chapter`'s block in particular embeds
+ * an entire draft chapter body as one long escaped JSON string, which is
+ * the "goes on and on" case. Left in, it reads as a raw JSON dump in the
+ * middle of the operator's answer. Matched generically on `shadow:<tag>`
+ * (not just today's two known tags) so a future directive doesn't leak the
+ * same way before this gets updated. Stripped here rather than upstream so
+ * this stays a rendering concern, not a change to the SSE contract or the
+ * reducer in `chat-transcript.ts`.
+ */
+const TOOL_CALL_BLOCK = /```shadow:[a-z]+[\s\S]*?```/gi;
+
+function visibleAssistantText(text: string): string {
+  return text.replace(TOOL_CALL_BLOCK, "").trim();
+}
+
+/**
  * Renders the transcript in order. Research and publication events get
  * their own visible rows rather than being folded into prose, so slow work
  * reads as progress instead of a hang — and `chapter.restated` gets the
@@ -31,13 +51,16 @@ function TranscriptItemView({ item }: { readonly item: TranscriptItem }) {
         </div>
       );
 
-    case "assistant":
+    case "assistant": {
+      const text = visibleAssistantText(item.text);
+      if (!text) return null;
       return (
         <div className="chat-message chat-message--assistant">
           <span className="chat-message__author">Shadow</span>
-          <p>{item.text}</p>
+          <p>{text}</p>
         </div>
       );
+    }
 
     case "research.started":
       // `brief` is a `ResearchBrief` object (`{ goal, volume, ... }`), not a

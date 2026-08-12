@@ -32,6 +32,7 @@ export function VolumeViewPage({
   >(undefined);
   const [indexState, setIndexState] = useState<IndexState>({ status: "loading" });
   const [error, setError] = useState<string | undefined>(undefined);
+  const [filter, setFilter] = useState("");
 
   useEffect(() => {
     let cancelled = false;
@@ -78,6 +79,15 @@ export function VolumeViewPage({
   if (error) return <p role="alert">Could not load this volume: {error}</p>;
   if (!data) return <p aria-live="polite">Loading volume…</p>;
 
+  const query = filter.trim().toLowerCase();
+  const visibleChapters = query
+    ? data.chapters.filter(
+        (chapter) =>
+          chapter.title.toLowerCase().includes(query) ||
+          (whenToUseOf(chapter) ?? "").toLowerCase().includes(query),
+      )
+    : data.chapters;
+
   return (
     <div className="page volume-view-page">
       <header className="page__header">
@@ -101,27 +111,44 @@ export function VolumeViewPage({
           {data.chapters.length === 0 ? (
             <p>No chapters yet — chat with Shadow to write the first one.</p>
           ) : (
-            <ul className="chapter-list">
-              {data.chapters.map((chapter) => (
-                <li key={chapter.slug}>
-                  <button
-                    type="button"
-                    className="chapter-list__item"
-                    onClick={() => navigate({ name: "chapter", slug, chapter: chapter.slug })}
-                  >
-                    <span className="chapter-list__title">{chapter.title}</span>
-                    {whenToUseOf(chapter) && (
-                      <span className="chapter-list__when-to-use">{whenToUseOf(chapter)}</span>
-                    )}
-                  </button>
-                </li>
-              ))}
-            </ul>
+            <>
+              <input
+                type="text"
+                className="chapter-filter"
+                aria-label="Find a chapter"
+                placeholder="Find a chapter by task…"
+                value={filter}
+                onChange={(event) => setFilter(event.target.value)}
+              />
+              {visibleChapters.length === 0 ? (
+                <p className="chapter-filter__empty">No chapter matches "{filter.trim()}".</p>
+              ) : (
+                <ul className="chapter-list">
+                  {visibleChapters.map((chapter) => (
+                    <li key={chapter.slug} className="chapter-card">
+                      <button
+                        type="button"
+                        className="chapter-list__item"
+                        onClick={() => navigate({ name: "chapter", slug, chapter: chapter.slug })}
+                      >
+                        <span className="chapter-list__title">{chapter.title}</span>
+                      </button>
+                      {whenToUseOf(chapter) && (
+                        <details className="chapter-card__details">
+                          <summary>When to use</summary>
+                          <p className="chapter-card__when-to-use">{whenToUseOf(chapter)}</p>
+                        </details>
+                      )}
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </>
           )}
         </section>
 
         <section aria-label="Index tree">
-          <h2>Index</h2>
+          <h2>Outline</h2>
           {indexState.status === "loading" && <p aria-live="polite">Loading index…</p>}
           {indexState.status === "not-built" && (
             <p className="index-tree__empty">

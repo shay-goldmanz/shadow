@@ -29,6 +29,7 @@ export function ChapterProse({
 }) {
   const blocks = parseChapterBody(body);
   const claimsByLabel = new Map(claims.map((claim) => [claim.label, claim]));
+  const numberByLabel = numberCitations(blocks);
 
   return (
     <div className="chapter-prose">
@@ -38,6 +39,7 @@ export function ChapterProse({
           key={i}
           block={block}
           claimsByLabel={claimsByLabel}
+          numberByLabel={numberByLabel}
           failingLabels={failingLabels}
           onCiteClick={onCiteClick}
         />
@@ -46,14 +48,29 @@ export function ChapterProse({
   );
 }
 
+/** Assigns each distinct `[^label]` a 1-based number in first-appearance order, so the mark rendered inline is a short numeral rather than the raw label text — repeats of the same label reuse its first number. */
+function numberCitations(blocks: readonly ChapterBlock[]): ReadonlyMap<string, number> {
+  const numberByLabel = new Map<string, number>();
+  for (const block of blocks) {
+    for (const segment of block.segments) {
+      if (segment.type === "citation" && !numberByLabel.has(segment.label)) {
+        numberByLabel.set(segment.label, numberByLabel.size + 1);
+      }
+    }
+  }
+  return numberByLabel;
+}
+
 function Block({
   block,
   claimsByLabel,
+  numberByLabel,
   failingLabels,
   onCiteClick,
 }: {
   readonly block: ChapterBlock;
   readonly claimsByLabel: Map<string, Claim>;
+  readonly numberByLabel: ReadonlyMap<string, number>;
   readonly failingLabels: ReadonlySet<string>;
   readonly onCiteClick: (claim: Claim) => void;
 }) {
@@ -63,6 +80,7 @@ function Block({
       key={i}
       segment={segment}
       claimsByLabel={claimsByLabel}
+      numberByLabel={numberByLabel}
       failingLabels={failingLabels}
       onCiteClick={onCiteClick}
     />
@@ -78,11 +96,13 @@ function Block({
 function Segment({
   segment,
   claimsByLabel,
+  numberByLabel,
   failingLabels,
   onCiteClick,
 }: {
   readonly segment: InlineSegment;
   readonly claimsByLabel: Map<string, Claim>;
+  readonly numberByLabel: ReadonlyMap<string, number>;
   readonly failingLabels: ReadonlySet<string>;
   readonly onCiteClick: (claim: Claim) => void;
 }) {
@@ -95,6 +115,7 @@ function Segment({
     <span id={`claim-${segment.label}`}>
       <CitationMark
         label={segment.label}
+        number={numberByLabel.get(segment.label) ?? 0}
         tone={tone}
         onClick={() => {
           if (claim) onCiteClick(claim);

@@ -109,6 +109,8 @@ export function ChapterPage({
   // a deleted claim's own record is gone too).
   const labelByClaimId = new Map(data.claims.map((claim) => [claim.id, claim.label]));
 
+  const escalatedCount = restatements.filter((event) => event.outcome === "escalated").length;
+
   const auditSummary = data.audit ? auditSummaryOf(data.audit) : undefined;
   const failingLabels = new Set(
     (auditSummary?.findings ?? []).flatMap((f) => (f.label ? [f.label] : [])),
@@ -146,8 +148,15 @@ export function ChapterPage({
       />
 
       {restatements.length > 0 && (
-        <section aria-label="Evidence history" className="chapter-page__history">
-          <h2>What Shadow softened</h2>
+        <details aria-label="Evidence history" className="chapter-page__history">
+          <summary>
+            <h2>What Shadow softened</h2>
+            <span className="chapter-page__history-count">
+              {restatements.length} claim{restatements.length === 1 ? "" : "s"}
+              {escalatedCount > 0 &&
+                ` · ${escalatedCount} need${escalatedCount === 1 ? "s" : ""} review`}
+            </span>
+          </summary>
           {restatements.map((event) => (
             <RestatementNotice
               key={`${event.claimId}-${event.ts}`}
@@ -160,7 +169,7 @@ export function ChapterPage({
               }}
             />
           ))}
-        </section>
+        </details>
       )}
 
       <SnapshotDialog

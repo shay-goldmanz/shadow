@@ -10,10 +10,13 @@ import type { Tone } from "./Badge.tsx";
  */
 export function CitationMark({
   label,
+  number,
   tone,
   onClick,
 }: {
   readonly label: string;
+  /** This claim's 1-based position among citations in the chapter, in reading order — the visible mark, so the prose carries a short numeral instead of the raw `[^label]` text. */
+  readonly number: number;
   readonly tone: Tone;
   readonly onClick: () => void;
 }) {
@@ -23,10 +26,10 @@ export function CitationMark({
         type="button"
         className={`citation-mark citation-mark--${tone}`}
         data-tone={tone}
-        aria-label={`Citation ${label}${describeTone(tone)}, opens evidence snapshot`}
+        aria-label={`Citation ${label} (${number})${describeTone(tone)}, opens evidence snapshot`}
         onClick={onClick}
       >
-        {label}
+        {number}
       </button>
     </sup>
   );

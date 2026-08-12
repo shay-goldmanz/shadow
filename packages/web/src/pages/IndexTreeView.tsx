@@ -1,12 +1,16 @@
 import type { ChapterIndexNode, SectionIndexNode, VolumeIndexDocument } from "../api/types.ts";
 
 /**
- * The volume's index tree (D11/D11a/D13/D14): heading paths and the routing
- * signals that steer a consuming agent. `index` is the raw `index.json`
- * document `GET .../index` returns — one `VolumeIndexNode` holding this
- * volume's `ChapterIndexNode[]`, each optionally expanding into
- * `SectionIndexNode[]` (chapters at or above the section-token threshold)
- * or a flat `key_items` heading list (chapters under it) — never both.
+ * The volume's index tree (D11/D11a/D13/D14), reduced to titles only. The
+ * full `when_to_use`/`not_for` text is already available per-chapter in the
+ * chapter list right next to this (behind its own toggle) — printing it
+ * again here duplicated the same paragraphs twice on one screen. This stays
+ * an outline for orientation in a longer volume: heading paths, nothing
+ * more. `index` is the raw `index.json` document `GET .../index` returns —
+ * one `VolumeIndexNode` holding this volume's `ChapterIndexNode[]`, each
+ * optionally expanding into `SectionIndexNode[]` (chapters at or above the
+ * section-token threshold) or a flat `key_items` heading list (chapters
+ * under it) — never both.
  */
 export function IndexTreeView({ index }: { readonly index: VolumeIndexDocument }) {
   const { chapters } = index.volume;
@@ -26,10 +30,6 @@ function ChapterNodeView({ node }: { readonly node: ChapterIndexNode }) {
   return (
     <li className="index-tree__node">
       <div className="index-tree__title">{node.title}</div>
-      {node.when_to_use && (
-        <div className="index-tree__when-to-use">when to use: {node.when_to_use}</div>
-      )}
-      {node.not_for && <div className="index-tree__not-for">not for: {node.not_for}</div>}
       {node.sections && node.sections.length > 0 && (
         <ul>
           {node.sections.map((section) => (

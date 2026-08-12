@@ -30,6 +30,17 @@ export interface AuditSummary {
 export function AuditBanner({ audit }: { readonly audit: AuditSummary }) {
   const { passed, findings } = audit;
 
+  // A passing audit with nothing to act on doesn't need the full banner's
+  // weight — it's a status, not a call to attention. A failing audit (or
+  // one with findings/metrics to show) keeps the full treatment below.
+  if (passed && (!findings || findings.length === 0) && audit.narrativeRatio === undefined) {
+    return (
+      <div className="audit-chip" aria-live="polite">
+        <Badge tone="sage">Audit passed</Badge>
+      </div>
+    );
+  }
+
   return (
     <section
       className={`audit-banner audit-banner--${passed ? "pass" : "fail"}`}
