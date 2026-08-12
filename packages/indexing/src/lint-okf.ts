@@ -78,7 +78,11 @@ function validateOkfChapterRecord(
   }
 
   // generated must have by+at (OKF §5.2)
-  if (!record.generated || typeof record.generated.by !== "string" || typeof record.generated.at !== "string") {
+  if (
+    !record.generated ||
+    typeof record.generated.by !== "string" ||
+    typeof record.generated.at !== "string"
+  ) {
     findings.push({
       code: "okf-missing-generated",
       severity: "error",
@@ -104,7 +108,11 @@ function validateOkfChapterRecord(
   if (record.verified !== undefined && record.verified !== null) {
     const entries = Array.isArray(record.verified) ? record.verified : [record.verified];
     for (const entry of entries) {
-      if (!entry || typeof entry !== "object" || typeof (entry as Record<string, unknown>).by !== "string") {
+      if (
+        !entry ||
+        typeof entry !== "object" ||
+        typeof (entry as Record<string, unknown>).by !== "string"
+      ) {
         findings.push({
           code: "okf-invalid-verified-by",
           severity: "error",

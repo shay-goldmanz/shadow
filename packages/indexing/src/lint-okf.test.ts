@@ -79,7 +79,9 @@ describe("checkOkfConformance", () => {
 
   test("a valid Attested Computation chapter passes", () => {
     const c = chapter({
-      node_id: "A", title: "Revenue computation", slug: "revenue",
+      node_id: "A",
+      title: "Revenue computation",
+      slug: "revenue",
     });
     const doc = document([volume({ volume_id: "v", chapters: [c] })]);
 
@@ -87,7 +89,9 @@ describe("checkOkfConformance", () => {
       index: doc,
       chapters: [
         oc({
-          slug: "revenue", node_id: "A", type: "Attested Computation",
+          slug: "revenue",
+          node_id: "A",
+          type: "Attested Computation",
           attestedComputation: {
             runtime: "bigquery",
             parameters: [{ name: "year", type: "integer", required: true }],
@@ -105,7 +109,9 @@ describe("checkOkfConformance", () => {
 
   test("an Attested Computation missing runtime is flagged", () => {
     const c = chapter({
-      node_id: "A", title: "Bad computation", slug: "badcomp",
+      node_id: "A",
+      title: "Bad computation",
+      slug: "badcomp",
     });
     const doc = document([volume({ volume_id: "v", chapters: [c] })]);
 
@@ -113,7 +119,9 @@ describe("checkOkfConformance", () => {
       index: doc,
       chapters: [
         oc({
-          slug: "badcomp", node_id: "A", type: "Attested Computation",
+          slug: "badcomp",
+          node_id: "A",
+          type: "Attested Computation",
           attestedComputation: {
             runtime: "",
             parameters: [],
@@ -131,15 +139,15 @@ describe("checkOkfConformance", () => {
 
   test("an Attested Computation missing attestedComputation entirely is flagged", () => {
     const c = chapter({
-      node_id: "A", title: "Missing fields", slug: "missingac",
+      node_id: "A",
+      title: "Missing fields",
+      slug: "missingac",
     });
     const doc = document([volume({ volume_id: "v", chapters: [c] })]);
 
     const result = checkOkfConformance({
       index: doc,
-      chapters: [
-        oc({ slug: "missingac", node_id: "A", type: "Attested Computation" }),
-      ],
+      chapters: [oc({ slug: "missingac", node_id: "A", type: "Attested Computation" })],
       volumes: [ov({ volume_id: "v" })],
       artifacts,
     });
@@ -149,7 +157,9 @@ describe("checkOkfConformance", () => {
 
   test("an Attested Computation with bad parameters is flagged", () => {
     const c = chapter({
-      node_id: "A", title: "Bad params", slug: "badparams",
+      node_id: "A",
+      title: "Bad params",
+      slug: "badparams",
     });
     const doc = document([volume({ volume_id: "v", chapters: [c] })]);
 
@@ -157,7 +167,9 @@ describe("checkOkfConformance", () => {
       index: doc,
       chapters: [
         oc({
-          slug: "badparams", node_id: "A", type: "Attested Computation",
+          slug: "badparams",
+          node_id: "A",
+          type: "Attested Computation",
           attestedComputation: {
             runtime: "python",
             parameters: [
@@ -179,7 +191,9 @@ describe("checkOkfConformance", () => {
 
   test("an Attested Computation with missing executor or attester resource is flagged", () => {
     const c = chapter({
-      node_id: "A", title: "Missing resources", slug: "missingres",
+      node_id: "A",
+      title: "Missing resources",
+      slug: "missingres",
     });
     const doc = document([volume({ volume_id: "v", chapters: [c] })]);
 
@@ -187,7 +201,9 @@ describe("checkOkfConformance", () => {
       index: doc,
       chapters: [
         oc({
-          slug: "missingres", node_id: "A", type: "Attested Computation",
+          slug: "missingres",
+          node_id: "A",
+          type: "Attested Computation",
           attestedComputation: {
             runtime: "postgres",
             parameters: [{ name: "id", type: "uuid", required: true }],

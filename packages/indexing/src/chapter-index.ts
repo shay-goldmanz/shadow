@@ -111,30 +111,31 @@ export function buildChapterIndexNode(input: BuildChapterIndexNodeInput): Chapte
   if (input.type === "Attested Computation" && input.frontmatter.runtime) {
     const fm = input.frontmatter;
     const parameters = Array.isArray(fm.parameters)
-      ? (fm.parameters as Array<Record<string, unknown>>)
-          .filter(
-            (p): p is { name: string; type: string; required: boolean } =>
-              typeof p?.name === "string" &&
-              typeof p?.type === "string" &&
-              typeof p?.required === "boolean",
-          )
+      ? (fm.parameters as Array<Record<string, unknown>>).filter(
+          (p): p is { name: string; type: string; required: boolean } =>
+            typeof p?.name === "string" &&
+            typeof p?.type === "string" &&
+            typeof p?.required === "boolean",
+        )
       : [];
     attestedComputation = {
       runtime: String(fm.runtime),
       parameters,
       computation: typeof fm.computation === "string" ? fm.computation : undefined,
       executor: {
-        resource: typeof (fm.executor as Record<string, unknown> | null)?.resource === "string"
-          ? String((fm.executor as Record<string, unknown>).resource)
-          : "",
+        resource:
+          typeof (fm.executor as Record<string, unknown> | null)?.resource === "string"
+            ? String((fm.executor as Record<string, unknown>).resource)
+            : "",
         receipt: Array.isArray((fm.executor as Record<string, unknown> | null)?.receipt)
           ? ((fm.executor as Record<string, unknown>).receipt as string[])
           : [],
       },
       attester: {
-        resource: typeof (fm.attester as Record<string, unknown> | null)?.resource === "string"
-          ? String((fm.attester as Record<string, unknown>).resource)
-          : "",
+        resource:
+          typeof (fm.attester as Record<string, unknown> | null)?.resource === "string"
+            ? String((fm.attester as Record<string, unknown>).resource)
+            : "",
       },
     };
   }
