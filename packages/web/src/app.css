@@ -642,7 +642,7 @@
   padding: 0;
   display: grid;
   gap: var(--space-1);
-  color: var(--text);
+  color: var(--text-muted);
 }
 
 .research-event__error {
