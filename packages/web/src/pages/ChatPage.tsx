@@ -71,7 +71,12 @@ export function ChatPage({
       <ChatTranscript items={state.items} />
       {state.streaming && (
         <p className="chat-page__status" aria-live="polite">
-          Shadow is working…
+          Shadowing
+          <span className="typing-dots" aria-hidden="true">
+            <span />
+            <span />
+            <span />
+          </span>
         </p>
       )}
       <ChatInput onSend={(message) => void send(message)} disabled={state.streaming} />

@@ -77,6 +77,69 @@ describe("ChapterPage", () => {
     expect(await findByText("Linear Method — Writing things down")).toBeTruthy();
   });
 
+  test("clicking outside the evidence dialog closes it", async () => {
+    const client = new FakeApiClient();
+    const { findByLabelText, findByText, queryByText, container } = render(
+      <ChapterPage
+        client={client}
+        slug="design-inspiration"
+        chapterSlug="linear-and-notion-ui"
+        navigate={() => {}}
+      />,
+    );
+
+    fireEvent.click(await findByLabelText(/Citation lin-4px/));
+    expect(await findByText("Linear Method — Writing things down")).toBeTruthy();
+
+    // A click on the `<dialog>` element itself only happens via the
+    // backdrop — clicking its content always targets a descendant.
+    const dialog = container.querySelector("dialog");
+    if (!dialog) throw new Error("expected the snapshot dialog to be in the DOM");
+    fireEvent.click(dialog);
+
+    expect(queryByText("Linear Method — Writing things down")).toBeNull();
+  });
+
+  test("a derived claim renders neutral and opens the claims it was derived from, not a dead click", async () => {
+    const client = new FakeApiClient();
+    const { findByLabelText, findByText, findAllByText } = render(
+      <ChapterPage
+        client={client}
+        slug="design-inspiration"
+        chapterSlug="linear-and-notion-ui"
+        navigate={() => {}}
+      />,
+    );
+
+    const citation = await findByLabelText(/Citation lin-and-notion-restraint/);
+    // Rendered distinctly from a sourced claim (clay) — a derived claim
+    // has no evidence span of its own, so it must not look like one that
+    // does and then silently do nothing on click.
+    expect(citation.getAttribute("data-tone")).toBe("neutral");
+    expect(citation.getAttribute("aria-label")).toContain("derived from other claims");
+
+    fireEvent.click(citation);
+
+    expect(await findByText("Derived from [^lin-and-notion-restraint]")).toBeTruthy();
+    // Both supporting claims' text also appears in the chapter's own prose
+    // (each cited inline) — the dialog repeats it, so query for "at least
+    // one", not "exactly one".
+    expect(
+      (
+        await findAllByText(
+          "Linear favours a tight 4px spacing scale and restrained borders over shadows.",
+        )
+      ).length,
+    ).toBeGreaterThan(0);
+    expect(
+      (
+        await findAllByText(
+          "Notion leans on generous whitespace and a near-monochrome palette to keep content in front.",
+        )
+      ).length,
+    ).toBeGreaterThan(0);
+  });
+
   test("the audit's failing claim renders red, not clay", async () => {
     const client = new FakeApiClient();
     const { findByLabelText } = render(

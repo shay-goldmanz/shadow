@@ -108,6 +108,9 @@ export function ChapterPage({
   // the raw id if the claim was since deleted (labels are never reused, but
   // a deleted claim's own record is gone too).
   const labelByClaimId = new Map(data.claims.map((claim) => [claim.id, claim.label]));
+  const claimsByLabel = new Map(data.claims.map((claim) => [claim.label, claim]));
+
+  const escalatedCount = restatements.filter((event) => event.outcome === "escalated").length;
 
   const auditSummary = data.audit ? auditSummaryOf(data.audit) : undefined;
   const failingLabels = new Set(
@@ -134,9 +137,26 @@ export function ChapterPage({
         claims={data.claims}
         failingLabels={failingLabels}
         onCiteClick={(claim) => {
+          // A `derived` claim has no evidence span of its own by design
+          // (D19) — it's a synthesis of other claims in this chapter, not
+          // its own source. Opening the claims it follows from (already in
+          // memory) is the analogue of "evidence" for this kind, rather
+          // than a dead click on `claim.evidence[0]` being `undefined`.
+          if (claim.kind === "derived") {
+            setSnapshotRequest({
+              kind: "derived",
+              label: claim.label,
+              supports: claim.supports.flatMap((label) => {
+                const supporting = claimsByLabel.get(label);
+                return supporting ? [{ label: supporting.label, text: supporting.text }] : [];
+              }),
+            });
+            return;
+          }
           const span = claim.evidence[0];
           if (span) {
             setSnapshotRequest({
+              kind: "sourced",
               label: claim.label,
               sourceId: span.sourceId,
               snapshotHash: span.snapshotHash,
@@ -146,8 +166,15 @@ export function ChapterPage({
       />
 
       {restatements.length > 0 && (
-        <section aria-label="Evidence history" className="chapter-page__history">
-          <h2>What Shadow softened</h2>
+        <details aria-label="Evidence history" className="chapter-page__history">
+          <summary>
+            <h2>What Shadow softened</h2>
+            <span className="chapter-page__history-count">
+              {restatements.length} claim{restatements.length === 1 ? "" : "s"}
+              {escalatedCount > 0 &&
+                ` · ${escalatedCount} need${escalatedCount === 1 ? "s" : ""} review`}
+            </span>
+          </summary>
           {restatements.map((event) => (
             <RestatementNotice
               key={`${event.claimId}-${event.ts}`}
@@ -160,7 +187,7 @@ export function ChapterPage({
               }}
             />
           ))}
-        </section>
+        </details>
       )}
 
       <SnapshotDialog

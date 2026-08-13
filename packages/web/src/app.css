@@ -226,12 +226,6 @@
 
 /* ---- volume view ------------------------------------------------------ */
 
-.volume-view-page__columns {
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: var(--space-8);
-}
-
 .chapter-list {
   list-style: none;
   padding: 0;
@@ -240,46 +234,98 @@
   gap: var(--space-2);
 }
 
+.chapter-filter {
+  width: 100%;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: var(--space-2) var(--space-3);
+  background: var(--surface);
+  color: var(--text);
+  font-size: 0.85rem;
+  margin-bottom: var(--space-3);
+}
+
+.chapter-filter__empty {
+  color: var(--text-muted);
+  font-size: 0.85rem;
+}
+
+.chapter-card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: var(--space-1) var(--space-1) var(--space-2);
+}
+
 .chapter-list__item {
   width: 100%;
   text-align: left;
   display: flex;
   flex-direction: column;
-  background: var(--surface);
-  border: 1px solid var(--border);
-  border-radius: var(--radius);
-  padding: var(--space-3) var(--space-4);
+  background: none;
+  border: none;
+  padding: var(--space-2) var(--space-3);
   cursor: pointer;
 }
 
-.chapter-list__when-to-use {
+.chapter-card__details {
+  padding: 0 var(--space-3) var(--space-1);
+}
+
+.chapter-card__details + .chapter-card__details {
+  border-top: 1px solid var(--border);
+  margin-top: var(--space-1);
+  padding-top: var(--space-2);
+}
+
+.chapter-card__details summary {
+  display: flex;
+  align-items: baseline;
+  color: var(--accent);
+  font-size: 0.78rem;
+  cursor: pointer;
+}
+
+.chapter-card__when-to-use {
   color: var(--text-muted);
   font-size: 0.8rem;
+  margin: var(--space-2) 0 0;
 }
 
-.index-tree,
-.index-tree ul {
-  list-style: none;
-  padding-left: var(--space-4);
-  margin: 0;
-}
-
-.index-tree {
-  padding-left: 0;
-  background: var(--surface-sunken);
-  border-radius: var(--radius);
-  padding: var(--space-3) var(--space-4);
-}
-
-.index-tree__title {
+.index-tree__count {
   font-family: var(--font-mono);
-  font-size: 0.85rem;
+  font-size: 0.7rem;
+  color: var(--text-muted);
+  margin-left: auto;
 }
 
-.index-tree__when-to-use,
-.index-tree__not-for {
-  font-size: 0.75rem;
+.index-tree__sections,
+.index-tree__key-items {
+  list-style: none;
+  margin: 0 0 var(--space-2) var(--space-2);
+  padding: 0 0 var(--space-3) var(--space-4);
+  border-left: 1px solid var(--border);
+  display: grid;
+  gap: var(--space-2);
+}
+
+.index-tree__sections ul {
+  list-style: none;
+  margin: var(--space-1) 0 0;
+  padding-left: var(--space-4);
+  display: grid;
+  gap: var(--space-1);
+}
+
+.index-tree__section-title,
+.index-tree__key-items li {
+  font-size: 0.8rem;
   color: var(--text-muted);
+}
+
+.index-tree__sections ul .index-tree__section-title {
+  font-size: 0.76rem;
+  opacity: 0.85;
 }
 
 /* ---- chapter prose ------------------------------------------------------ */
@@ -288,7 +334,6 @@
   font-family: var(--font-serif);
   font-size: 16px;
   line-height: 1.65;
-  max-width: var(--measure);
 }
 
 .badge {
@@ -330,36 +375,55 @@
   font-family: var(--font-sans);
   /* D10a: never below 13px, never smaller than 0.85x the surrounding body size. */
   font-size: max(13px, 0.85em);
-  border: 1px solid transparent;
-  border-radius: 4px;
-  padding: 0 4px;
+  background: none;
+  border: none;
+  border-bottom: 1.5px solid transparent;
+  padding: 0 1px;
   margin-left: 1px;
   cursor: pointer;
   line-height: 1.4;
 }
 
 .citation-mark--clay {
-  background: var(--clay-soft);
   color: var(--clay-text);
-  border-color: var(--clay);
+  border-bottom-color: var(--clay);
 }
 
 .citation-mark--red {
-  background: var(--danger-soft);
   color: var(--danger);
-  border-color: var(--danger);
+  border-bottom-color: var(--danger);
 }
 
 .citation-mark--amber {
-  background: var(--warn-soft);
   color: var(--warn);
-  border-color: var(--warn);
+  border-bottom-color: var(--warn);
 }
 
 .citation-mark--sage {
-  background: var(--accent-soft);
   color: var(--accent);
-  border-color: var(--accent);
+  border-bottom-color: var(--accent);
+}
+
+.citation-mark--neutral {
+  color: var(--text-muted);
+  border-bottom-color: var(--text-muted);
+  border-bottom-style: dashed;
+}
+
+.cited-span__text {
+  border-radius: 3px;
+  transition: background-color 75ms ease;
+}
+
+.cited-span:hover .cited-span__text,
+.cited-span:focus-within .cited-span__text {
+  background: var(--accent-soft);
+}
+
+.audit-chip {
+  display: inline-flex;
+  align-items: center;
+  margin-bottom: var(--space-4);
 }
 
 .audit-banner {
@@ -436,6 +500,39 @@
   color: var(--text);
 }
 
+.chapter-page__history {
+  border: 1px solid var(--border);
+  border-radius: var(--radius-card);
+  padding: var(--space-3) var(--space-4);
+  margin: var(--space-6) 0;
+}
+
+.chapter-page__history summary {
+  cursor: pointer;
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-3);
+}
+
+.chapter-page__history summary h2 {
+  font-size: 1rem;
+  margin: 0;
+}
+
+.chapter-page__history-count {
+  font-family: var(--font-mono);
+  font-size: 0.78rem;
+  color: var(--text-muted);
+}
+
+.chapter-page__history[open] {
+  padding-bottom: var(--space-4);
+}
+
+.chapter-page__history[open] summary {
+  margin-bottom: var(--space-3);
+}
+
 .restatement-notice {
   border: 1px solid var(--border);
   border-left: 3px solid var(--clay);
@@ -486,7 +583,8 @@
 .chat-message {
   border-radius: var(--radius-card);
   padding: var(--space-3) var(--space-4);
-  max-width: 42ch;
+  max-width: 100%;
+  overflow-wrap: break-word;
 }
 
 .chat-message__author {
@@ -507,13 +605,92 @@
   border: 1px solid var(--border);
 }
 
+.chat-message code,
+.research-event code,
+.research-event__findings code {
+  background: var(--surface-sunken);
+  border-radius: 4px;
+  padding: 0 4px;
+  font-size: 0.9em;
+}
+
 .research-event {
   font-family: var(--font-sans);
   font-size: 0.85rem;
   color: var(--text-muted);
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   gap: var(--space-2);
+}
+
+/*
+ * `research.finished`'s findings, `research.failed`'s error, and
+ * `chapter.rejected`'s issues (`ChatTranscript.tsx`) all render one of
+ * these as a sibling inside `.research-event` alongside its badge —
+ * these two classes were referenced there but never actually had base
+ * rules, so they fell back to raw browser <ul>/<p> defaults (bullets,
+ * default margins) squeezed into a centered, non-wrapping flex row.
+ * `flex-basis: 100%` forces each onto its own line below the badge —
+ * the standard flex trick for "wrap before this item" — instead of
+ * fighting for space in the same row as short, single-line content.
+ */
+.research-event__findings {
+  flex-basis: 100%;
+  list-style: none;
+  margin: var(--space-1) 0 0;
+  padding: 0;
+  display: grid;
+  gap: var(--space-1);
+  color: var(--text);
+}
+
+.research-event__error {
+  flex-basis: 100%;
+  margin: var(--space-1) 0 0;
+}
+
+.chat-page__status {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  color: var(--text-muted);
+  font-size: 0.85rem;
+  margin: var(--space-3) 0;
+}
+
+.typing-dots {
+  display: inline-flex;
+  gap: 3px;
+}
+
+.typing-dots span {
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: var(--accent);
+  animation: typing-dot 1.1s var(--motion-easing) infinite;
+}
+
+.typing-dots span:nth-child(2) {
+  animation-delay: 0.15s;
+}
+
+.typing-dots span:nth-child(3) {
+  animation-delay: 0.3s;
+}
+
+@keyframes typing-dot {
+  0%,
+  60%,
+  100% {
+    opacity: 0.25;
+    transform: translateY(0);
+  }
+  30% {
+    opacity: 1;
+    transform: translateY(-2px);
+  }
 }
 
 .chat-input {
@@ -587,6 +764,33 @@
   white-space: pre-wrap;
   max-height: 40vh;
   overflow: auto;
+}
+
+.snapshot-dialog__supports {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: var(--space-3);
+  max-height: 50vh;
+  overflow: auto;
+}
+
+.snapshot-dialog__supports li {
+  border-left: 2px solid var(--border);
+  padding-left: var(--space-3);
+}
+
+.snapshot-dialog__supports-label {
+  display: block;
+  font-family: var(--font-mono);
+  font-size: 0.75rem;
+  color: var(--text-muted);
+  margin-bottom: 2px;
+}
+
+.snapshot-dialog__supports-empty {
+  color: var(--text-muted);
 }
 
 .error-boundary {
