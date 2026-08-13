@@ -103,7 +103,11 @@ function Block({
 
 type SegmentGroup =
   | { readonly type: "text"; readonly text: string }
-  | { readonly type: "citation"; readonly label: string; readonly precedingText: string | undefined };
+  | {
+      readonly type: "citation";
+      readonly label: string;
+      readonly precedingText: string | undefined;
+    };
 
 /**
  * `parseInline` emits a text segment immediately before the citation it

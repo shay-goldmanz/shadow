@@ -103,7 +103,9 @@ describe("ChapterPage", () => {
     // one", not "exactly one".
     expect(
       (
-        await findAllByText("Linear favours a tight 4px spacing scale and restrained borders over shadows.")
+        await findAllByText(
+          "Linear favours a tight 4px spacing scale and restrained borders over shadows.",
+        )
       ).length,
     ).toBeGreaterThan(0);
     expect(

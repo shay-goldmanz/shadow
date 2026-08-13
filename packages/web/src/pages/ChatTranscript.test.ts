@@ -37,8 +37,6 @@ describe("visibleAssistantText", () => {
   });
 
   test("a single stray ``` with nothing after it is buffered, not shown", () => {
-    expect(visibleAssistantText("About to write a block. ```")).toBe(
-      "About to write a block.",
-    );
+    expect(visibleAssistantText("About to write a block. ```")).toBe("About to write a block.");
   });
 });
