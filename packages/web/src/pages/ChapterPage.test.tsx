@@ -77,6 +77,29 @@ describe("ChapterPage", () => {
     expect(await findByText("Linear Method — Writing things down")).toBeTruthy();
   });
 
+  test("clicking outside the evidence dialog closes it", async () => {
+    const client = new FakeApiClient();
+    const { findByLabelText, findByText, queryByText, container } = render(
+      <ChapterPage
+        client={client}
+        slug="design-inspiration"
+        chapterSlug="linear-and-notion-ui"
+        navigate={() => {}}
+      />,
+    );
+
+    fireEvent.click(await findByLabelText(/Citation lin-4px/));
+    expect(await findByText("Linear Method — Writing things down")).toBeTruthy();
+
+    // A click on the `<dialog>` element itself only happens via the
+    // backdrop — clicking its content always targets a descendant.
+    const dialog = container.querySelector("dialog");
+    if (!dialog) throw new Error("expected the snapshot dialog to be in the DOM");
+    fireEvent.click(dialog);
+
+    expect(queryByText("Linear Method — Writing things down")).toBeNull();
+  });
+
   test("a derived claim renders neutral and opens the claims it was derived from, not a dead click", async () => {
     const client = new FakeApiClient();
     const { findByLabelText, findByText, findAllByText } = render(

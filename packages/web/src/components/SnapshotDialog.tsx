@@ -97,6 +97,12 @@ export function SnapshotDialog({
       aria-labelledby="snapshot-dialog-title"
       onClose={onClose}
       onCancel={onClose}
+      onClick={(event) => {
+        // A click lands directly on the `<dialog>` element only when it hits
+        // the backdrop — anything inside `snapshot-dialog__body` is a
+        // descendant and the event target there is never the dialog itself.
+        if (event.target === dialogRef.current) onClose();
+      }}
     >
       {request && (
         <div className="snapshot-dialog__body">
