@@ -282,10 +282,8 @@ describe("run — dispatch, exit codes, and the stdout/stderr split", () => {
         });
         expect(code).toBe(0);
         const parsed = JSON.parse(cap.stdout.join(""));
-        expect(parsed.skill).toBe("shadow-volumes");
-        expect(parsed.written).toBe(
-          join(target, ".claude", "skills", "shadow-volumes", "SKILL.md"),
-        );
+        expect(parsed.skill).toBe("shadow-find");
+        expect(parsed.written).toBe(join(target, ".claude", "skills", "shadow-find", "SKILL.md"));
         expect(parsed.next_steps.length).toBeGreaterThan(0);
       } finally {
         await rm(target, { recursive: true, force: true });

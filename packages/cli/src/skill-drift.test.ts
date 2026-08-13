@@ -1,6 +1,6 @@
 /**
  * The drift guardrail (T3.2): every `shadow <command>` and `--flag` the
- * `shadow-volumes` consumer skill tells an agent to run must actually exist
+ * `shadow-find` consumer skill tells an agent to run must actually exist
  * on the real CLI. Without this, the skill and `cli.ts` can silently drift
  * apart — someone renames a flag in `cli.ts`, the skill still tells agents
  * to pass the old one, and nothing catches it until an agent hits a real
@@ -26,7 +26,7 @@ import { run } from "./cli.ts";
 import { withStore } from "./test-fixture.ts";
 
 const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..", "..");
-const SKILL_PATH = join(REPO_ROOT, "skills", "shadow-volumes", "SKILL.md");
+const SKILL_PATH = join(REPO_ROOT, "skills", "shadow-find", "SKILL.md");
 
 interface Mention {
   readonly command: string;
@@ -129,7 +129,7 @@ async function invoke(args: readonly string[]): Promise<{ stdout: string; stderr
   return result;
 }
 
-describe("shadow-volumes skill vs. the real CLI (drift guardrail)", () => {
+describe("shadow-find skill vs. the real CLI (drift guardrail)", () => {
   test("the skill mentions at least one command and one flag — a sanity check on extraction itself", async () => {
     const markdown = await readFile(SKILL_PATH, "utf8");
     const merged = mergeMentions(extractMentions(markdown));

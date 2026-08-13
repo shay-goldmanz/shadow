@@ -12,7 +12,7 @@
  * that is not an exact substring of the cited source's current snapshot
  * fails loudly (`UnresolvedEvidenceQuoteError`) rather than being silently
  * dropped or fuzzy-matched — binding happens *before* writing (the
- * writing-volumes skill's §4), so there is no later chance to notice a
+ * shadow-write-volumes skill's §4), so there is no later chance to notice a
  * paraphrased quote slipped through.
  */
 

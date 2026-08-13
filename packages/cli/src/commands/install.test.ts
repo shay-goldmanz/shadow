@@ -15,15 +15,15 @@ async function withTempDir(fn: (dir: string) => Promise<void>): Promise<void> {
 }
 
 describe("runInstall", () => {
-  test("writes the shadow-volumes skill to <target>/.claude/skills/shadow-volumes/SKILL.md", async () => {
+  test("writes the shadow-find skill to <target>/.claude/skills/shadow-find/SKILL.md", async () => {
     await withTempDir(async (target) => {
       const result = await runInstall({ target });
 
-      expect(result.skill).toBe("shadow-volumes");
-      expect(result.written).toBe(join(target, ".claude", "skills", "shadow-volumes", "SKILL.md"));
+      expect(result.skill).toBe("shadow-find");
+      expect(result.written).toBe(join(target, ".claude", "skills", "shadow-find", "SKILL.md"));
 
       const written = await readFile(result.written, "utf8");
-      expect(written).toContain("name: shadow-volumes");
+      expect(written).toContain("name: shadow-find");
       expect(written).toContain("shadow find");
     });
   });
@@ -47,7 +47,7 @@ describe("runInstall", () => {
         const result = await runInstall({});
         expect(result.target).toBe(chdirTarget);
         expect(result.written).toBe(
-          join(chdirTarget, ".claude", "skills", "shadow-volumes", "SKILL.md"),
+          join(chdirTarget, ".claude", "skills", "shadow-find", "SKILL.md"),
         );
       } finally {
         process.chdir(originalCwd);
@@ -57,7 +57,7 @@ describe("runInstall", () => {
 
   test("refuses to clobber an existing skill file without --force", async () => {
     await withTempDir(async (target) => {
-      const destDir = join(target, ".claude", "skills", "shadow-volumes");
+      const destDir = join(target, ".claude", "skills", "shadow-find");
       await mkdir(destDir, { recursive: true });
       await writeFile(join(destDir, "SKILL.md"), "pre-existing content", "utf8");
 
@@ -74,21 +74,21 @@ describe("runInstall", () => {
 
   test("--force overwrites an existing skill file", async () => {
     await withTempDir(async (target) => {
-      const destDir = join(target, ".claude", "skills", "shadow-volumes");
+      const destDir = join(target, ".claude", "skills", "shadow-find");
       await mkdir(destDir, { recursive: true });
       await writeFile(join(destDir, "SKILL.md"), "pre-existing content", "utf8");
 
       const result = await runInstall({ target, force: true });
       const written = await readFile(result.written, "utf8");
       expect(written).not.toBe("pre-existing content");
-      expect(written).toContain("name: shadow-volumes");
+      expect(written).toContain("name: shadow-find");
     });
   });
 
   test("--force is a no-op (still succeeds) when no file previously existed", async () => {
     await withTempDir(async (target) => {
       const result = await runInstall({ target, force: true });
-      expect(result.skill).toBe("shadow-volumes");
+      expect(result.skill).toBe("shadow-find");
     });
   });
 
@@ -106,7 +106,7 @@ describe("runInstall", () => {
 
   test("next_steps is present and non-empty on the clobber-refused failure", async () => {
     await withTempDir(async (target) => {
-      const destDir = join(target, ".claude", "skills", "shadow-volumes");
+      const destDir = join(target, ".claude", "skills", "shadow-find");
       await mkdir(destDir, { recursive: true });
       await writeFile(join(destDir, "SKILL.md"), "pre-existing content", "utf8");
 

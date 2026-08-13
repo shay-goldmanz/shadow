@@ -1,5 +1,5 @@
 /**
- * `shadow install [--target <dir>] [--force]` — places the `shadow-volumes`
+ * `shadow install [--target <dir>] [--force]` — places the `shadow-find`
  * consumer skill (D3: "Ship a `shadow` binary plus a `SKILL.md` that `shadow
  * install` drops into a target repo's `.claude/skills/`") into a target
  * repo, so a coding agent working there discovers it and reaches for
@@ -21,7 +21,7 @@ import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { SkillAlreadyInstalledError } from "../errors.ts";
 
-const SKILL_NAME = "shadow-volumes";
+const SKILL_NAME = "shadow-find";
 
 // This file lives at packages/cli/src/commands/install.ts — four levels
 // below the repo root, where `skills/` lives alongside `packages/`.

@@ -71,7 +71,7 @@ a quote.
 
 ## 2. Write a chapter — \`\`\`${CHAPTER_DIRECTIVE_TAG}\`\`\`
 
-Before drafting, load the \`writing-volumes\` skill and follow it exactly —
+Before drafting, load the \`shadow-write-volumes\` skill and follow it exactly —
 it governs the frontmatter contract and how claims are marked. Do not
 draft a chapter body from memory and go hunting for citations afterward:
 only cite sources and quotes you have actually already been given, either

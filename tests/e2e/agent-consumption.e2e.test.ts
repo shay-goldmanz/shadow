@@ -65,7 +65,7 @@ import { overlap, queryVocabulary, routingVocabulary } from "./helpers/vocabular
 
 const TEST_DIR = dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = join(TEST_DIR, "..", "..");
-const SOURCE_SKILL_PATH = join(REPO_ROOT, "skills", "shadow-volumes", "SKILL.md");
+const SOURCE_SKILL_PATH = join(REPO_ROOT, "skills", "shadow-find", "SKILL.md");
 
 // The literal phrasing from `docs/ACCEPTANCE.md`'s critical path — the
 // operator's actual words, run unmodified as the query.
@@ -168,7 +168,7 @@ describe("T4.5 — agent consumption via the real shadow CLI", () => {
     expect(read.sibling_titles).not.toContain("How Linear handles information density");
 
     // ---- STAGE 5 (GRADE), stood in for: the chapter answers the task ----
-    // Per skills/shadow-volumes/SKILL.md Rule 4: "If the chapter fully
+    // Per skills/shadow-find/SKILL.md Rule 4: "If the chapter fully
     // answers the task, you're done — no need to call find again." No
     // further round is needed for this query chain.
 
@@ -257,7 +257,7 @@ describe("T4.5 — agent consumption via the real shadow CLI", () => {
     // reimbursement: writing/editorial formats, UI density/whitespace, and
     // engineering process (code review, incident postmortems) are the only
     // three subjects this corpus has opinions about. Per
-    // skills/shadow-volumes/SKILL.md Rule 3: "If none fit and rounds
+    // skills/shadow-find/SKILL.md Rule 3: "If none fit and rounds
     // remain: shadow find "<task>" --visited <ids> --none".
     for (const chapter of navigate1.chapters) {
       expect(`${chapter.when_to_use ?? ""} ${chapter.not_for ?? ""}`.toLowerCase()).not.toMatch(
@@ -279,7 +279,7 @@ describe("T4.5 — agent consumption via the real shadow CLI", () => {
     //
     // It is *not* a silent wrong answer, though: `promoted` results are
     // explicitly labeled weak (`why: "bm25-fallback: ..."`) and
-    // `skills/shadow-volumes/SKILL.md` tells the agent outright not to
+    // `skills/shadow-find/SKILL.md` tells the agent outright not to
     // trust one without verifying via `shadow read` first. So the correct
     // agent behavior — stood in for here — is exactly what the skill
     // prescribes: read each promoted guess, reject it because the body
@@ -375,7 +375,7 @@ describe("T4.5 — agent consumption via the real shadow CLI", () => {
     console.log("\n--- shadow install ---");
     console.log(`$ shadow install --target ${installTargetRoot}\n${installed.stdout.trim()}`);
 
-    const expectedPath = join(installTargetRoot, ".claude", "skills", "shadow-volumes", "SKILL.md");
+    const expectedPath = join(installTargetRoot, ".claude", "skills", "shadow-find", "SKILL.md");
     expect(install.written).toBe(expectedPath);
 
     const installedContent = await readFile(expectedPath, "utf8");

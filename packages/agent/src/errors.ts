@@ -14,7 +14,7 @@ export abstract class ShadowAgentError extends Error {
 }
 
 /**
- * Copying `skills/writing-volumes/SKILL.md` (T3.2) into a session's
+ * Copying `skills/shadow-write-volumes/SKILL.md` (T3.2) into a session's
  * `.claude/skills/` directory failed — e.g. the canonical monorepo skill
  * file could not be read, or the destination could not be written. Shadow
  * refuses to start a conversation without this: "genuinely skill-guided"
@@ -91,7 +91,7 @@ export class UnknownSourceError extends ShadowAgentError {
 /**
  * A claim directive's `quote` is not an exact substring of the cited
  * source's current snapshot text. Bind-before-write (D19, the
- * writing-volumes skill's §4): Shadow must copy verbatim from what research
+ * shadow-write-volumes skill's §4): Shadow must copy verbatim from what research
  * or the operator transcript actually returned, never paraphrase and hope.
  */
 export class UnresolvedEvidenceQuoteError extends ShadowAgentError {

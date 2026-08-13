@@ -1,5 +1,5 @@
 ---
-name: shadow-volumes
+name: shadow-find
 description: >-
   Use this before improvising on any task where the operator might already
   have a curated opinion — UI or product design, writing/editorial style,
@@ -12,7 +12,7 @@ description: >-
   before defaulting to your own taste.
 ---
 
-# shadow-volumes
+# shadow-find
 
 `shadow` is a CLI over a corpus of the operator's curated beliefs
 ("volumes"). If a task resembles something they might have opinions about,
