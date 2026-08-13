@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import type { ShadowApiClient } from "../api/client.ts";
-import type { SourceRecord } from "../api/types.ts";
+import type { AnchorStatus, SourceRecord, TextQuoteSelector } from "../api/types.ts";
+import { Badge } from "./Badge.tsx";
 
 /**
  * What clicking a citation opens depends on what kind of claim it is
@@ -17,6 +18,8 @@ export type SnapshotRequest =
       readonly label: string;
       readonly sourceId: string;
       readonly snapshotHash: string;
+      readonly selector: TextQuoteSelector;
+      readonly anchorStatus: AnchorStatus;
     }
   | {
       readonly kind: "derived";
@@ -29,6 +32,56 @@ interface SnapshotState {
   readonly text?: string;
   readonly error?: string;
   readonly loading: boolean;
+}
+
+interface ExcerptResult {
+  readonly prefixTrim: string;
+  readonly exact: string;
+  readonly suffixTrim: string;
+  readonly atStart: boolean;
+  readonly atEnd: boolean;
+  readonly matchStart: number;
+  readonly matchEnd: number;
+}
+
+const EXCERPT_WINDOW = 150;
+
+function computeExcerpt(text: string, selector: TextQuoteSelector): ExcerptResult | null {
+  let matchStart: number;
+  let matchEnd: number;
+
+  if (selector.refinedBy) {
+    matchStart = selector.refinedBy.start;
+    matchEnd = selector.refinedBy.end;
+  } else {
+    const idx = text.indexOf(selector.exact);
+    if (idx === -1) return null;
+    matchStart = idx;
+    matchEnd = idx + selector.exact.length;
+  }
+
+  let prefixStart = Math.max(0, matchStart - EXCERPT_WINDOW);
+  let suffixEnd = Math.min(text.length, matchEnd + EXCERPT_WINDOW);
+
+  // Cut at word boundary — don't chop mid-word in the surrounding context.
+  if (prefixStart > 0) {
+    const wsIdx = text.indexOf(" ", prefixStart);
+    if (wsIdx !== -1 && wsIdx < matchStart) prefixStart = wsIdx + 1;
+  }
+  if (suffixEnd < text.length) {
+    const wsIdx = text.lastIndexOf(" ", suffixEnd);
+    if (wsIdx !== -1 && wsIdx > matchEnd) suffixEnd = wsIdx;
+  }
+
+  return {
+    prefixTrim: text.slice(prefixStart, matchStart),
+    exact: text.slice(matchStart, matchEnd),
+    suffixTrim: text.slice(matchEnd, suffixEnd),
+    atStart: prefixStart === 0,
+    atEnd: suffixEnd === text.length,
+    matchStart,
+    matchEnd,
+  };
 }
 
 /**
@@ -51,7 +104,9 @@ export function SnapshotDialog({
   readonly onClose: () => void;
 }) {
   const dialogRef = useRef<HTMLDialogElement>(null);
+  const matchRef = useRef<HTMLElement>(null);
   const [state, setState] = useState<SnapshotState>({ loading: false });
+  const [expanded, setExpanded] = useState(false);
 
   useEffect(() => {
     const dialog = dialogRef.current;
@@ -64,6 +119,7 @@ export function SnapshotDialog({
   }, [request]);
 
   useEffect(() => {
+    setExpanded(false);
     if (!request || request.kind !== "sourced") {
       setState({ loading: false });
       return;
@@ -89,6 +145,18 @@ export function SnapshotDialog({
       cancelled = true;
     };
   }, [request, volumeSlug, client]);
+
+  useEffect(() => {
+    if (expanded) {
+      matchRef.current?.scrollIntoView({ block: "nearest" });
+    }
+  }, [expanded]);
+
+  // Derived from current request + fetched text — cheap to recompute each render.
+  const excerpt: ExcerptResult | null =
+    request?.kind === "sourced" && state.text && request.anchorStatus !== "orphaned"
+      ? computeExcerpt(state.text, request.selector)
+      : null;
 
   return (
     <dialog
@@ -142,9 +210,72 @@ export function SnapshotDialog({
                     · {state.source.retrieval.transport} · retrieved{" "}
                     {state.source.retrieval.retrievedAt}
                   </span>
+                  {request.anchorStatus === "anchored-fuzzy" && (
+                    <>
+                      {" "}
+                      <Badge tone="amber">≈ approximate</Badge>
+                    </>
+                  )}
+                  {request.anchorStatus === "orphaned" && (
+                    <>
+                      {" "}
+                      <Badge tone="red">⚠ not found</Badge>
+                    </>
+                  )}
                 </p>
               )}
-              {state.text && <pre className="snapshot-dialog__text">{state.text}</pre>}
+              {state.text && (
+                <>
+                  <div className="snapshot-dialog__excerpt">
+                    {request.anchorStatus === "orphaned" ? (
+                      // Orphaned: offset data is untrustworthy — show the
+                      // selector's own bounded context (prefix/exact/suffix)
+                      // as plain unhighlighted text instead.
+                      <span>
+                        {request.selector.prefix}
+                        {request.selector.exact}
+                        {request.selector.suffix}
+                      </span>
+                    ) : excerpt ? (
+                      <>
+                        {!excerpt.atStart && <span className="snapshot-dialog__ellipsis">…</span>}
+                        {excerpt.prefixTrim}
+                        <mark className="snapshot-dialog__highlight">{excerpt.exact}</mark>
+                        {excerpt.suffixTrim}
+                        {!excerpt.atEnd && <span className="snapshot-dialog__ellipsis">…</span>}
+                      </>
+                    ) : (
+                      <span>{request.selector.exact}</span>
+                    )}
+                  </div>
+                  <button
+                    type="button"
+                    className="snapshot-dialog__expand-toggle"
+                    onClick={() => setExpanded((prev) => !prev)}
+                  >
+                    {expanded
+                      ? "▴ Hide full source"
+                      : request.anchorStatus === "orphaned"
+                        ? "View full source anyway"
+                        : "▾ Show full source"}
+                  </button>
+                  {expanded && (
+                    <pre className="snapshot-dialog__text">
+                      {excerpt ? (
+                        <>
+                          {state.text.slice(0, excerpt.matchStart)}
+                          <mark ref={matchRef} className="snapshot-dialog__highlight">
+                            {state.text.slice(excerpt.matchStart, excerpt.matchEnd)}
+                          </mark>
+                          {state.text.slice(excerpt.matchEnd)}
+                        </>
+                      ) : (
+                        state.text
+                      )}
+                    </pre>
+                  )}
+                </>
+              )}
             </>
           )}
         </div>

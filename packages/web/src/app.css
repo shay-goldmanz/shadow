@@ -766,6 +766,35 @@
   overflow: auto;
 }
 
+.snapshot-dialog__excerpt {
+  font-size: 0.9rem;
+  line-height: 1.6;
+  margin-bottom: var(--space-3);
+  color: var(--text);
+}
+
+.snapshot-dialog__highlight {
+  background: var(--accent-soft);
+  color: var(--text);
+  border-radius: 2px;
+  padding: 0 2px;
+}
+
+.snapshot-dialog__ellipsis {
+  color: var(--text-muted);
+}
+
+.snapshot-dialog__expand-toggle {
+  display: block;
+  background: none;
+  border: none;
+  color: var(--accent);
+  font-size: 0.8rem;
+  cursor: pointer;
+  padding: 0;
+  margin-bottom: var(--space-3);
+}
+
 .snapshot-dialog__supports {
   list-style: none;
   margin: 0;

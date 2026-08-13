@@ -160,6 +160,8 @@ export function ChapterPage({
               label: claim.label,
               sourceId: span.sourceId,
               snapshotHash: span.snapshotHash,
+              selector: span.selector,
+              anchorStatus: span.anchorStatus,
             });
           }
         }}
