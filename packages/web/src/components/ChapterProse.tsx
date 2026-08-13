@@ -82,11 +82,11 @@ function Block({
   readonly failingLabels: ReadonlySet<string>;
   readonly onCiteClick: (claim: Claim) => void;
 }) {
-  const content = block.segments.map((segment, i) => (
-    <Segment
-      // biome-ignore lint/suspicious/noArrayIndexKey: segments are a static parse of immutable prose, never reordered
+  const content = groupSegments(block.segments).map((group, i) => (
+    <SegmentGroup
+      // biome-ignore lint/suspicious/noArrayIndexKey: groups are a static parse of immutable prose, never reordered
       key={i}
-      segment={segment}
+      group={group}
       claimsByLabel={claimsByLabel}
       numberByLabel={numberByLabel}
       failingLabels={failingLabels}
@@ -101,29 +101,62 @@ function Block({
   return <p>{content}</p>;
 }
 
-function Segment({
-  segment,
+type SegmentGroup =
+  | { readonly type: "text"; readonly text: string }
+  | { readonly type: "citation"; readonly label: string; readonly precedingText: string | undefined };
+
+/**
+ * `parseInline` emits a text segment immediately before the citation it
+ * footnotes (every text segment but a trailing one is followed by exactly
+ * one citation) — pairing them here is what lets hovering the mark
+ * highlight the exact prose it's citing, rather than the whole paragraph.
+ */
+function groupSegments(segments: readonly InlineSegment[]): readonly SegmentGroup[] {
+  const groups: SegmentGroup[] = [];
+  for (let i = 0; i < segments.length; i++) {
+    const segment = segments[i] as InlineSegment;
+    if (segment.type === "text") {
+      const next = segments[i + 1];
+      if (next?.type === "citation") continue;
+      groups.push({ type: "text", text: segment.text });
+      continue;
+    }
+    const prev = segments[i - 1];
+    groups.push({
+      type: "citation",
+      label: segment.label,
+      precedingText: prev?.type === "text" ? prev.text : undefined,
+    });
+  }
+  return groups;
+}
+
+function SegmentGroup({
+  group,
   claimsByLabel,
   numberByLabel,
   failingLabels,
   onCiteClick,
 }: {
-  readonly segment: InlineSegment;
+  readonly group: SegmentGroup;
   readonly claimsByLabel: Map<string, Claim>;
   readonly numberByLabel: ReadonlyMap<string, number>;
   readonly failingLabels: ReadonlySet<string>;
   readonly onCiteClick: (claim: Claim) => void;
 }) {
-  if (segment.type === "text") return <>{segment.text}</>;
+  if (group.type === "text") return <>{group.text}</>;
 
-  const claim = claimsByLabel.get(segment.label);
-  const tone = citationTone(segment.label, claim, failingLabels);
+  const claim = claimsByLabel.get(group.label);
+  const tone = citationTone(group.label, claim, failingLabels);
 
   return (
-    <span id={`claim-${segment.label}`}>
+    <span id={`claim-${group.label}`} className="cited-span">
+      {group.precedingText !== undefined && (
+        <span className="cited-span__text">{group.precedingText}</span>
+      )}
       <CitationMark
-        label={segment.label}
-        number={numberByLabel.get(segment.label) ?? 0}
+        label={group.label}
+        number={numberByLabel.get(group.label) ?? 0}
         tone={tone}
         onClick={() => {
           if (claim) onCiteClick(claim);

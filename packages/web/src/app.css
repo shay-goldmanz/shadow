@@ -410,6 +410,16 @@
   border-bottom-style: dashed;
 }
 
+.cited-span__text {
+  border-radius: 3px;
+  transition: background-color 75ms ease;
+}
+
+.cited-span:hover .cited-span__text,
+.cited-span:focus-within .cited-span__text {
+  background: var(--accent-soft);
+}
+
 .audit-chip {
   display: inline-flex;
   align-items: center;

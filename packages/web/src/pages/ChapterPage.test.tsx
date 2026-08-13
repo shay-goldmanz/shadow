@@ -79,7 +79,7 @@ describe("ChapterPage", () => {
 
   test("a derived claim renders neutral and opens the claims it was derived from, not a dead click", async () => {
     const client = new FakeApiClient();
-    const { findByLabelText, findByText } = render(
+    const { findByLabelText, findByText, findAllByText } = render(
       <ChapterPage
         client={client}
         slug="design-inspiration"
@@ -98,14 +98,21 @@ describe("ChapterPage", () => {
     fireEvent.click(citation);
 
     expect(await findByText("Derived from [^lin-and-notion-restraint]")).toBeTruthy();
+    // Both supporting claims' text also appears in the chapter's own prose
+    // (each cited inline) — the dialog repeats it, so query for "at least
+    // one", not "exactly one".
     expect(
-      await findByText("Linear favours a tight 4px spacing scale and restrained borders over shadows."),
-    ).toBeTruthy();
+      (
+        await findAllByText("Linear favours a tight 4px spacing scale and restrained borders over shadows.")
+      ).length,
+    ).toBeGreaterThan(0);
     expect(
-      await findByText(
-        "Notion leans on generous whitespace and a near-monochrome palette to keep content in front.",
-      ),
-    ).toBeTruthy();
+      (
+        await findAllByText(
+          "Notion leans on generous whitespace and a near-monochrome palette to keep content in front.",
+        )
+      ).length,
+    ).toBeGreaterThan(0);
   });
 
   test("the audit's failing claim renders red, not clay", async () => {
