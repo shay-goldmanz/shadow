@@ -2,13 +2,14 @@ import { useEffect, useState } from "react";
 import type { ShadowApiClient } from "../api/client.ts";
 import {
   ApiError,
+  type ChapterIndexNode,
   type ChapterSummary,
   type Volume,
   type VolumeIndexDocument,
   whenToUseOf,
 } from "../api/types.ts";
 import type { Route } from "../routing/useHashRoute.ts";
-import { IndexTreeView } from "./IndexTreeView.tsx";
+import { ChapterOutline } from "./ChapterOutline.tsx";
 
 type IndexState =
   | { readonly status: "loading" }
@@ -88,6 +89,15 @@ export function VolumeViewPage({
       )
     : data.chapters;
 
+  // The outline used to be its own column, one flat list of every chapter's
+  // sections next to the chapter list — cross-referencing the two by title
+  // was on the operator. Looked up by slug instead, so each chapter's own
+  // outline can sit inside its own card.
+  const outlineBySlug: ReadonlyMap<string, ChapterIndexNode> =
+    indexState.status === "ready"
+      ? new Map(indexState.index.volume.chapters.map((node) => [node.slug, node]))
+      : new Map();
+
   return (
     <div className="page volume-view-page">
       <header className="page__header">
@@ -105,26 +115,27 @@ export function VolumeViewPage({
         </button>
       </header>
 
-      <div className="volume-view-page__columns">
-        <section aria-label="Chapters">
-          <h2>Chapters</h2>
-          {data.chapters.length === 0 ? (
-            <p>No chapters yet — chat with Shadow to write the first one.</p>
-          ) : (
-            <>
-              <input
-                type="text"
-                className="chapter-filter"
-                aria-label="Find a chapter"
-                placeholder="Find a chapter by task…"
-                value={filter}
-                onChange={(event) => setFilter(event.target.value)}
-              />
-              {visibleChapters.length === 0 ? (
-                <p className="chapter-filter__empty">No chapter matches "{filter.trim()}".</p>
-              ) : (
-                <ul className="chapter-list">
-                  {visibleChapters.map((chapter) => (
+      <section aria-label="Chapters">
+        <h2>Chapters</h2>
+        {data.chapters.length === 0 ? (
+          <p>No chapters yet — chat with Shadow to write the first one.</p>
+        ) : (
+          <>
+            <input
+              type="text"
+              className="chapter-filter"
+              aria-label="Find a chapter"
+              placeholder="Find a chapter by task…"
+              value={filter}
+              onChange={(event) => setFilter(event.target.value)}
+            />
+            {visibleChapters.length === 0 ? (
+              <p className="chapter-filter__empty">No chapter matches "{filter.trim()}".</p>
+            ) : (
+              <ul className="chapter-list">
+                {visibleChapters.map((chapter) => {
+                  const outline = outlineBySlug.get(chapter.slug);
+                  return (
                     <li key={chapter.slug} className="chapter-card">
                       <button
                         type="button"
@@ -133,6 +144,7 @@ export function VolumeViewPage({
                       >
                         <span className="chapter-list__title">{chapter.title}</span>
                       </button>
+                      {outline && <ChapterOutline node={outline} />}
                       {whenToUseOf(chapter) && (
                         <details className="chapter-card__details">
                           <summary>When to use</summary>
@@ -140,34 +152,13 @@ export function VolumeViewPage({
                         </details>
                       )}
                     </li>
-                  ))}
-                </ul>
-              )}
-            </>
-          )}
-        </section>
-
-        <section aria-label="Index tree">
-          <h2>Outline</h2>
-          {indexState.status === "loading" && <p aria-live="polite">Loading index…</p>}
-          {indexState.status === "not-built" && (
-            <p className="index-tree__empty">
-              Not indexed yet — publishing a chapter builds the index automatically.
-            </p>
-          )}
-          {indexState.status === "error" && (
-            <p role="alert">Could not load the index: {indexState.message}</p>
-          )}
-          {indexState.status === "ready" && (
-            <IndexTreeView
-              index={indexState.index}
-              onOpenChapter={(chapterSlug) =>
-                navigate({ name: "chapter", slug, chapter: chapterSlug })
-              }
-            />
-          )}
-        </section>
-      </div>
+                  );
+                })}
+              </ul>
+            )}
+          </>
+        )}
+      </section>
     </div>
   );
 }

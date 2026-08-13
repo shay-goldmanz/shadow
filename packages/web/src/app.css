@@ -226,12 +226,6 @@
 
 /* ---- volume view ------------------------------------------------------ */
 
-.volume-view-page__columns {
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: var(--space-8);
-}
-
 .chapter-list {
   list-style: none;
   padding: 0;
@@ -278,7 +272,15 @@
   padding: 0 var(--space-3) var(--space-1);
 }
 
+.chapter-card__details + .chapter-card__details {
+  border-top: 1px solid var(--border);
+  margin-top: var(--space-1);
+  padding-top: var(--space-2);
+}
+
 .chapter-card__details summary {
+  display: flex;
+  align-items: baseline;
   color: var(--accent);
   font-size: 0.78rem;
   cursor: pointer;
@@ -290,67 +292,11 @@
   margin: var(--space-2) 0 0;
 }
 
-.index-tree {
-  display: grid;
-  gap: var(--space-2);
-}
-
-.index-tree__chapter {
-  border: 1px solid var(--border);
-  border-radius: var(--radius);
-  background: var(--surface);
-  padding: 0 var(--space-3);
-}
-
-.index-tree__chapter summary {
-  display: flex;
-  align-items: baseline;
-  gap: var(--space-2);
-  padding: var(--space-2) 0;
-  cursor: pointer;
-  list-style: none;
-}
-
-.index-tree__chapter summary::-webkit-details-marker {
-  display: none;
-}
-
-.index-tree__chapter summary::before {
-  content: "▸";
-  flex: none;
-  color: var(--text-muted);
-  font-size: 0.65rem;
-  transition: transform var(--motion-fast) var(--motion-easing);
-}
-
-.index-tree__chapter[open] summary::before {
-  transform: rotate(90deg);
-}
-
-.index-tree__chapter-title {
-  background: none;
-  border: none;
-  padding: 0;
-  margin: 0;
-  font-family: var(--font-sans);
-  font-weight: 600;
-  font-size: 0.9rem;
-  color: var(--text);
-  text-align: left;
-  cursor: pointer;
-}
-
-.index-tree__chapter-title:hover {
-  color: var(--accent);
-  text-decoration: underline;
-}
-
 .index-tree__count {
   font-family: var(--font-mono);
   font-size: 0.7rem;
   color: var(--text-muted);
-  flex: 1;
-  text-align: right;
+  margin-left: auto;
 }
 
 .index-tree__sections,
