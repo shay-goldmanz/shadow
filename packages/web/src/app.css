@@ -576,6 +576,15 @@
   border: 1px solid var(--border);
 }
 
+.chat-message code,
+.research-event code,
+.research-event__findings code {
+  background: var(--surface-sunken);
+  border-radius: 4px;
+  padding: 0 4px;
+  font-size: 0.9em;
+}
+
 .research-event {
   font-family: var(--font-sans);
   font-size: 0.85rem;

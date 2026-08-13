@@ -24,6 +24,47 @@ function visibleAssistantText(text: string): string {
 }
 
 /**
+ * Shadow's prose (and the research pipeline's own goals/findings/issue
+ * messages) routinely uses `` `inline code` `` when talking about an
+ * identifier or syntax — natural for a model discussing code, but this
+ * transcript has no markdown rendering at all, so every backtick showed up
+ * as a literal character instead of a styled code span. Handles just this
+ * one construct rather than adding a full markdown parser: it's the one
+ * that's actually shown up unrendered, and everything else Shadow writes
+ * here is plain sentences.
+ */
+const INLINE_CODE = /`([^`\n]+)`/g;
+
+function withInlineCode(text: string): Array<string | { readonly code: string }> {
+  const parts: Array<string | { readonly code: string }> = [];
+  let lastIndex = 0;
+  for (const match of text.matchAll(INLINE_CODE)) {
+    const index = match.index ?? 0;
+    if (index > lastIndex) parts.push(text.slice(lastIndex, index));
+    parts.push({ code: match[1] ?? "" });
+    lastIndex = index + match[0].length;
+  }
+  if (lastIndex < text.length || parts.length === 0) parts.push(text.slice(lastIndex));
+  return parts;
+}
+
+function Prose({ text }: { readonly text: string }) {
+  return (
+    <>
+      {withInlineCode(text).map((part, i) =>
+        typeof part === "string" ? (
+          // biome-ignore lint/suspicious/noArrayIndexKey: a static split of one immutable string, never reordered
+          <span key={i}>{part}</span>
+        ) : (
+          // biome-ignore lint/suspicious/noArrayIndexKey: a static split of one immutable string, never reordered
+          <code key={i}>{part.code}</code>
+        ),
+      )}
+    </>
+  );
+}
+
+/**
  * Renders the transcript in order. Research and publication events get
  * their own visible rows rather than being folded into prose, so slow work
  * reads as progress instead of a hang — and `chapter.restated` gets the
@@ -47,7 +88,9 @@ function TranscriptItemView({ item }: { readonly item: TranscriptItem }) {
       return (
         <div className="chat-message chat-message--user">
           <span className="chat-message__author">Operator</span>
-          <p>{item.text}</p>
+          <p>
+            <Prose text={item.text} />
+          </p>
         </div>
       );
 
@@ -57,7 +100,9 @@ function TranscriptItemView({ item }: { readonly item: TranscriptItem }) {
       return (
         <div className="chat-message chat-message--assistant">
           <span className="chat-message__author">Shadow</span>
-          <p>{text}</p>
+          <p>
+            <Prose text={text} />
+          </p>
         </div>
       );
     }
@@ -67,7 +112,10 @@ function TranscriptItemView({ item }: { readonly item: TranscriptItem }) {
       // string — `goal` is the prose an operator actually reads.
       return (
         <div className="research-event">
-          <Badge tone="clay">Researching</Badge> <span>{item.brief.goal}</span>
+          <Badge tone="clay">Researching</Badge>{" "}
+          <span>
+            <Prose text={item.brief.goal} />
+          </span>
         </div>
       );
 
@@ -88,7 +136,9 @@ function TranscriptItemView({ item }: { readonly item: TranscriptItem }) {
           <Badge tone="sage">Research complete</Badge>
           <ul className="research-event__findings">
             {item.findings.map((finding) => (
-              <li key={finding.text}>{finding.text}</li>
+              <li key={finding.text}>
+                <Prose text={finding.text} />
+              </li>
             ))}
           </ul>
         </div>
@@ -97,8 +147,13 @@ function TranscriptItemView({ item }: { readonly item: TranscriptItem }) {
     case "research.failed":
       return (
         <div className="research-event research-event--error" role="alert">
-          <Badge tone="red">Research failed</Badge> <span>{item.brief.goal}</span>
-          <p className="research-event__error">{item.error}</p>
+          <Badge tone="red">Research failed</Badge>{" "}
+          <span>
+            <Prose text={item.brief.goal} />
+          </span>
+          <p className="research-event__error">
+            <Prose text={item.error} />
+          </p>
         </div>
       );
 
@@ -136,7 +191,9 @@ function TranscriptItemView({ item }: { readonly item: TranscriptItem }) {
           {item.issues.length > 0 && (
             <ul className="research-event__findings">
               {item.issues.map((issue) => (
-                <li key={`${issue.label ?? "chapter"}-${issue.code}`}>{issue.message}</li>
+                <li key={`${issue.label ?? "chapter"}-${issue.code}`}>
+                  <Prose text={issue.message} />
+                </li>
               ))}
             </ul>
           )}
@@ -146,7 +203,10 @@ function TranscriptItemView({ item }: { readonly item: TranscriptItem }) {
     case "error":
       return (
         <div className="research-event research-event--error" role="alert">
-          <Badge tone="red">Error</Badge> <span>{item.message}</span>
+          <Badge tone="red">Error</Badge>{" "}
+          <span>
+            <Prose text={item.message} />
+          </span>
         </div>
       );
   }
