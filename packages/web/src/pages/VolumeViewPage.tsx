@@ -158,7 +158,14 @@ export function VolumeViewPage({
           {indexState.status === "error" && (
             <p role="alert">Could not load the index: {indexState.message}</p>
           )}
-          {indexState.status === "ready" && <IndexTreeView index={indexState.index} />}
+          {indexState.status === "ready" && (
+            <IndexTreeView
+              index={indexState.index}
+              onOpenChapter={(chapterSlug) =>
+                navigate({ name: "chapter", slug, chapter: chapterSlug })
+              }
+            />
+          )}
         </section>
       </div>
     </div>
