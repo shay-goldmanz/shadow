@@ -590,8 +590,35 @@
   font-size: 0.85rem;
   color: var(--text-muted);
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   gap: var(--space-2);
+}
+
+/*
+ * `research.finished`'s findings, `research.failed`'s error, and
+ * `chapter.rejected`'s issues (`ChatTranscript.tsx`) all render one of
+ * these as a sibling inside `.research-event` alongside its badge —
+ * these two classes were referenced there but never actually had base
+ * rules, so they fell back to raw browser <ul>/<p> defaults (bullets,
+ * default margins) squeezed into a centered, non-wrapping flex row.
+ * `flex-basis: 100%` forces each onto its own line below the badge —
+ * the standard flex trick for "wrap before this item" — instead of
+ * fighting for space in the same row as short, single-line content.
+ */
+.research-event__findings {
+  flex-basis: 100%;
+  list-style: none;
+  margin: var(--space-1) 0 0;
+  padding: 0;
+  display: grid;
+  gap: var(--space-1);
+  color: var(--text);
+}
+
+.research-event__error {
+  flex-basis: 100%;
+  margin: var(--space-1) 0 0;
 }
 
 .chat-page__status {
