@@ -19,8 +19,36 @@ import type { TranscriptItem } from "./chat-transcript.ts";
  */
 const TOOL_CALL_BLOCK = /```shadow:[a-z]+[\s\S]*?```/gi;
 
-function visibleAssistantText(text: string): string {
-  return text.replace(TOOL_CALL_BLOCK, "").trim();
+/**
+ * While a turn is still streaming, `text-delta`s arrive one token at a
+ * time — a `` ```shadow:research `` fence's *opening* reaches the client
+ * well before its closing `` ``` `` does, so `TOOL_CALL_BLOCK` (which
+ * needs both ends) has nothing to match yet and the raw, in-progress
+ * block renders for however long the model takes to finish writing it,
+ * then vanishes the instant it closes. An odd number of `` ``` `` markers
+ * left after stripping every *complete* block means exactly one is still
+ * open — cut from there to the end rather than show a directive mid-write.
+ * Shadow never leaves a fence open in a finished reply (a directive always
+ * closes), so this never touches settled text, only an in-flight tail.
+ */
+export function visibleAssistantText(text: string): string {
+  const stripped = text.replace(TOOL_CALL_BLOCK, "");
+  const openFenceIndex = stripped.lastIndexOf("```");
+  const settled =
+    openFenceIndex >= 0 && countOccurrences(stripped, "```") % 2 === 1
+      ? stripped.slice(0, openFenceIndex)
+      : stripped;
+  return settled.trim();
+}
+
+function countOccurrences(text: string, needle: string): number {
+  let count = 0;
+  let index = text.indexOf(needle);
+  while (index !== -1) {
+    count++;
+    index = text.indexOf(needle, index + needle.length);
+  }
+  return count;
 }
 
 /**
