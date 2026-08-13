@@ -10,7 +10,9 @@ describe("ensureWritingVolumesSkillInstalled", () => {
     try {
       const result = await ensureWritingVolumesSkillInstalled(targetDir);
       expect(result.skill).toBe("shadow-write-volumes");
-      expect(result.path).toBe(join(targetDir, ".claude", "skills", "shadow-write-volumes", "SKILL.md"));
+      expect(result.path).toBe(
+        join(targetDir, ".claude", "skills", "shadow-write-volumes", "SKILL.md"),
+      );
 
       const written = await readFile(result.path, "utf8");
       const canonical = await readFile(
