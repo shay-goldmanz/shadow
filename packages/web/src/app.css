@@ -404,6 +404,12 @@
   border-bottom-color: var(--accent);
 }
 
+.citation-mark--neutral {
+  color: var(--text-muted);
+  border-bottom-color: var(--text-muted);
+  border-bottom-style: dashed;
+}
+
 .audit-chip {
   display: inline-flex;
   align-items: center;
@@ -748,6 +754,33 @@
   white-space: pre-wrap;
   max-height: 40vh;
   overflow: auto;
+}
+
+.snapshot-dialog__supports {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: var(--space-3);
+  max-height: 50vh;
+  overflow: auto;
+}
+
+.snapshot-dialog__supports li {
+  border-left: 2px solid var(--border);
+  padding-left: var(--space-3);
+}
+
+.snapshot-dialog__supports-label {
+  display: block;
+  font-family: var(--font-mono);
+  font-size: 0.75rem;
+  color: var(--text-muted);
+  margin-bottom: 2px;
+}
+
+.snapshot-dialog__supports-empty {
+  color: var(--text-muted);
 }
 
 .error-boundary {

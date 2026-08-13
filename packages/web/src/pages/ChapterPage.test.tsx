@@ -77,6 +77,37 @@ describe("ChapterPage", () => {
     expect(await findByText("Linear Method — Writing things down")).toBeTruthy();
   });
 
+  test("a derived claim renders neutral and opens the claims it was derived from, not a dead click", async () => {
+    const client = new FakeApiClient();
+    const { findByLabelText, findByText } = render(
+      <ChapterPage
+        client={client}
+        slug="design-inspiration"
+        chapterSlug="linear-and-notion-ui"
+        navigate={() => {}}
+      />,
+    );
+
+    const citation = await findByLabelText(/Citation lin-and-notion-restraint/);
+    // Rendered distinctly from a sourced claim (clay) — a derived claim
+    // has no evidence span of its own, so it must not look like one that
+    // does and then silently do nothing on click.
+    expect(citation.getAttribute("data-tone")).toBe("neutral");
+    expect(citation.getAttribute("aria-label")).toContain("derived from other claims");
+
+    fireEvent.click(citation);
+
+    expect(await findByText("Derived from [^lin-and-notion-restraint]")).toBeTruthy();
+    expect(
+      await findByText("Linear favours a tight 4px spacing scale and restrained borders over shadows."),
+    ).toBeTruthy();
+    expect(
+      await findByText(
+        "Notion leans on generous whitespace and a near-monochrome palette to keep content in front.",
+      ),
+    ).toBeTruthy();
+  });
+
   test("the audit's failing claim renders red, not clay", async () => {
     const client = new FakeApiClient();
     const { findByLabelText } = render(

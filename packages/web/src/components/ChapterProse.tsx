@@ -14,6 +14,14 @@ const HEADING_TAGS = ["h1", "h2", "h3", "h4", "h5", "h6"] as const;
  *   - amber: this claim's evidence has drifted (orphaned, D22) — a warning.
  *   - sage: the claim cites the operator's own words (D19 `operator` kind)
  *     rather than an external source — "this is yours".
+ *   - neutral: a `derived` claim (D19) — a synthesis of other claims in
+ *     this chapter, not its own source snapshot. Rendering it as clay (the
+ *     "sourced" colour) made every derived citation a dead click that
+ *     looked identical to a working one: same tone, same cursor, same
+ *     "opens evidence snapshot" label, `claim.evidence` just empty, so
+ *     `onCiteClick`'s `if (span)` guard silently no-opped. Distinct tone
+ *     here; `ChapterPage.tsx` gives it a distinct dialog instead of a
+ *     silent no-op.
  */
 export function ChapterProse({
   body,
@@ -133,5 +141,6 @@ function citationTone(
   if (failingLabels.has(label)) return "red";
   if (claim?.evidence.some((span) => span.anchorStatus === "orphaned")) return "amber";
   if (claim?.kind === "operator") return "sage";
+  if (claim?.kind === "derived") return "neutral";
   return "clay";
 }

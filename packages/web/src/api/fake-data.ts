@@ -152,6 +152,7 @@ The operator believes both are worth studying because they read as quiet and del
 ## Density
 
 Linear's density comes from tight alignment and purposeful use of borders as the primary structural device, rather than shadows.[^lin-borders]
+Read together, both are the same instinct: control what borders and space communicate rather than decorating with them.[^=lin-and-notion-restraint]
 `;
 
 const linearClaims: Claim[] = [
@@ -200,6 +201,25 @@ const linearClaims: Claim[] = [
     exact: "We use a 4px spacing scale throughout and prefer borders to shadows.",
     anchorStatus: "anchored",
   }),
+  // A `derived` claim (D19): a synthesis of the two `sourced` claims above,
+  // not sourced itself — `evidence` is deliberately empty, `supports`
+  // points back at what it follows from. The fixture that exposed clicking
+  // one of these doing nothing (`claim.evidence[0]` was `undefined`).
+  {
+    id: "clm_lin_and_notion_restraint",
+    label: "lin-and-notion-restraint",
+    kind: "derived",
+    text: "Read together, both are the same instinct: control what borders and space communicate rather than decorating with them.",
+    decontextualized:
+      "Read together, both are the same instinct: control what borders and space communicate rather than decorating with them.",
+    checkRequired: true,
+    evidence: [],
+    supports: ["lin-4px", "notion-whitespace"],
+    verification: {
+      status: "supported",
+      inputHash: "sha256:clm_lin_and_notion_restraint-input",
+    },
+  },
 ];
 
 const linearAudit: AuditRecord = {
