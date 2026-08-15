@@ -214,4 +214,59 @@ describe("extractChunk", () => {
       await rm(root, { recursive: true, force: true });
     }
   });
+
+  test("forwards args.model to the port; omitting it forwards undefined", async () => {
+    const { root, rulebookStore, slug } = await makeRulebookStore("extraction-model-forward");
+    try {
+      const withModel = new FakeStructuredGenerationPort([FIXTURE_EXTRACTION]);
+      await extractChunk(
+        { structuredGeneration: withModel, rulebookStore },
+        { rulebookSlug: slug, chunk: makeChunk({ contentHash: "3".repeat(64) }), groups: GROUPS, model: "opus" },
+      );
+      expect(withModel.calls[0]?.model).toBe("opus");
+
+      const withoutModel = new FakeStructuredGenerationPort([FIXTURE_EXTRACTION]);
+      await extractChunk(
+        { structuredGeneration: withoutModel, rulebookStore },
+        { rulebookSlug: slug, chunk: makeChunk({ contentHash: "4".repeat(64) }), groups: GROUPS },
+      );
+      expect(withoutModel.calls[0]?.model).toBeUndefined();
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  test("a changed model invalidates the cache even for the same chunk and menu", async () => {
+    const { root, rulebookStore, slug } = await makeRulebookStore("extraction-model-change");
+    try {
+      const structuredGeneration = new FakeStructuredGenerationPort([FIXTURE_EXTRACTION, FIXTURE_EXTRACTION]);
+      const chunk = makeChunk({ contentHash: "5".repeat(64) });
+
+      const first = await extractChunk(
+        { structuredGeneration, rulebookStore },
+        { rulebookSlug: slug, chunk, groups: GROUPS },
+      );
+      expect(first.cached).toBe(false);
+
+      // Same chunk, same menu, un-set model -> "default" cache key on the
+      // first call: re-running with the *same* undefined model still hits
+      // the cache...
+      const stillDefault = await extractChunk(
+        { structuredGeneration, rulebookStore },
+        { rulebookSlug: slug, chunk, groups: GROUPS },
+      );
+      expect(stillDefault.cached).toBe(true);
+
+      // ...but switching to an explicit model must miss, since a different
+      // model can produce different output for byte-identical input.
+      const withModel = await extractChunk(
+        { structuredGeneration, rulebookStore },
+        { rulebookSlug: slug, chunk, groups: GROUPS, model: "opus" },
+      );
+      expect(withModel.cached).toBe(false);
+      expect(structuredGeneration.calls).toHaveLength(2);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
 });

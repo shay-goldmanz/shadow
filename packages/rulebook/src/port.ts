@@ -24,8 +24,29 @@ export interface RulebookBrief {
   readonly constraints?: readonly string[];
   /** Caps the number of taxonomy groups the LLM may propose. Default 16. */
   readonly maxGroups?: number;
-  /** Caps in-flight chunk extractions (see `rulebook-tool-agent.ts`'s `streamWithConcurrency`). Default 6. */
+  /** Caps in-flight chunk extractions (see `rulebook-tool-agent.ts`'s `streamWithConcurrency`). Default 8. */
   readonly concurrency?: number;
+  /** Caps in-flight group assemble+publish fan-out (see `rulebook-tool-agent.ts`'s `streamWithConcurrency`). Default 4. */
+  readonly auditConcurrency?: number;
+  /**
+   * Model override for chunk extraction calls (`extraction.ts`'s
+   * `extractChunk`), forwarded as `StructuredGenerationRequest.model`.
+   * Undefined (the default) leaves the adapter's own default model in
+   * place — this is an operator/config lever, never a model-emitted field,
+   * so it is not part of any chat directive schema. Folded into the
+   * extraction cache key alongside the prompt version/content/menu hash,
+   * since a different model can produce different output for the same
+   * chunk (see `extraction.ts`'s `extractionCacheKey`).
+   */
+  readonly extractionModel?: string;
+  /**
+   * Model override for group-finalization calls
+   * (`finalize-groups.ts`'s `finalizeGroups`), forwarded as
+   * `StructuredGenerationRequest.model`. Same undefined-means-default
+   * contract as `extractionModel`, and likewise folded into the
+   * finalization batch cache key.
+   */
+  readonly finalizeModel?: string;
 }
 
 /** Progress streamed out of `RuleBookPort.create`, one event per pipeline milestone. */

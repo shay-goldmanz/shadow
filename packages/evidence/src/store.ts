@@ -149,7 +149,14 @@ export interface EvidenceStore {
 
   appendLedgerEvent(volume: VolumeSlug, event: LedgerEvent): Promise<void>;
 
-  /** The full ledger, in append order. Empty array if nothing has been appended yet. @throws {LedgerCorruptError} */
+  /**
+   * The full ledger, in append order. Empty array if nothing has been
+   * appended yet. An unparseable final line is treated as a torn write
+   * still in flight and silently dropped; an unparseable line anywhere
+   * else is a real integrity problem.
+   *
+   * @throws {LedgerCorruptError}
+   */
   readLedger(volume: VolumeSlug): Promise<LedgerEvent[]>;
 
   // ---- convenience: batch-load a sync lookup for the Tier 0 checks --------
@@ -374,6 +381,10 @@ export class FileSystemEvidenceStore implements EvidenceStore {
     const text = await file.text();
     const events: LedgerEvent[] = [];
     const lines = text.split("\n");
+    let lastContentLine = -1;
+    for (let i = 0; i < lines.length; i++) {
+      if (lines[i]?.trim()) lastContentLine = i;
+    }
     for (let i = 0; i < lines.length; i++) {
       const line = lines[i]?.trim();
       if (!line) continue;
@@ -381,6 +392,19 @@ export class FileSystemEvidenceStore implements EvidenceStore {
         events.push(JSON.parse(line) as LedgerEvent);
       } catch (cause) {
         const reason = cause instanceof Error ? cause.message : String(cause);
+        // A parse failure on the last line with content is treated as a
+        // torn write in flight — a concurrent `appendLedgerEvent` whose
+        // `appendFile` call this read raced and observed mid-write — and
+        // is dropped rather than failing the whole read; the writer's next
+        // flush completes it and a later `readLedger` will see it whole. A
+        // parse failure anywhere else in the file is a real integrity
+        // problem (a prior append was itself malformed) and still throws.
+        if (i === lastContentLine) {
+          console.warn(
+            `FileSystemEvidenceStore: skipping torn final ledger line ${i + 1} in ${layout.ledgerPath()} (${reason})`,
+          );
+          break;
+        }
         throw new LedgerCorruptError(i + 1, reason);
       }
     }

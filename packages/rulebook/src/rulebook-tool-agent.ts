@@ -9,10 +9,12 @@
  * finishes.** A `Promise.all`-shaped batch primitive is perfect for the
  * pipeline's other fan-outs, but it can only resolve once, at the end, so it
  * cannot itself drive a `chunk-extracted` event per chunk as chunks finish.
- * This module instead runs its own small bounded worker pool
- * (`streamWithConcurrency`) that pushes each finished chunk's result onto a
- * queue the generator drains as it goes — the "collect via an async queue"
- * option the task named. Its rejection semantics deliberately match a
+ * This module instead drives the shared bounded worker pool
+ * (`stream-concurrency.ts`'s `streamWithConcurrency`, also used by
+ * `finalize-groups.ts`'s batched finalization calls) that pushes each
+ * finished chunk's result onto a queue the generator drains as it goes — the
+ * "collect via an async queue" option the task named. Its rejection
+ * semantics deliberately match a
  * `Promise.all`-shaped primitive's "settle-all, then throw first": a worker
  * whose item throws records the first error, still decrements the
  * remaining-count and wakes the drain loop, and only after every
@@ -20,15 +22,24 @@
  * error — so `create()`'s outer `try`/`catch` always gets a chance to yield
  * `failed` instead of hanging forever on an unsettled `remaining` count.
  *
- * **Groups publish sequentially, deliberately.** `publishGroup` appends
- * to the rule book's shared, append-only ledger (`audit.completed`,
- * `claim.restated`, `claim.label.retired`) via
- * `EvidenceStore.appendLedgerEvent`, which is a read-modify-append over one
- * file with no mutex. Running every group's publish concurrently would race
- * that append across groups. A future optimization (noted here, not
- * implemented) would either put a mutex around the ledger file or batch
- * appends per run; at current scale, one document rarely has enough groups
- * for the serialization to matter, so simple-and-correct wins.
+ * **Groups assemble+publish in parallel, bounded by `auditConcurrency`.**
+ * `publishGroup` appends to the rule book's shared, append-only ledger
+ * (`audit.completed`, `claim.restated`, `claim.label.retired`) via
+ * `EvidenceStore.appendLedgerEvent`, but that append is a single-line
+ * `appendFile(path, line, { flag: "a" })` — an atomic O_APPEND write, not the
+ * read-modify-append this comment used to describe (that TOCTOU was removed;
+ * see `@shadow/evidence`'s `store.ts`). Every other write `publishGroup`
+ * makes (the group `.md`, its claims sidecar, its audit record) targets a
+ * path scoped to that one group, and the Tier-2 ports it calls
+ * (`CheckWorthinessClassifier`/`EntailmentRelevanceJudge`/`ClaimRestater`,
+ * `tier2-adapters.ts`) hold no shared mutable state. So groups are safe to
+ * assemble+publish concurrently; this module still bounds how many run at
+ * once via `streamWithConcurrency` and `brief.auditConcurrency`, both to cap
+ * concurrent LLM calls and to keep `group-audited` events flowing steadily
+ * rather than as one big burst. One remaining shared read:
+ * `EvidenceStore.getRetiredLabels` scans the whole ledger, so this module
+ * reads it once per run (before the fan-out starts) rather than once per
+ * group — see the fan-out below.
  *
  * **Audit usage is not accumulated.** `RulebookResult.usage` sums
  * `planTaxonomy`/`extractChunk`/`finalizeGroups`'s `TokenUsage` — every
@@ -52,6 +63,7 @@ import type {
   ClaimRestater,
   EntailmentRelevanceJudge,
   EvidenceStore,
+  LedgerEvent,
 } from "@shadow/evidence";
 import { addUsage, type StructuredGenerationPort, type TokenUsage, ZERO_USAGE } from "@shadow/model";
 import { resolve } from "node:path";
@@ -63,10 +75,13 @@ import { ingestDocument } from "./ingest.ts";
 import { consolidateRules } from "./merge.ts";
 import type { RulebookBrief, RulebookEvent, RulebookResult, RuleBookPort } from "./port.ts";
 import { publishGroup } from "./publish-group.ts";
+import type { TaxonomyGroup } from "./schemas.ts";
+import { streamWithConcurrency } from "./stream-concurrency.ts";
 import { planTaxonomy } from "./taxonomy.ts";
 import { validateChunkRules, type ValidatedRule } from "./validate.ts";
 
-const DEFAULT_CONCURRENCY = 6;
+const DEFAULT_CONCURRENCY = 8;
+const DEFAULT_AUDIT_CONCURRENCY = 4;
 
 export interface RulebookToolAgentDeps {
   readonly rulebookStore: RulebookStore;
@@ -75,6 +90,19 @@ export interface RulebookToolAgentDeps {
   readonly checkWorthinessClassifier: CheckWorthinessClassifier;
   readonly entailmentRelevanceJudge: EntailmentRelevanceJudge;
   readonly claimRestater: ClaimRestater;
+}
+
+/**
+ * Process-wide model-tier fallbacks, set once at composition time (e.g.
+ * from `SHADOW_RULEBOOK_EXTRACTION_MODEL`/`SHADOW_RULEBOOK_FINALIZE_MODEL`
+ * — see `@shadow/api`'s `composition.ts`). A `RulebookBrief`'s own
+ * `extractionModel`/`finalizeModel` always wins when set; these are only
+ * the fallback when a brief omits them. Both undefined (the default)
+ * reproduces today's behavior exactly — no model override anywhere.
+ */
+export interface RulebookToolAgentOptions {
+  readonly extractionModel?: string;
+  readonly finalizeModel?: string;
 }
 
 function issuesFrom(outcomes: readonly CheckOutcome[]): string[] {
@@ -94,76 +122,31 @@ interface ChunkOutcome {
   readonly usage: TokenUsage;
 }
 
+interface GroupOutcome {
+  readonly groupSlug: string;
+  readonly passed: boolean;
+  readonly repairs: number;
+  readonly issues: readonly string[];
+  readonly assemblyDroppedQuotes: number;
+  readonly assemblyDroppedRules: number;
+}
+
 /**
- * Run `worker` over `items` with up to `concurrency` in flight, yielding
- * each result as soon as it's ready rather than only once every item is
- * done — the streaming counterpart to a `Promise.all`-shaped batch
- * primitive this module's progress events need. Completion order, not
- * input order (nothing downstream needs input order — see module doc).
- *
- * Settle-all-then-throw-first: a worker whose item throws (e.g. a
- * corrupted extraction-cache JSON) is caught here, not left to reject the
- * worker's promise silently — `remaining` still decrements and the drain
- * loop still wakes, so the loop always terminates; once every item has
- * settled, the first recorded error (if any) is rethrown out of the
- * generator itself, reaching `create()`'s outer `try`/`catch`.
+ * `claim.label.retired` events, keyed by chapter — read once from the
+ * ledger per run so each group's `publishGroup` call doesn't re-scan the
+ * whole ledger itself (see module doc). Mirrors
+ * `EvidenceStore.getRetiredLabels`'s own filter, just batched over every
+ * chapter in one pass instead of one `readLedger` per group.
  */
-async function* streamWithConcurrency<T, R>(
-  items: readonly T[],
-  concurrency: number,
-  worker: (item: T) => Promise<R>,
-): AsyncGenerator<R> {
-  if (items.length === 0) return;
-
-  const ready: R[] = [];
-  let wake: (() => void) | undefined;
-  let nextIndex = 0;
-  let remaining = items.length;
-  let failed = false;
-  let firstError: unknown;
-
-  function notify(): void {
-    if (wake) {
-      const resolveWake = wake;
-      wake = undefined;
-      resolveWake();
-    }
+function retiredLabelsByChapter(ledger: readonly LedgerEvent[]): Map<string, Set<string>> {
+  const byChapter = new Map<string, Set<string>>();
+  for (const event of ledger) {
+    if (event.event !== "claim.label.retired") continue;
+    const labels = byChapter.get(event.chapter) ?? new Set<string>();
+    labels.add(event.label);
+    byChapter.set(event.chapter, labels);
   }
-
-  async function runWorker(): Promise<void> {
-    for (;;) {
-      const index = nextIndex++;
-      if (index >= items.length) return;
-      try {
-        const result = await worker(items[index] as T);
-        ready.push(result);
-      } catch (error) {
-        if (!failed) {
-          failed = true;
-          firstError = error;
-        }
-      } finally {
-        remaining -= 1;
-        notify();
-      }
-    }
-  }
-
-  const workerCount = Math.max(1, Math.min(concurrency, items.length));
-  const workers = Array.from({ length: workerCount }, () => runWorker());
-
-  while (remaining > 0 || ready.length > 0) {
-    if (ready.length > 0) {
-      yield ready.shift() as R;
-      continue;
-    }
-    await new Promise<void>((resolvePromise) => {
-      wake = resolvePromise;
-    });
-  }
-
-  await Promise.all(workers);
-  if (failed) throw firstError;
+  return byChapter;
 }
 
 /**
@@ -175,7 +158,10 @@ async function* streamWithConcurrency<T, R>(
 export class RulebookToolAgent implements RuleBookPort {
   private busy = false;
 
-  constructor(private readonly deps: RulebookToolAgentDeps) {}
+  constructor(
+    private readonly deps: RulebookToolAgentDeps,
+    private readonly options: RulebookToolAgentOptions = {},
+  ) {}
 
   async *create(brief: RulebookBrief): AsyncIterable<RulebookEvent> {
     if (this.busy) {
@@ -243,6 +229,12 @@ export class RulebookToolAgent implements RuleBookPort {
 
     const menu = taxonomy.groups.map((group) => ({ slug: group.slug, when_to_use: group.when_to_use }));
 
+    // Brief-level override wins; falls back to the process-wide option set
+    // at construction time (see `RulebookToolAgentOptions`'s doc). Both
+    // undefined leaves `model` undefined end to end — today's behavior.
+    const extractionModel = brief.extractionModel ?? this.options.extractionModel;
+    const finalizeModel = brief.finalizeModel ?? this.options.finalizeModel;
+
     const validatedRules: ValidatedRule[] = [];
     let droppedQuotesFromValidation = 0;
     let failedChunks = 0;
@@ -251,7 +243,7 @@ export class RulebookToolAgent implements RuleBookPort {
     const extractOneChunk = async (chunk: DocumentChunk): Promise<ChunkOutcome> => {
       const extraction = await extractChunk(
         { structuredGeneration: this.deps.structuredGeneration, rulebookStore: this.deps.rulebookStore },
-        { rulebookSlug, chunk, groups: menu },
+        { rulebookSlug, chunk, groups: menu, model: extractionModel },
       );
       if (extraction.failed) {
         return { rules: [], cached: false, failed: true, usage: extraction.usage };
@@ -283,8 +275,14 @@ export class RulebookToolAgent implements RuleBookPort {
     const consolidated = consolidateRules(validatedRules);
 
     const finalized = await finalizeGroups(
-      { structuredGeneration: this.deps.structuredGeneration },
-      { rules: consolidated, groups: taxonomy.groups },
+      { structuredGeneration: this.deps.structuredGeneration, rulebookStore: this.deps.rulebookStore },
+      {
+        rulebookSlug,
+        rules: consolidated,
+        groups: taxonomy.groups,
+        concurrency: brief.concurrency ?? DEFAULT_CONCURRENCY,
+        model: finalizeModel,
+      },
     );
     usage = addUsage(usage, finalized.usage);
 
@@ -300,8 +298,11 @@ export class RulebookToolAgent implements RuleBookPort {
     let assemblyDroppedQuotes = 0;
     let assemblyDroppedRules = 0;
 
-    // Sequential, deliberately — see module doc's "Groups publish sequentially".
-    for (const group of finalized.groups) {
+    // One whole-ledger read for the entire run (see module doc) instead of
+    // one per group inside `publishGroup`.
+    const retiredByChapter = retiredLabelsByChapter(await this.deps.evidenceStore.readLedger(rulebookSlug));
+
+    const auditOneGroup = async (group: TaxonomyGroup): Promise<GroupOutcome> => {
       const rulesForGroup = consolidated.filter((rule) => finalized.assignments.get(rule.label) === group.slug);
       const groupSlug = toChapterSlug(group.slug);
 
@@ -309,8 +310,6 @@ export class RulebookToolAgent implements RuleBookPort {
         { rulebookStore: this.deps.rulebookStore, evidenceStore: this.deps.evidenceStore },
         { rulebookSlug, sourceId: ingested.sourceId, group, rules: rulesForGroup },
       );
-      assemblyDroppedQuotes += assembled.droppedQuotes;
-      assemblyDroppedRules += assembled.droppedRules;
 
       const published = await publishGroup(
         {
@@ -322,20 +321,42 @@ export class RulebookToolAgent implements RuleBookPort {
         },
         rulebookSlug,
         groupSlug,
+        retiredByChapter.get(groupSlug) ?? new Set<string>(),
       );
 
-      if (published.passed) {
-        publishedGroups.push(group.slug);
+      return {
+        groupSlug: group.slug,
+        passed: published.passed,
+        repairs: published.repairs.length,
+        issues: issuesFrom(published.outcomes),
+        assemblyDroppedQuotes: assembled.droppedQuotes,
+        assemblyDroppedRules: assembled.droppedRules,
+      };
+    };
+
+    // Parallel, bounded by `auditConcurrency` — see module doc. Yields in
+    // completion order, not group order; nothing downstream needs group
+    // order (same rationale as chunk extraction above).
+    for await (const outcome of streamWithConcurrency(
+      finalized.groups,
+      brief.auditConcurrency ?? DEFAULT_AUDIT_CONCURRENCY,
+      auditOneGroup,
+    )) {
+      assemblyDroppedQuotes += outcome.assemblyDroppedQuotes;
+      assemblyDroppedRules += outcome.assemblyDroppedRules;
+
+      if (outcome.passed) {
+        publishedGroups.push(outcome.groupSlug);
       } else {
-        rejectedGroups.push(group.slug);
+        rejectedGroups.push(outcome.groupSlug);
       }
 
       yield {
         type: "group-audited",
-        group: group.slug,
-        passed: published.passed,
-        repairs: published.repairs.length,
-        issues: issuesFrom(published.outcomes),
+        group: outcome.groupSlug,
+        passed: outcome.passed,
+        repairs: outcome.repairs,
+        issues: outcome.issues,
       };
     }
 

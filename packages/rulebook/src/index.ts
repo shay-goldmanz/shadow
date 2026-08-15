@@ -81,7 +81,12 @@ export type {
   FinalizeGroupsDeps,
   FinalizeGroupsResult,
 } from "./finalize-groups.ts";
-export { DEFAULT_MAX_RULES_PER_GROUP, finalizeGroups } from "./finalize-groups.ts";
+export {
+  DEFAULT_MAX_RULES_PER_GROUP,
+  FINALIZE_BATCH_SIZE,
+  FINALIZE_PROMPT_VERSION,
+  finalizeGroups,
+} from "./finalize-groups.ts";
 
 // ---- assembly (consolidated rules -> group document + claim sidecar) ----------
 

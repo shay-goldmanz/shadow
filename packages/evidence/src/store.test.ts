@@ -1,5 +1,5 @@
-import { describe, expect, test } from "bun:test";
-import { mkdtemp, rm } from "node:fs/promises";
+import { describe, expect, type Mock, spyOn, test } from "bun:test";
+import { appendFile, mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -10,7 +10,7 @@ import {
   toVolumeSlug,
 } from "@shadow/core";
 import { type Sha256Digest, sha256Of } from "./digest.ts";
-import { InvalidDigestError, InvalidIdError } from "./errors.ts";
+import { InvalidDigestError, InvalidIdError, LedgerCorruptError } from "./errors.ts";
 import type { SourceId } from "./ids.ts";
 import { FileSystemEvidenceStore } from "./store.ts";
 import {
@@ -34,6 +34,7 @@ async function makeHarness() {
   return {
     store,
     volume,
+    volumeStore,
     cleanup: () => rm(root, { recursive: true, force: true }),
   };
 }
@@ -316,6 +317,67 @@ describe("FileSystemEvidenceStore", () => {
     const { store, volume, cleanup } = await makeHarness();
     try {
       expect(await store.readLedger(volume)).toEqual([]);
+    } finally {
+      await cleanup();
+    }
+  });
+
+  test("readLedger skips a torn final line (not-yet-flushed concurrent append) instead of throwing", async () => {
+    const { store, volume, volumeStore, cleanup } = await makeHarness();
+    let warnSpy: Mock<typeof console.warn> | undefined;
+    try {
+      await store.appendLedgerEvent(volume, {
+        ts: "2026-08-11T00:00:00Z",
+        event: "audit.completed",
+        chapter: "how-linear-designs-ui",
+        result: "pass",
+        completeness: 1,
+        narrativeRatio: 0.41,
+      });
+      const ledgerPath = join(volumeStore.evidenceDir(volume), "ledger.ndjson");
+      // A partial write: valid JSON truncated mid-line, as a reader might
+      // observe a concurrent `appendFile` call that hasn't completed yet.
+      await appendFile(ledgerPath, '{"ts":"2026-08-11T00:01:00Z","event":"audit.comp', "utf8");
+
+      warnSpy = spyOn(console, "warn").mockImplementation(() => {});
+      const events = await store.readLedger(volume);
+      expect(events).toHaveLength(1);
+      expect(events[0]?.event).toBe("audit.completed");
+
+      // The skip is surfaced (console.warn), not silent — see readLedger's doc.
+      expect(warnSpy).toHaveBeenCalledTimes(1);
+      const [message] = warnSpy.mock.calls[0] ?? [];
+      expect(String(message)).toContain("torn");
+      expect(String(message)).toContain(ledgerPath);
+    } finally {
+      warnSpy?.mockRestore();
+      await cleanup();
+    }
+  });
+
+  test("readLedger throws LedgerCorruptError when a non-final line is unparseable", async () => {
+    const { store, volume, volumeStore, cleanup } = await makeHarness();
+    try {
+      await store.appendLedgerEvent(volume, {
+        ts: "2026-08-11T00:00:00Z",
+        event: "audit.completed",
+        chapter: "how-linear-designs-ui",
+        result: "pass",
+        completeness: 1,
+        narrativeRatio: 0.41,
+      });
+      const ledgerPath = join(volumeStore.evidenceDir(volume), "ledger.ndjson");
+      await appendFile(ledgerPath, "not valid json at all\n", "utf8");
+      await store.appendLedgerEvent(volume, {
+        ts: "2026-08-11T00:02:00Z",
+        event: "audit.completed",
+        chapter: "how-linear-designs-ui",
+        result: "pass",
+        completeness: 1,
+        narrativeRatio: 0.5,
+      });
+
+      await expectRejection(store.readLedger(volume), LedgerCorruptError);
     } finally {
       await cleanup();
     }

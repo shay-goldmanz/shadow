@@ -97,14 +97,25 @@ export function buildRealApiDeps(options: BuildRealApiDepsOptions = {}): ApiDeps
   // set — the rule book pipeline's audit gate (`publishGroup`) needs the
   // exact same Tier 2 ports a chapter's audit does, and there is no reason
   // for two separate instances of each to exist in one process.
-  const ruleBookPort = new RulebookToolAgent({
-    rulebookStore,
-    evidenceStore: rulebookEvidenceStore,
-    structuredGeneration,
-    checkWorthinessClassifier,
-    entailmentRelevanceJudge,
-    claimRestater,
-  });
+  //
+  // `extractionModel`/`finalizeModel` are dark operator levers, not
+  // user/model-facing config: unset env vars leave both undefined, so
+  // `RulebookToolAgent` behaves exactly as it did before these existed
+  // (see `RulebookToolAgentOptions`'s doc in `rulebook-tool-agent.ts`).
+  const ruleBookPort = new RulebookToolAgent(
+    {
+      rulebookStore,
+      evidenceStore: rulebookEvidenceStore,
+      structuredGeneration,
+      checkWorthinessClassifier,
+      entailmentRelevanceJudge,
+      claimRestater,
+    },
+    {
+      extractionModel: process.env.SHADOW_RULEBOOK_EXTRACTION_MODEL,
+      finalizeModel: process.env.SHADOW_RULEBOOK_FINALIZE_MODEL,
+    },
+  );
 
   // `AgenticSearchProvider` is a deliberately separate, narrow session from
   // `researchBriefPort`'s own (see that class's module doc, and

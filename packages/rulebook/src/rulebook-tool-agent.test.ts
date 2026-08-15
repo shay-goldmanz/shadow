@@ -95,6 +95,87 @@ function makeStructuredGeneration(
   });
 }
 
+// A four-group fixture for the parallel-fan-out tests below — one rule per
+// group, so `auditConcurrency: 3` genuinely has to queue a fourth worker
+// behind the first three rather than degenerating to "everything fits at
+// once".
+const FOUR_GROUP_FIXTURE_TEXT =
+  "Borrowers must repay principal monthly. The lender may seize collateral upon default.\n\n" +
+  "A late payment incurs a five percent fee. All collateral must be insured against loss.";
+
+const FOUR_GROUP_SLUGS = ["collateral", "fees", "insurance", "payments"] as const;
+
+function taxonomyFixtureFourGroups() {
+  return {
+    groups: [
+      {
+        slug: "payments",
+        title: "Payments",
+        when_to_use: "Rules about repayment schedules.",
+        not_for: "Everything else.",
+        keywords: ["payment"],
+      },
+      {
+        slug: "collateral",
+        title: "Collateral",
+        when_to_use: "Rules about collateral and default.",
+        not_for: "Everything else.",
+        keywords: ["collateral"],
+      },
+      {
+        slug: "fees",
+        title: "Fees",
+        when_to_use: "Rules about fees and charges.",
+        not_for: "Everything else.",
+        keywords: ["fee"],
+      },
+      {
+        slug: "insurance",
+        title: "Insurance",
+        when_to_use: "Rules about insurance requirements.",
+        not_for: "Everything else.",
+        keywords: ["insurance"],
+      },
+    ],
+  };
+}
+
+function extractionFixtureFourGroups() {
+  return {
+    rules: [
+      {
+        statement: "Borrowers must repay principal monthly.",
+        quotes: ["Borrowers must repay principal monthly."],
+        group: "payments",
+      },
+      {
+        statement: "The lender may seize collateral upon default.",
+        quotes: ["The lender may seize collateral upon default."],
+        group: "collateral",
+      },
+      {
+        statement: "A late payment incurs a five percent fee.",
+        quotes: ["A late payment incurs a five percent fee."],
+        group: "fees",
+      },
+      {
+        statement: "All collateral must be insured against loss.",
+        quotes: ["All collateral must be insured against loss."],
+        group: "insurance",
+      },
+    ],
+  };
+}
+
+function makeStructuredGenerationFourGroups(): FakeStructuredGenerationPort {
+  return new FakeStructuredGenerationPort((request) => {
+    if (request.schemaName === "rulebook-taxonomy") return taxonomyFixtureFourGroups();
+    if (request.schemaName === "rulebook-extraction") return extractionFixtureFourGroups();
+    if (request.schemaName === "rulebook-group-finalization") return { assignments: [] };
+    throw new Error(`unexpected schemaName in test fixture: ${request.schemaName}`);
+  });
+}
+
 async function collect(events: AsyncIterable<RulebookEvent>): Promise<RulebookEvent[]> {
   const out: RulebookEvent[] = [];
   for await (const event of events) out.push(event);
@@ -514,6 +595,265 @@ describe("RulebookToolAgent", () => {
       const rulebook = await rulebookStore.getRulebook(rulebookSlug);
       expect(rulebook.status).toBe("draft");
       expect(rulebook.verified).toEqual([]);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  test("auditConcurrency: 3 fans four groups' assemble+publish out in parallel; every group still lands correctly", async () => {
+    const root = await mkdtemp(join(tmpdir(), "shadow-rulebook-agent-test-"));
+    try {
+      const docPath = join(root, "loan.md");
+      await writeFile(docPath, FOUR_GROUP_FIXTURE_TEXT, "utf8");
+
+      const rulebookStore = new FileSystemRulebookStore(root);
+      const evidenceStore = new FileSystemEvidenceStore(rulebookStore);
+
+      const agent = new RulebookToolAgent({
+        rulebookStore,
+        evidenceStore,
+        structuredGeneration: makeStructuredGenerationFourGroups(),
+        checkWorthinessClassifier: alwaysNarrativeClassifier,
+        entailmentRelevanceJudge: alwaysSupportedJudge([]),
+        claimRestater: scriptedClaimRestater(() => {
+          throw new Error("restater should not be called on the happy path");
+        }),
+      });
+
+      const brief: RulebookBrief = {
+        slug: "loan-rules",
+        title: "Loan Rules",
+        docPath,
+        auditConcurrency: 3,
+      };
+      const events = await collect(agent.create(brief));
+
+      const completedEvent = events.at(-1);
+      if (completedEvent?.type !== "completed") throw new Error("expected a completed event");
+      const { result } = completedEvent;
+
+      expect([...result.publishedGroups].sort()).toEqual([...FOUR_GROUP_SLUGS]);
+      expect(result.rejectedGroups).toEqual([]);
+      expect(result.groupCount).toBe(4);
+      expect(result.status).toBe("stable");
+
+      // Every group-audited event arrived — order-agnostic, since
+      // completion order (not group/input order) is what the fan-out
+      // yields.
+      const groupAuditedEvents = events.filter((e) => e.type === "group-audited");
+      expect(groupAuditedEvents).toHaveLength(4);
+      expect(
+        groupAuditedEvents
+          .map((e) => (e.type === "group-audited" ? e.group : ""))
+          .sort(),
+      ).toEqual([...FOUR_GROUP_SLUGS]);
+      expect(groupAuditedEvents.every((e) => e.type === "group-audited" && e.passed)).toBe(true);
+
+      // The ledger parses cleanly line-by-line and holds exactly the
+      // expected `audit.completed` events — one pass per group, and no
+      // `claim.restated` (nothing needed repair on this happy path).
+      const rulebookSlug = toVolumeSlug("loan-rules");
+      const ledger = await evidenceStore.readLedger(rulebookSlug);
+      const auditCompletedEvents = ledger.filter((e) => e.event === "audit.completed");
+      expect(auditCompletedEvents).toHaveLength(4);
+      expect(auditCompletedEvents.every((e) => e.event === "audit.completed" && e.result === "pass")).toBe(
+        true,
+      );
+      expect(ledger.filter((e) => e.event === "claim.restated")).toEqual([]);
+
+      // Result counts match what's actually on disk.
+      for (const groupSlug of FOUR_GROUP_SLUGS) {
+        const group = await rulebookStore.getGroup(rulebookSlug, toChapterSlug(groupSlug));
+        expect(group.status).toBe("stable");
+        expect(group.verified).toHaveLength(1);
+      }
+      expect(await rulebookStore.listGroups(rulebookSlug)).toHaveLength(4);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  test("settle-all — one group's publish throwing doesn't abandon the others, and the run still ends in failed", async () => {
+    const root = await mkdtemp(join(tmpdir(), "shadow-rulebook-agent-test-"));
+    try {
+      const docPath = join(root, "loan.md");
+      await writeFile(docPath, FOUR_GROUP_FIXTURE_TEXT, "utf8");
+
+      const rulebookStore = new FileSystemRulebookStore(root);
+      const evidenceStore = new FileSystemEvidenceStore(rulebookStore);
+
+      // Throws outright (not a scripted "unsupported" verdict) for the one
+      // group whose claim mentions "fee" — simulating an audit dependency
+      // failing mid-run (a real `EntailmentRelevanceJudge` erroring), which
+      // previously would have failed the whole sequential run too.
+      const throwingJudge = {
+        judge: async (inputs: readonly EntailmentRelevanceInput[]) => {
+          if (inputs.some((input) => input.decontextualized.toLowerCase().includes("fee"))) {
+            throw new Error("scripted judge failure for the fees group");
+          }
+          return inputs.map(() => ({
+            entailment: { status: "supported" as const, rationale: "test fixture" },
+            relevance: { relevance: "on-topic" as const, rationale: "test fixture" },
+          }));
+        },
+      };
+
+      const agent = new RulebookToolAgent({
+        rulebookStore,
+        evidenceStore,
+        structuredGeneration: makeStructuredGenerationFourGroups(),
+        checkWorthinessClassifier: alwaysNarrativeClassifier,
+        entailmentRelevanceJudge: throwingJudge,
+        claimRestater: scriptedClaimRestater(() => {
+          throw new Error("restater should not be called — the throw happens before repair");
+        }),
+      });
+
+      const brief: RulebookBrief = {
+        slug: "loan-rules",
+        title: "Loan Rules",
+        docPath,
+        auditConcurrency: 3,
+      };
+
+      let unhandledRejection: unknown;
+      const onUnhandledRejection = (reason: unknown): void => {
+        unhandledRejection = reason;
+      };
+      process.on("unhandledRejection", onUnhandledRejection);
+
+      let events: RulebookEvent[];
+      try {
+        events = await collect(agent.create(brief));
+      } finally {
+        process.off("unhandledRejection", onUnhandledRejection);
+      }
+
+      expect(unhandledRejection).toBeUndefined();
+      // Matches the old sequential behavior: a thrown publish fails the
+      // whole run — never a "completed" event.
+      expect(events.at(-1)?.type).toBe("failed");
+      expect(events.some((e) => e.type === "completed")).toBe(false);
+
+      // Settle-all-then-throw-first: the three groups that didn't throw
+      // still ran to completion and published, even though the run overall
+      // reports failed.
+      const groupAuditedEvents = events.filter((e) => e.type === "group-audited");
+      expect(groupAuditedEvents).toHaveLength(3);
+      expect(
+        groupAuditedEvents
+          .map((e) => (e.type === "group-audited" ? e.group : ""))
+          .sort(),
+      ).toEqual(["collateral", "insurance", "payments"]);
+
+      const rulebookSlug = toVolumeSlug("loan-rules");
+      for (const groupSlug of ["collateral", "insurance", "payments"] as const) {
+        const group = await rulebookStore.getGroup(rulebookSlug, toChapterSlug(groupSlug));
+        expect(group.status).toBe("stable");
+      }
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  test("extractionModel/finalizeModel: brief wins over constructor options, constructor options act as a fallback when the brief omits its own value", async () => {
+    const root = await mkdtemp(join(tmpdir(), "shadow-rulebook-agent-test-"));
+    try {
+      const docPath = join(root, "loan.md");
+      await writeFile(docPath, FIXTURE_TEXT, "utf8");
+
+      const rulebookStore = new FileSystemRulebookStore(root);
+      const evidenceStore = new FileSystemEvidenceStore(rulebookStore);
+
+      const modelsBySchema = new Map<string, Array<string | undefined>>();
+      const structuredGeneration = new FakeStructuredGenerationPort((request) => {
+        const schemaName = request.schemaName ?? "";
+        modelsBySchema.set(schemaName, [...(modelsBySchema.get(schemaName) ?? []), request.model]);
+        if (schemaName === "rulebook-taxonomy") return taxonomyFixture();
+        if (schemaName === "rulebook-extraction") return extractionFixture();
+        if (schemaName === "rulebook-group-finalization") return { assignments: [] };
+        throw new Error(`unexpected schemaName in test fixture: ${schemaName}`);
+      });
+
+      const agent = new RulebookToolAgent(
+        {
+          rulebookStore,
+          evidenceStore,
+          structuredGeneration,
+          checkWorthinessClassifier: alwaysNarrativeClassifier,
+          entailmentRelevanceJudge: alwaysSupportedJudge([]),
+          claimRestater: scriptedClaimRestater(() => {
+            throw new Error("restater should not be called on the happy path");
+          }),
+        },
+        // Process-wide fallback for both levers.
+        { extractionModel: "fallback-extraction", finalizeModel: "fallback-finalize" },
+      );
+
+      // Brief overrides extractionModel but omits finalizeModel — the
+      // finalize call must fall back to the constructor option.
+      const brief: RulebookBrief = {
+        slug: "loan-rules-model",
+        title: "Loan Rules",
+        docPath,
+        extractionModel: "brief-extraction",
+      };
+      await collect(agent.create(brief));
+
+      const extractionModels = modelsBySchema.get("rulebook-extraction") ?? [];
+      expect(extractionModels.length).toBeGreaterThan(0);
+      expect(extractionModels.every((model) => model === "brief-extraction")).toBe(true);
+
+      const finalizeModels = modelsBySchema.get("rulebook-group-finalization") ?? [];
+      expect(finalizeModels.length).toBeGreaterThan(0);
+      expect(finalizeModels.every((model) => model === "fallback-finalize")).toBe(true);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  test("extractionModel/finalizeModel are undefined end to end when neither the brief nor constructor options set them", async () => {
+    const root = await mkdtemp(join(tmpdir(), "shadow-rulebook-agent-test-"));
+    try {
+      const docPath = join(root, "loan.md");
+      await writeFile(docPath, FIXTURE_TEXT, "utf8");
+
+      const rulebookStore = new FileSystemRulebookStore(root);
+      const evidenceStore = new FileSystemEvidenceStore(rulebookStore);
+
+      const modelsBySchema = new Map<string, Array<string | undefined>>();
+      const structuredGeneration = new FakeStructuredGenerationPort((request) => {
+        const schemaName = request.schemaName ?? "";
+        modelsBySchema.set(schemaName, [...(modelsBySchema.get(schemaName) ?? []), request.model]);
+        if (schemaName === "rulebook-taxonomy") return taxonomyFixture();
+        if (schemaName === "rulebook-extraction") return extractionFixture();
+        if (schemaName === "rulebook-group-finalization") return { assignments: [] };
+        throw new Error(`unexpected schemaName in test fixture: ${schemaName}`);
+      });
+
+      // No constructor options passed at all — the default parameter must
+      // reproduce today's behavior: no model override anywhere.
+      const agent = new RulebookToolAgent({
+        rulebookStore,
+        evidenceStore,
+        structuredGeneration,
+        checkWorthinessClassifier: alwaysNarrativeClassifier,
+        entailmentRelevanceJudge: alwaysSupportedJudge([]),
+        claimRestater: scriptedClaimRestater(() => {
+          throw new Error("restater should not be called on the happy path");
+        }),
+      });
+
+      const brief: RulebookBrief = { slug: "loan-rules-no-model", title: "Loan Rules", docPath };
+      await collect(agent.create(brief));
+
+      const extractionModels = modelsBySchema.get("rulebook-extraction") ?? [];
+      expect(extractionModels.length).toBeGreaterThan(0);
+      expect(extractionModels.every((model) => model === undefined)).toBe(true);
+
+      const finalizeModels = modelsBySchema.get("rulebook-group-finalization") ?? [];
+      expect(finalizeModels.length).toBeGreaterThan(0);
+      expect(finalizeModels.every((model) => model === undefined)).toBe(true);
     } finally {
       await rm(root, { recursive: true, force: true });
     }

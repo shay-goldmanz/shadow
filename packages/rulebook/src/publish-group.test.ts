@@ -56,6 +56,7 @@ describe("publishGroup — happy path", () => {
         },
         rulebookSlug,
         toChapterSlug("layout"),
+        new Set(),
       );
 
       expect(result.verdict.passed).toBe(true);
@@ -103,6 +104,7 @@ describe("publishGroup — unsupported claims fail the audit and are not publish
         },
         rulebookSlug,
         toChapterSlug("layout"),
+        new Set(),
       );
 
       expect(result.verdict.passed).toBe(false);
@@ -156,6 +158,7 @@ describe("publishGroup — conservative restatement (D9/D21)", () => {
         },
         rulebookSlug,
         toChapterSlug("layout"),
+        new Set(),
       );
 
       expect(result.repairs).toHaveLength(1);
@@ -203,7 +206,8 @@ describe("publishGroup — a content-derived label reappearing after retirement 
         { rulebookStore, evidenceStore },
         { rulebookSlug, sourceId: source.id, group: group(), rules: [ruleA, ruleB] },
       );
-      const first = await publishGroup(deps, rulebookSlug, groupSlug);
+      const retiredBeforeFirst = await evidenceStore.getRetiredLabels(rulebookSlug, groupSlug);
+      const first = await publishGroup(deps, rulebookSlug, groupSlug, retiredBeforeFirst);
       expect(first.passed).toBe(true);
 
       // Run 2: a doc edit (or finalization nondeterminism) drops ruleA from
@@ -215,7 +219,7 @@ describe("publishGroup — a content-derived label reappearing after retirement 
       const retiredAfterRun2 = await evidenceStore.getRetiredLabels(rulebookSlug, groupSlug);
       expect(retiredAfterRun2.has(ruleA.label)).toBe(true);
 
-      const second = await publishGroup(deps, rulebookSlug, groupSlug);
+      const second = await publishGroup(deps, rulebookSlug, groupSlug, retiredAfterRun2);
       expect(second.passed).toBe(true);
 
       // Run 3: ruleA's identical content re-derives the same label —
@@ -228,7 +232,7 @@ describe("publishGroup — a content-derived label reappearing after retirement 
       const retiredAfterRun3 = await evidenceStore.getRetiredLabels(rulebookSlug, groupSlug);
       expect(retiredAfterRun3.has(ruleA.label)).toBe(true); // still never forgotten
 
-      const third = await publishGroup(deps, rulebookSlug, groupSlug);
+      const third = await publishGroup(deps, rulebookSlug, groupSlug, retiredAfterRun3);
 
       const reusedLabelIssues = third.outcomes
         .flatMap((outcome) => outcome.issues)

@@ -90,11 +90,9 @@ async function runAudit(
   sidecar: ClaimSidecar,
   groupSubject: string,
   whenToUse: string | undefined,
+  rawRetiredLabels: ReadonlySet<string>,
 ) {
-  const [lookup, rawRetiredLabels] = await Promise.all([
-    deps.evidenceStore.loadLookupFor(rulebookSlug, sidecar),
-    deps.evidenceStore.getRetiredLabels(rulebookSlug, group.slug),
-  ]);
+  const lookup = await deps.evidenceStore.loadLookupFor(rulebookSlug, sidecar);
   const retiredLabels = subtractCurrentLabels(rawRetiredLabels, sidecar);
   return runFullAudit({
     chapterBody: group.body,
@@ -136,12 +134,21 @@ function applyRepairs(
  * verification. See module doc for the two deliberate differences from
  * `publishChapter`: no reindex, no C4.
  *
+ * `retiredLabels` is this group's slice of `EvidenceStore.getRetiredLabels`'s
+ * history — the caller (`RulebookToolAgent`) reads the ledger once for the
+ * whole run and passes each group its own labels, rather than every group's
+ * publish re-reading the full ledger itself. That also keeps `publishGroup`
+ * free of any whole-ledger read, which matters once groups publish
+ * concurrently: per-group reads/writes stay independent, only the (already
+ * atomic, append-only) ledger append is shared.
+ *
  * @throws {GroupHasNoClaimsError} if `groupSlug` has never been assembled.
  */
 export async function publishGroup(
   deps: PublishGroupDeps,
   rulebookSlug: VolumeSlug,
   groupSlug: ChapterSlug,
+  retiredLabels: ReadonlySet<string>,
 ): Promise<PublishGroupResult> {
   const [groupDoc, sidecar] = await Promise.all([
     deps.rulebookStore.getGroup(rulebookSlug, groupSlug),
@@ -154,7 +161,7 @@ export async function publishGroup(
   const groupSubject = groupDoc.title;
   const whenToUse = coerceWhenToUse(groupDoc.frontmatter);
 
-  let result = await runAudit(deps, rulebookSlug, groupDoc, sidecar, groupSubject, whenToUse);
+  let result = await runAudit(deps, rulebookSlug, groupDoc, sidecar, groupSubject, whenToUse, retiredLabels);
   const repairs: RepairDecision[] = [];
   let currentGroup = groupDoc;
 
@@ -185,7 +192,15 @@ export async function publishGroup(
     }
     await deps.evidenceStore.putClaims(rulebookSlug, applied.sidecar);
 
-    result = await runAudit(deps, rulebookSlug, currentGroup, applied.sidecar, groupSubject, whenToUse);
+    result = await runAudit(
+      deps,
+      rulebookSlug,
+      currentGroup,
+      applied.sidecar,
+      groupSubject,
+      whenToUse,
+      retiredLabels,
+    );
   }
 
   await deps.evidenceStore.putClaims(rulebookSlug, result.sidecar);

@@ -6,12 +6,15 @@
  * the call and memoizing its result.
  *
  * Memoized against `RulebookStore`'s extraction cache, keyed off the
- * chunk's content hash *and* the group menu offered — a taxonomy replan
- * changes the menu, which must invalidate every chunk's cache, not just
- * the plan's. `PROMPT_VERSION` gives a manual escape hatch: bump it when
- * this module's prompt/instructions change meaningfully, and every chunk's
- * cache invalidates on the next run even if neither the chunk nor the menu
- * changed.
+ * chunk's content hash, the group menu offered, *and* the effective model
+ * (`args.model ?? "default"`) — a taxonomy replan changes the menu, which
+ * must invalidate every chunk's cache, not just the plan's, and a
+ * different model can produce different output for byte-identical input,
+ * which must invalidate the cache the same way (see `port.ts`'s
+ * `RulebookBrief.extractionModel`). `PROMPT_VERSION` gives a manual escape
+ * hatch: bump it when this module's prompt/instructions change
+ * meaningfully, and every chunk's cache invalidates on the next run even
+ * if neither the chunk, the menu, nor the model changed.
  */
 
 import type { RulebookStore, VolumeSlug } from "@shadow/core";
@@ -36,8 +39,8 @@ function groupMenuText(groups: readonly GroupMenuEntry[]): string {
   return groups.map((group) => `- ${group.slug}: ${group.when_to_use}`).join("\n");
 }
 
-function extractionCacheKey(promptVersion: string, contentHash: string, menuHash: string): string {
-  return `chunk-${sha256Hex(`${promptVersion}${contentHash}${menuHash}`).slice(0, 24)}`;
+function extractionCacheKey(promptVersion: string, contentHash: string, menuHash: string, modelKey: string): string {
+  return `chunk-${sha256Hex(`${promptVersion}${contentHash}${menuHash}${modelKey}`).slice(0, 24)}`;
 }
 
 export interface ExtractChunkDeps {
@@ -50,6 +53,8 @@ export interface ExtractChunkArgs {
   readonly chunk: DocumentChunk;
   /** The taxonomy's groups (slug + when_to_use is all this call needs) — the menu the model proposes a group from. */
   readonly groups: readonly GroupMenuEntry[];
+  /** Forwarded as `StructuredGenerationRequest.model`; undefined leaves the adapter's own default in place (see `port.ts`'s `RulebookBrief.extractionModel`). Folded into the cache key. */
+  readonly model?: string;
 }
 
 export interface ExtractChunkResult {
@@ -73,7 +78,8 @@ export async function extractChunk(
   args: ExtractChunkArgs,
 ): Promise<ExtractChunkResult> {
   const menuHash = sha256Hex(groupMenuText(args.groups));
-  const key = extractionCacheKey(PROMPT_VERSION, args.chunk.contentHash, menuHash);
+  const modelKey = args.model ?? "default";
+  const key = extractionCacheKey(PROMPT_VERSION, args.chunk.contentHash, menuHash, modelKey);
 
   const rawCached = await deps.rulebookStore.readExtractionCache<unknown>(args.rulebookSlug, key);
   if (rawCached) {
@@ -107,6 +113,7 @@ export async function extractChunk(
         prompt,
         system,
         schemaName: "rulebook-extraction",
+        model: args.model,
       });
       object = result.object;
       usage = result.usage;
