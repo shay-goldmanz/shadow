@@ -76,3 +76,51 @@ export class LedgerCorruptError extends ShadowEvidenceError {
     super(`Ledger corrupt at line ${lineNumber}: ${reason}`);
   }
 }
+
+/**
+ * A span-binding request cited a `sourceId` that does not resolve in this
+ * volume's evidence ledger — a caller cannot bind evidence to a source it
+ * (or the operator) never actually produced. Originally `@shadow/agent`'s
+ * error (evidence-binding, D19), moved here alongside `buildSpanFromQuote`
+ * (`span-binding.ts`) when the span builder was lifted out of `agent` so
+ * every caller of the builder — not just Shadow's own turn loop — gets the
+ * same typed error. `@shadow/agent` re-exports this from its own errors
+ * module so existing callers there are unaffected.
+ */
+export class UnknownSourceError extends ShadowEvidenceError {
+  override readonly name = "UnknownSourceError";
+
+  constructor(
+    public readonly label: string,
+    public readonly sourceId: string,
+    cause?: unknown,
+  ) {
+    super(`Claim "${label}" cites source ${JSON.stringify(sourceId)}, which does not exist`, {
+      cause,
+    });
+  }
+}
+
+/**
+ * A span-binding request's `quote` is not an exact substring of the cited
+ * source's current snapshot text. Bind-before-write (D19, the
+ * writing-volumes skill's §4): a caller must copy verbatim from what was
+ * actually retrieved, transcribed, or read, never paraphrase and hope. See
+ * `UnknownSourceError`'s doc for why this now lives here rather than in
+ * `@shadow/agent`.
+ */
+export class UnresolvedEvidenceQuoteError extends ShadowEvidenceError {
+  override readonly name = "UnresolvedEvidenceQuoteError";
+
+  constructor(
+    public readonly label: string,
+    public readonly sourceId: string,
+    public readonly quote: string,
+  ) {
+    super(
+      `Claim "${label}"'s quote does not appear verbatim in source ${JSON.stringify(
+        sourceId,
+      )}'s snapshot: ${JSON.stringify(quote)}`,
+    );
+  }
+}

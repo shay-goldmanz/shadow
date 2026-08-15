@@ -17,6 +17,7 @@ import {
   expectRejection,
   makeClaim,
   makeEvidenceSpan,
+  makeFileWitness,
   makeRetrievalWitness,
   makeSelector,
   makeSidecar,
@@ -70,6 +71,28 @@ describe("FileSystemEvidenceStore", () => {
       expect(source.url).toBe("session:sess_abc");
       const roundTripped = await store.getSource(volume, source.id);
       expect(roundTripped).toEqual(source);
+    } finally {
+      await cleanup();
+    }
+  });
+
+  test("putSourceFromFile derives a source record with transport 'file'", async () => {
+    const { store, volume, cleanup } = await makeHarness();
+    try {
+      const source = await store.putSourceFromFile(
+        volume,
+        makeFileWitness({ path: "/tmp/rnb_loan.pdf" }),
+        makeSourceMetadata({ agent: "@shadow/rulebook/ingest" }),
+      );
+      expect(source.retrieval.transport).toBe("file");
+      expect(source.url).toBe("file:///tmp/rnb_loan.pdf");
+      expect(source.retrieval.httpStatus).toBeNull();
+      expect(source.retrieval.contentType).toBeNull();
+      const roundTripped = await store.getSource(volume, source.id);
+      expect(roundTripped).toEqual(source);
+      expect(await store.getSnapshotText(volume, source.snapshot.normalizedTextSha256)).toBe(
+        "Every measurement in the sidebar is a multiple of four.",
+      );
     } finally {
       await cleanup();
     }

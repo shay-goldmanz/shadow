@@ -129,7 +129,7 @@ export interface PutChapterInput {
 /** How a resolved evidence span relates to its pinned snapshot. Orphan is a state, not an error (D16, D22). */
 export type AnchorStatus = "anchored" | "anchored-fuzzy" | "orphaned";
 
-export type RetrievalTransport = "live" | "fixture" | "session";
+export type RetrievalTransport = "live" | "fixture" | "session" | "file";
 export type AuthorityTier = "primary" | "secondary" | "community" | "unknown";
 export type Volatility = "never" | "slow-changing" | "fast-changing" | "unknown";
 

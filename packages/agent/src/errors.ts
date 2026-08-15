@@ -8,6 +8,16 @@
  * `@shadow/research`, and `@shadow/evidence`.
  */
 
+/**
+ * `UnknownSourceError` and `UnresolvedEvidenceQuoteError` used to be defined
+ * here, but moved to `@shadow/evidence`'s `errors.ts` alongside
+ * `buildSpanFromQuote` (`span-binding.ts`) when the span builder was lifted
+ * out of this package (Rule Book Creator) — the errors belong with
+ * the code that throws them. Re-exported here so existing callers/tests
+ * importing them from `@shadow/agent`'s errors module are unaffected.
+ */
+export { UnknownSourceError, UnresolvedEvidenceQuoteError } from "@shadow/evidence";
+
 /** Base class for every error this package throws. */
 export abstract class ShadowAgentError extends Error {
   abstract override readonly name: string;
@@ -70,43 +80,6 @@ export class ClaimMissingRequiredFieldError extends ShadowAgentError {
     public readonly field: "evidence" | "supports",
   ) {
     super(`Claim "${label}" (${kind}) has no ${field}[] — required before it can be drafted`);
-  }
-}
-
-/** A claim directive cited a `sourceId` that does not resolve in this volume's evidence ledger — Shadow cannot bind evidence to a source it (or the operator) never actually produced. */
-export class UnknownSourceError extends ShadowAgentError {
-  override readonly name = "UnknownSourceError";
-
-  constructor(
-    public readonly label: string,
-    public readonly sourceId: string,
-    cause?: unknown,
-  ) {
-    super(`Claim "${label}" cites source ${JSON.stringify(sourceId)}, which does not exist`, {
-      cause,
-    });
-  }
-}
-
-/**
- * A claim directive's `quote` is not an exact substring of the cited
- * source's current snapshot text. Bind-before-write (D19, the
- * shadow-write-volumes skill's §4): Shadow must copy verbatim from what research
- * or the operator transcript actually returned, never paraphrase and hope.
- */
-export class UnresolvedEvidenceQuoteError extends ShadowAgentError {
-  override readonly name = "UnresolvedEvidenceQuoteError";
-
-  constructor(
-    public readonly label: string,
-    public readonly sourceId: string,
-    public readonly quote: string,
-  ) {
-    super(
-      `Claim "${label}"'s quote does not appear verbatim in source ${JSON.stringify(
-        sourceId,
-      )}'s snapshot: ${JSON.stringify(quote)}`,
-    );
   }
 }
 

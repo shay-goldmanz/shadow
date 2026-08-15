@@ -45,7 +45,7 @@ function source(overrides: {
   readonly title: string;
   readonly author: string | null;
   readonly publishedAt: string | null;
-  readonly transport: "live" | "fixture" | "session";
+  readonly transport: "live" | "fixture" | "session" | "file";
 }): SourceRecord {
   return {
     schemaVersion: "1.0",

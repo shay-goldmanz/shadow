@@ -206,11 +206,21 @@ export { buildEvidenceLookup, FileSystemEvidenceStore } from "./store.ts";
 
 export type {
   DerivedSource,
+  FileWitness,
   RetrievalWitness,
   SessionTranscriptWitness,
   SourceMetadata,
 } from "./witness.ts";
-export { deriveSourceFromRetrieval, deriveSourceFromTranscript } from "./witness.ts";
+export {
+  deriveSourceFromFile,
+  deriveSourceFromRetrieval,
+  deriveSourceFromTranscript,
+} from "./witness.ts";
+
+// ---- span binding: the only place a `TextQuoteSelector` is built from a raw quote --
+
+export type { SpanFromQuoteInput } from "./span-binding.ts";
+export { buildSpanFromQuote } from "./span-binding.ts";
 
 // ---- Tier 2 ports (see ports.ts; implementations in checks/tier2-adapters.ts) --
 
@@ -246,4 +256,6 @@ export {
   ShadowEvidenceError,
   SnapshotNotFoundError,
   SourceNotFoundError,
+  UnknownSourceError,
+  UnresolvedEvidenceQuoteError,
 } from "./errors.ts";

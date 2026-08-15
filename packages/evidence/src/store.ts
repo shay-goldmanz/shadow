@@ -14,11 +14,11 @@
  * (`layout.ts`) — never by joining strings inline here.
  *
  * **Sources are witnessed, not minted (D23).** There is no `putSource`
- * accepting a hand-assembled `SourceRecord`. `putSourceFromRetrieval` and
- * `putSourceFromTranscript` are the only two ways to create one, and both
- * take a witness (`witness.ts`) describing what a real retrieval or a real
- * transcript capture actually produced — the record itself is derived, not
- * supplied.
+ * accepting a hand-assembled `SourceRecord`. `putSourceFromRetrieval`,
+ * `putSourceFromTranscript`, and `putSourceFromFile` are the only ways to
+ * create one, and each takes a witness (`witness.ts`) describing what a real
+ * retrieval, transcript capture, or file read actually produced — the
+ * record itself is derived, not supplied.
  */
 
 import {
@@ -35,8 +35,10 @@ import { newSourceId, type SourceId, toSourceId } from "./ids.ts";
 import { EvidenceLayout } from "./layout.ts";
 import type { ClaimSidecar, EvidenceManifest, LedgerEvent, SourceRecord } from "./types.ts";
 import {
+  deriveSourceFromFile,
   deriveSourceFromRetrieval,
   deriveSourceFromTranscript,
+  type FileWitness,
   type RetrievalWitness,
   type SessionTranscriptWitness,
   type SourceMetadata,
@@ -83,6 +85,17 @@ export interface EvidenceStore {
   putSourceFromTranscript(
     volume: VolumeSlug,
     witness: SessionTranscriptWitness,
+    metadata: SourceMetadata,
+  ): Promise<SourceRecord>;
+
+  /**
+   * Derive and persist a source record from a local-document witness — the
+   * *third* legitimate origin of a source record (Rule Book Creator).
+   * The resulting record's `retrieval.transport` is always `"file"`.
+   */
+  putSourceFromFile(
+    volume: VolumeSlug,
+    witness: FileWitness,
     metadata: SourceMetadata,
   ): Promise<SourceRecord>;
 
@@ -172,6 +185,15 @@ export class FileSystemEvidenceStore implements EvidenceStore {
     metadata: SourceMetadata,
   ): Promise<SourceRecord> {
     const { record, normalizedText } = deriveSourceFromTranscript(newSourceId(), witness, metadata);
+    return this.writeDerivedSource(volume, record, normalizedText);
+  }
+
+  async putSourceFromFile(
+    volume: VolumeSlug,
+    witness: FileWitness,
+    metadata: SourceMetadata,
+  ): Promise<SourceRecord> {
+    const { record, normalizedText } = deriveSourceFromFile(newSourceId(), witness, metadata);
     return this.writeDerivedSource(volume, record, normalizedText);
   }
 

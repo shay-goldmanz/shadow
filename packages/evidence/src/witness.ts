@@ -1,6 +1,7 @@
 /**
- * Witnesses: what a real retrieval or a real session-transcript capture
- * actually produced (D23, `docs/EVIDENCE.md` amendment 6).
+ * Witnesses: what a real retrieval, a real session-transcript capture, or a
+ * real local-document read actually produced (D23, `docs/EVIDENCE.md`
+ * amendment 6; the file case added for the Rule Book Creator).
  *
  * `ARCHITECTURE.md` promises fabricated citations are "structurally
  * impossible rather than merely discouraged", and D9 says research
@@ -12,12 +13,12 @@
  * verify *self-consistency*, not *provenance*.
  *
  * Origination now takes a **witness** instead: a structural description of
- * what a genuine retrieval or a genuine transcript capture produces.
- * `EvidenceStore.putSourceFromRetrieval`/`putSourceFromTranscript` derive
- * the `SourceRecord` from one of these plus caller-supplied editorial
- * metadata (`SourceMetadata` below) that no witness could ever contain —
- * there is no public path left that accepts a hand-assembled
- * `SourceRecord`.
+ * what a genuine retrieval, transcript capture, or file read produces.
+ * `EvidenceStore.putSourceFromRetrieval`/`putSourceFromTranscript`/
+ * `putSourceFromFile` derive the `SourceRecord` from one of these plus
+ * caller-supplied editorial metadata (`SourceMetadata` below) that no
+ * witness could ever contain — there is no public path left that accepts a
+ * hand-assembled `SourceRecord`.
  */
 
 import { type Sha256Digest, sha256Of } from "./digest.ts";
@@ -63,6 +64,26 @@ export interface SessionTranscriptWitness {
   readonly sessionId: string;
   readonly transcriptText: string;
   readonly capturedAt: string;
+}
+
+/**
+ * What a real local-document read actually produced — the *third*
+ * legitimate origin of a source record (Rule Book Creator). A rule
+ * book's rules are grounded against a snapshotted copy of the operator's own
+ * document, not a live volume chapter or a retrieved web page.
+ * `path`/`bytes` are exactly what reading the file produced; `text` is the
+ * caller's already-extracted plain text (readability-style extraction for a
+ * PDF, the raw file content for Markdown) — this package does no extraction
+ * of its own, matching how `RetrievalWitness.extractedText` is owned
+ * upstream. The resulting record's `retrieval.transport` is always `"file"`.
+ */
+export interface FileWitness {
+  readonly path: string;
+  /** Raw file bytes, exactly as read. `snapshot.payloadSha256` hashes this. */
+  readonly bytes: Uint8Array;
+  /** Already-extracted plain text of the document. `snapshot.normalizedTextSha256` is derived from this via `normalizeNfcWs`. */
+  readonly text: string;
+  readonly readAt: Date;
 }
 
 /**
@@ -147,6 +168,45 @@ export function deriveSourceFromTranscript(
       retrievedAt: witness.capturedAt,
       agent: metadata.agent,
       transport: "session",
+      query: metadata.query ?? null,
+      httpStatus: null,
+      contentType: null,
+    },
+    snapshot: {
+      path: snapshotRelativePath(normalizedTextSha256),
+      payloadSha256,
+      normalizedTextSha256,
+      normalization: NORMALIZATION_ALGORITHM,
+      chars: normalizedText.length,
+    },
+    authority: metadata.authority,
+    volatility: metadata.volatility,
+  };
+  return { record, normalizedText };
+}
+
+/** Pure derivation: file witness + metadata + a minted id -> a `SourceRecord`, always `transport: "file"`. No I/O. */
+export function deriveSourceFromFile(
+  id: SourceRecord["id"],
+  witness: FileWitness,
+  metadata: SourceMetadata,
+): DerivedSource {
+  const normalizedText = normalizeNfcWs(witness.text);
+  const payloadSha256 = sha256Of(witness.bytes);
+  const normalizedTextSha256 = sha256Of(normalizedText);
+  const url = `file://${witness.path}`;
+  const record: SourceRecord = {
+    schemaVersion: "1.0",
+    id,
+    url,
+    finalUrl: url,
+    title: metadata.title,
+    author: metadata.author ?? null,
+    publishedAt: metadata.publishedAt ?? null,
+    retrieval: {
+      retrievedAt: witness.readAt.toISOString(),
+      agent: metadata.agent,
+      transport: "file",
       query: metadata.query ?? null,
       httpStatus: null,
       contentType: null,

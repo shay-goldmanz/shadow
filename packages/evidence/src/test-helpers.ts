@@ -16,7 +16,12 @@ import type {
   TextQuoteSelector,
   Verification,
 } from "./types.ts";
-import type { RetrievalWitness, SessionTranscriptWitness, SourceMetadata } from "./witness.ts";
+import type {
+  FileWitness,
+  RetrievalWitness,
+  SessionTranscriptWitness,
+  SourceMetadata,
+} from "./witness.ts";
 
 let counter = 0;
 /** Deterministic, monotonically increasing timestamp so minted ids sort predictably within a test. */
@@ -133,7 +138,18 @@ export function makeSessionTranscriptWitness(
   };
 }
 
-/** Fixture editorial metadata to pair with a witness when calling `putSourceFromRetrieval`/`putSourceFromTranscript`. */
+/** A fixture `FileWitness` (Rule Book Creator) — what a real local-document read would have produced. */
+export function makeFileWitness(overrides: Partial<FileWitness> = {}): FileWitness {
+  return {
+    path: "/tmp/fixture-rulebook.md",
+    bytes: new TextEncoder().encode("Every measurement in the sidebar is a multiple of four."),
+    text: "Every measurement in the sidebar is a multiple of four.",
+    readAt: new Date(nextTime()),
+    ...overrides,
+  };
+}
+
+/** Fixture editorial metadata to pair with a witness when calling `putSourceFromRetrieval`/`putSourceFromTranscript`/`putSourceFromFile`. */
 export function makeSourceMetadata(overrides: Partial<SourceMetadata> = {}): SourceMetadata {
   return {
     title: "Example Article",

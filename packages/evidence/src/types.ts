@@ -29,8 +29,8 @@ import type { NORMALIZATION_ALGORITHM } from "./normalize.ts";
 
 // ---- source record ---------------------------------------------------------
 
-/** How a source's content was obtained. `session` is the transcript case (D19/D9's second legitimate origin). */
-export type RetrievalTransport = "live" | "fixture" | "session";
+/** How a source's content was obtained. `session` is the transcript case (D19/D9's second legitimate origin); `file` is a local document witness (Rule Book Creator). */
+export type RetrievalTransport = "live" | "fixture" | "session" | "file";
 
 /** Relationship of a source to its subject — advisory, never a credibility gate (`docs/EVIDENCE.md`). */
 export type AuthorityTier = "primary" | "secondary" | "community" | "unknown";
