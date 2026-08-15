@@ -595,6 +595,160 @@ describe("createBedrockStructuredGenerationPort", () => {
     });
   });
 
+  describe("empty-object schema miss (a live finding: the model answered with a literal {})", () => {
+    // Two required top-level fields so the targeted hint's "name every
+    // required field" behavior actually has more than one field to name.
+    const multiFieldSchema = z.object({
+      groups: z.array(z.string()),
+      count: z.number(),
+    });
+
+    function makeEmptyObjectMissError(): NoObjectGeneratedError {
+      return new NoObjectGeneratedError({
+        message: "No object generated: response did not match schema.",
+        cause: new TypeValidationError({
+          value: {},
+          cause: [
+            { message: "Required", path: ["groups"] },
+            { message: "Required", path: ["count"] },
+          ],
+        }),
+        text: "{}",
+        response: { id: "resp-1", timestamp: new Date(0), modelId: "test-model" },
+        usage: {
+          inputTokens: 10,
+          outputTokens: 2,
+          totalTokens: 12,
+          inputTokenDetails: { noCacheTokens: 10, cacheReadTokens: 0, cacheWriteTokens: 0 },
+          outputTokenDetails: { textTokens: 2, reasoningTokens: 0 },
+        },
+        finishReason: "stop",
+      });
+    }
+
+    test("a literal {} response gets a targeted hint naming the schema's required fields, then succeeds on retry", async () => {
+      let callCount = 0;
+      const capturedSystems: (string | undefined)[] = [];
+      const { deps } = makeFakeProvider({
+        generateObject: (async (params: Record<string, unknown>) => {
+          callCount += 1;
+          capturedSystems.push(params.system as string | undefined);
+          if (callCount < 2) {
+            throw makeEmptyObjectMissError();
+          }
+          return {
+            object: { groups: ["ok"], count: 1 },
+            usage: { inputTokens: 5, outputTokens: 7 },
+          };
+        }) as never,
+      });
+      const port = createBedrockStructuredGenerationPort({}, deps);
+
+      const result = await port.generate({
+        schema: multiFieldSchema,
+        prompt: "hi",
+        system: "base system prompt",
+      });
+
+      expect(callCount).toBe(2);
+      expect(result.object).toEqual({ groups: ["ok"], count: 1 });
+      expect(capturedSystems[1]).toContain("base system prompt");
+      expect(capturedSystems[1]).toContain("empty JSON object");
+      expect(capturedSystems[1]).toContain("groups");
+      expect(capturedSystems[1]).toContain("count");
+      // The targeted hint replaces the generic "failed schema validation" framing for this shape.
+      expect(capturedSystems[1]).not.toContain("Your previous response failed schema validation");
+    });
+
+    test("two consecutive {} misses exhaust retries and surface the enriched NoObjectGeneratedError", async () => {
+      let callCount = 0;
+      const { deps } = makeFakeProvider({
+        generateObject: (async () => {
+          callCount += 1;
+          throw makeEmptyObjectMissError();
+        }) as never,
+      });
+      const port = createBedrockStructuredGenerationPort({ schemaRetries: 1 }, deps);
+
+      const error = await expectRejection(
+        port.generate({ schema: multiFieldSchema, prompt: "hi" }),
+        StructuredGenerationError,
+      );
+
+      expect(callCount).toBe(2); // 1 initial + 1 retry, both {}
+      expect(error.message).toContain("No object generated");
+      expect(error.cause).toBeInstanceOf(NoObjectGeneratedError);
+    });
+
+    test("an object with some (but not all) required fields present is not treated as an empty-object miss — gets the generic hint", async () => {
+      const partialMissError = new NoObjectGeneratedError({
+        message: "No object generated: response did not match schema.",
+        cause: new TypeValidationError({ value: { groups: ["ok"] }, cause: [{ message: "Required", path: ["count"] }] }),
+        text: JSON.stringify({ groups: ["ok"] }),
+        response: { id: "resp-2", timestamp: new Date(0), modelId: "test-model" },
+        usage: {
+          inputTokens: 10,
+          outputTokens: 2,
+          totalTokens: 12,
+          inputTokenDetails: { noCacheTokens: 10, cacheReadTokens: 0, cacheWriteTokens: 0 },
+          outputTokenDetails: { textTokens: 2, reasoningTokens: 0 },
+        },
+        finishReason: "stop",
+      });
+      const capturedSystems: (string | undefined)[] = [];
+      const { deps } = makeFakeProvider({
+        generateObject: (async (params: Record<string, unknown>) => {
+          capturedSystems.push(params.system as string | undefined);
+          throw partialMissError;
+        }) as never,
+      });
+      const port = createBedrockStructuredGenerationPort({ schemaRetries: 1 }, deps);
+
+      await expectRejection(
+        port.generate({ schema: multiFieldSchema, prompt: "hi" }),
+        StructuredGenerationError,
+      );
+
+      expect(capturedSystems[1]).toContain("Your previous response failed schema validation");
+      expect(capturedSystems[1]).not.toContain("empty JSON object");
+    });
+
+    test("a schema with no required top-level fields can never trigger the empty-object hint (an all-optional {} would have validated, never reaching retry)", async () => {
+      const allOptionalSchema = z.object({ note: z.string().optional() });
+      const capturedSystems: (string | undefined)[] = [];
+      const { deps } = makeFakeProvider({
+        generateObject: (async (params: Record<string, unknown>) => {
+          capturedSystems.push(params.system as string | undefined);
+          // Not actually {} — {} would have passed safeParse for this schema
+          // and never produced a miss at all. Exercising an unrelated miss
+          // (unparseable text) just to confirm the generic hint still runs.
+          throw new NoObjectGeneratedError({
+            message: "No object generated: could not parse the response.",
+            cause: new TypeValidationError({ value: undefined, cause: [] }),
+            text: "not json {{{",
+            response: { id: "resp-3", timestamp: new Date(0), modelId: "test-model" },
+            usage: {
+              inputTokens: 1,
+              outputTokens: 1,
+              totalTokens: 2,
+              inputTokenDetails: { noCacheTokens: 1, cacheReadTokens: 0, cacheWriteTokens: 0 },
+              outputTokenDetails: { textTokens: 1, reasoningTokens: 0 },
+            },
+            finishReason: "stop",
+          });
+        }) as never,
+      });
+      const port = createBedrockStructuredGenerationPort({ schemaRetries: 1 }, deps);
+
+      await expectRejection(
+        port.generate({ schema: allOptionalSchema, prompt: "hi" }),
+        StructuredGenerationError,
+      );
+
+      expect(capturedSystems[1]).not.toContain("empty JSON object");
+    });
+  });
+
   describe("auth posture (D26): never reads ANTHROPIC_API_KEY, no subscription guardrail", () => {
     test("construct + generate via injected deps: the provider factory's config never carries ANTHROPIC_API_KEY", async () => {
       // Deliberately mismatched with the environment, mirroring

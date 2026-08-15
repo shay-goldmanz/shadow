@@ -19,7 +19,7 @@ import type { AmazonBedrockProviderSettings } from "@ai-sdk/amazon-bedrock";
 import { createAmazonBedrock } from "@ai-sdk/amazon-bedrock";
 import type { LanguageModelUsage } from "ai";
 import { generateObject, NoObjectGeneratedError, TypeValidationError } from "ai";
-import type { ZodType } from "zod";
+import { type ZodType, ZodObject } from "zod";
 import { StructuredGenerationError } from "../errors.ts";
 import type {
   StructuredGenerationPort,
@@ -292,6 +292,56 @@ function attemptLocalRepair<Output>(schema: ZodType<Output>, text: string | unde
 }
 
 /**
+ * Top-level required field names of the request's own schema, when it's a
+ * `z.object(...)` (including a `.refine(...)`-ed one — on zod 4.4.3 that
+ * still returns the same `ZodObject`, so a refined schema takes this same
+ * targeted path, not the generic one) — `undefined` for anything else (a
+ * union, an array, etc.), matching `extractValidationIssues`'s house style
+ * of yielding `undefined` on an unrecognized shape rather than guessing. A
+ * field counts as required when it doesn't accept `undefined`
+ * (`.isOptional()` is also `true` for a field with `.default(...)`, so those
+ * are correctly excluded too — the model never has to supply them).
+ */
+function requiredTopLevelKeys<Output>(schema: ZodType<Output>): string[] | undefined {
+  if (!(schema instanceof ZodObject)) return undefined;
+  return Object.entries(schema.shape)
+    .filter(([, fieldSchema]) => !fieldSchema.isOptional())
+    .map(([key]) => key);
+}
+
+/**
+ * Live evidence: a large multi-call run on Bedrock had the model answer a
+ * schema'd request with a literal `{}` — no fields at all. The
+ * double-encoding repair above can't touch it (there's no string value to
+ * un-stringify), and the generic hint below didn't recover it live, likely
+ * because "failed schema validation" reads as a data-shape problem rather
+ * than "you produced nothing." True only when the parsed response is a
+ * plain object missing every one of the schema's required top-level keys —
+ * exactly the `{}` shape, and its close cousin of some optional-only
+ * fields present but nothing required. Schemas with zero required top-level
+ * keys can never reach this: an all-optional-fields object would have
+ * satisfied `safeParse` and never produced a schema miss to retry in the
+ * first place, so this can't misfire on a legitimately-optional-everything
+ * schema.
+ */
+function isEmptyObjectMiss(requiredKeys: string[], text: string | undefined): boolean {
+  if (requiredKeys.length === 0 || text === undefined) return false;
+  const parsed = tryParseJson(text);
+  if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) return false;
+  return requiredKeys.every((key) => !(key in (parsed as Record<string, unknown>)));
+}
+
+/** Targeted corrective hint for {@link isEmptyObjectMiss} — names the exact fields the model omitted instead of the generic "failed validation" framing. */
+function emptyObjectHint(requiredKeys: string[]): string {
+  return [
+    "Your previous response was an empty JSON object with no fields at all.",
+    `The schema requires these top-level fields: ${requiredKeys.join(", ")}.`,
+    "Respond again with a single valid JSON object that includes every one of those fields, each holding its correct native JSON type — never omit a required field and never answer with {}.",
+    "Do not wrap the JSON in markdown code fences or add any other text.",
+  ].join("\n");
+}
+
+/**
  * Generic corrective system hint appended for a retry after a schema miss —
  * built from the failed attempt's own validation issues plus the two
  * concrete failure modes evidence has actually shown or flagged as
@@ -299,7 +349,7 @@ function attemptLocalRepair<Output>(schema: ZodType<Output>, text: string | unde
  * speculation): never taxonomy-specific, since every caller of this adapter
  * shares the same retry path.
  */
-function correctiveHint(error: NoObjectGeneratedError): string {
+function genericHint(error: NoObjectGeneratedError): string {
   const issues = extractValidationIssues(error.cause);
   const issueLines =
     issues && issues.length > 0
@@ -314,6 +364,15 @@ function correctiveHint(error: NoObjectGeneratedError): string {
       'string (e.g. a field expecting an array must contain the array literally, not a string like "[...]").',
     "Do not wrap the JSON in markdown code fences or add any other text.",
   ].join("\n");
+}
+
+/** Picks the catalogue entry matching the failed attempt's shape — the empty-object hint when it applies, the generic one otherwise. */
+function correctiveHint<Output>(error: NoObjectGeneratedError, schema: ZodType<Output>): string {
+  const requiredKeys = requiredTopLevelKeys(schema);
+  if (requiredKeys && isEmptyObjectMiss(requiredKeys, error.text)) {
+    return emptyObjectHint(requiredKeys);
+  }
+  return genericHint(error);
 }
 
 export function createBedrockStructuredGenerationPort(
@@ -399,7 +458,7 @@ export function createBedrockStructuredGenerationPort(
           console.warn(
             `[bedrock-structured-generation] schema miss on attempt ${attempt}/${maxAttempts} — retrying with a corrective hint.`,
           );
-          system = `${request.system ? `${request.system}\n\n` : ""}${correctiveHint(error)}`;
+          system = `${request.system ? `${request.system}\n\n` : ""}${correctiveHint(error, request.schema)}`;
         }
       }
 
