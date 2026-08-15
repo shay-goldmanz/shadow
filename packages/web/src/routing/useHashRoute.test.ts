@@ -29,12 +29,34 @@ describe("hash routing", () => {
     });
   });
 
+  test("parses a rulebooks list route", () => {
+    expect(parseHash("#/r")).toEqual({ name: "rulebooks" });
+  });
+
+  test("parses a rulebook route", () => {
+    expect(parseHash("#/r/loan-agreement-rules")).toEqual({
+      name: "rulebook",
+      slug: "loan-agreement-rules",
+    });
+  });
+
+  test("parses a rulebook-group route, decoding the slug", () => {
+    expect(parseHash("#/r/loan-agreement-rules/g/interest-and-fees")).toEqual({
+      name: "rulebook-group",
+      slug: "loan-agreement-rules",
+      group: "interest-and-fees",
+    });
+  });
+
   test("routePath is the inverse of parseHash", () => {
     const routes = [
       { name: "volumes" as const },
       { name: "volume" as const, slug: "a b" },
       { name: "chat" as const, slug: "a b" },
       { name: "chapter" as const, slug: "a b", chapter: "c/d" },
+      { name: "rulebooks" as const },
+      { name: "rulebook" as const, slug: "a b" },
+      { name: "rulebook-group" as const, slug: "a b", group: "c/d" },
     ];
     for (const route of routes) {
       expect(parseHash(routePath(route))).toEqual(route);

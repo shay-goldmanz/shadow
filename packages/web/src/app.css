@@ -66,6 +66,34 @@
   margin: 0 auto;
 }
 
+/* ---- primary nav ---------------------------------------------------------- */
+
+.app-shell__nav {
+  display: inline-flex;
+  gap: var(--space-1);
+  margin-right: auto;
+  margin-left: var(--space-6);
+}
+
+.app-shell__nav-link {
+  background: none;
+  border: none;
+  color: var(--text-muted);
+  cursor: pointer;
+  padding: var(--space-1) var(--space-2);
+  border-radius: var(--radius);
+  font-size: 0.9rem;
+}
+
+.app-shell__nav-link:hover {
+  color: var(--text);
+}
+
+.app-shell__nav-link[aria-current="page"] {
+  color: var(--accent);
+  font-weight: 600;
+}
+
 /* ---- theme toggle --------------------------------------------------------- */
 
 .theme-toggle {

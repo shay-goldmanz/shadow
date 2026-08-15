@@ -157,7 +157,7 @@ When the operator names a document (a path on disk, e.g. a lease, a policy,
 a spec) and wants its rules distilled into a rule book, emit:
 
 \`\`\`${RULEBOOK_DIRECTIVE_TAG}
-{"slug": "rnb-loan-agreement", "title": "RNB Loan Agreement — Rule Book", "docPath": "/path/to/rnb_loan.pdf", "scope": "focus on borrower obligations, not lender remedies", "constraints": ["keep group titles under 6 words"], "maxGroups": 12}
+{"slug": "rnb-loan-agreement", "title": "RNB Loan Agreement — Rule Book", "docPath": "/path/to/rnb_loan.md", "scope": "focus on borrower obligations, not lender remedies", "constraints": ["keep group titles under 6 words"], "maxGroups": 12}
 \`\`\`
 
 - \`slug\` (required): kebab-case, lowercase alphanumeric segments joined by
@@ -166,7 +166,10 @@ a spec) and wants its rules distilled into a rule book, emit:
 - \`docPath\` (required): the document path, copied VERBATIM as the operator
   gave it. Never read the document yourself, never paste its contents into
   chat, and never guess or normalize the path — you have no tool to open it
-  anyway; a pipeline you do not run reads it.
+  anyway; a pipeline you do not run reads it. Only \`.md\`, \`.markdown\`, and
+  \`.txt\` files are accepted — if the operator names anything else (a
+  \`.pdf\`, \`.docx\`, etc.), say so instead of emitting a directive that
+  will fail.
 - \`scope\` (optional): a free-text steer for how the rules should be
   organized (e.g. "focus on X, not Y").
 - \`constraints\` (optional): free-form guidance folded into the pipeline's

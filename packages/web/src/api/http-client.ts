@@ -21,6 +21,9 @@ import {
   type LintReport,
   type PutChapterAudit,
   type PutChapterInput,
+  type Rulebook,
+  type RulebookGroupSummary,
+  type RulebookSummary,
   type SourceRecord,
   type UpdateVolumeInput,
   type Volume,
@@ -112,6 +115,40 @@ export class HttpApiClient implements ShadowApiClient {
 
   async getLedger(slug: string): Promise<{ events: readonly LedgerEvent[] }> {
     return this.getJson(`/volumes/${encodeURIComponent(slug)}/evidence/ledger`);
+  }
+
+  async listRulebooks(): Promise<readonly RulebookSummary[]> {
+    const { rulebooks } = await this.getJson<{ rulebooks: RulebookSummary[] }>("/rulebooks");
+    return rulebooks;
+  }
+
+  async getRulebook(
+    slug: string,
+  ): Promise<{ rulebook: Rulebook; groups: readonly RulebookGroupSummary[] }> {
+    return this.getJson(`/rulebooks/${encodeURIComponent(slug)}`);
+  }
+
+  async getRulebookGroup(
+    slug: string,
+    group: string,
+  ): Promise<{ group: Chapter; claims?: ClaimSidecar; audit?: AuditRecord }> {
+    return this.getJson(
+      `/rulebooks/${encodeURIComponent(slug)}/groups/${encodeURIComponent(group)}`,
+    );
+  }
+
+  async getRulebookSource(slug: string, id: string): Promise<SourceRecord> {
+    return this.getJson(
+      `/rulebooks/${encodeURIComponent(slug)}/sources/${encodeURIComponent(id)}`,
+    );
+  }
+
+  async getRulebookSnapshot(slug: string, hash: string): Promise<string> {
+    const response = await fetch(
+      `${this.baseUrl}/rulebooks/${encodeURIComponent(slug)}/snapshot/${encodeURIComponent(hash)}`,
+    );
+    if (!response.ok) throw await toApiError(response);
+    return response.text();
   }
 
   async *chat(input: ChatInput): AsyncIterable<ChatStreamEvent> {

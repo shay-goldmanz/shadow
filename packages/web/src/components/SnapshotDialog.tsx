@@ -91,15 +91,24 @@ function computeExcerpt(text: string, selector: TextQuoteSelector): ExcerptResul
  * synthesized from, already in memory (`ChapterPage.tsx` builds this from
  * the chapter's own claim list, no fetch needed). A native `<dialog>` gives
  * focus trapping and Escape-to-close for free either way.
+ *
+ * `scope` picks which evidence store `slug` names: a volume's
+ * (`getSource`/`getSnapshot`) or a rule book's own
+ * (`getRulebookSource`/`getRulebookSnapshot`) — the two are separate
+ * `EvidenceStore` instances server-side (`handlers/evidence.ts`'s module
+ * doc), so a rule-book citation must hit its own routes rather than the
+ * volume ones.
  */
 export function SnapshotDialog({
   request,
-  volumeSlug,
+  slug,
+  scope,
   client,
   onClose,
 }: {
   readonly request: SnapshotRequest | undefined;
-  readonly volumeSlug: string;
+  readonly slug: string;
+  readonly scope: "volume" | "rulebook";
   readonly client: ShadowApiClient;
   readonly onClose: () => void;
 }) {
@@ -126,10 +135,14 @@ export function SnapshotDialog({
     }
     let cancelled = false;
     setState({ loading: true });
-    Promise.all([
-      client.getSource(volumeSlug, request.sourceId),
-      client.getSnapshot(volumeSlug, request.snapshotHash),
-    ])
+    Promise.all(
+      scope === "rulebook"
+        ? [
+            client.getRulebookSource(slug, request.sourceId),
+            client.getRulebookSnapshot(slug, request.snapshotHash),
+          ]
+        : [client.getSource(slug, request.sourceId), client.getSnapshot(slug, request.snapshotHash)],
+    )
       .then(([source, text]) => {
         if (!cancelled) setState({ loading: false, source, text });
       })
@@ -144,7 +157,7 @@ export function SnapshotDialog({
     return () => {
       cancelled = true;
     };
-  }, [request, volumeSlug, client]);
+  }, [request, slug, scope, client]);
 
   useEffect(() => {
     if (expanded) {

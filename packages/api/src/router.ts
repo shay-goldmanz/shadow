@@ -12,7 +12,13 @@ import { toErrorResponse } from "./error-mapping.ts";
 import { RouteNotFoundError } from "./errors.ts";
 import { deleteChapter, getChapter, putChapter } from "./handlers/chapters.ts";
 import { postChat } from "./handlers/chat.ts";
-import { getLedger, getSnapshot, getSource } from "./handlers/evidence.ts";
+import {
+  getLedger,
+  getRulebookSnapshot,
+  getRulebookSource,
+  getSnapshot,
+  getSource,
+} from "./handlers/evidence.ts";
 import { getIndex, reindex } from "./handlers/indexing.ts";
 import { getLint } from "./handlers/lint.ts";
 import { getRulebook, getRulebookGroup, listRulebooks } from "./handlers/rulebooks.ts";
@@ -98,6 +104,14 @@ export function buildRoutes(deps: ApiDeps) {
     },
     "/api/rulebooks/:slug/groups/:group": {
       GET: bind(deps, getRulebookGroup),
+      OPTIONS: () => corsPreflightResponse(),
+    },
+    "/api/rulebooks/:slug/sources/:id": {
+      GET: bind(deps, getRulebookSource),
+      OPTIONS: () => corsPreflightResponse(),
+    },
+    "/api/rulebooks/:slug/snapshot/:hash": {
+      GET: bind(deps, getRulebookSnapshot),
       OPTIONS: () => corsPreflightResponse(),
     },
   } as const;

@@ -21,6 +21,7 @@ import type {
   Finding,
   RepairDecision,
   ResearchBrief,
+  RulebookResult,
 } from "../api/types.ts";
 
 export type TranscriptItem =
@@ -88,6 +89,54 @@ export type TranscriptItem =
       readonly type: "error";
       readonly message: string;
       readonly code: string;
+    }
+  | { readonly id: string; readonly type: "rulebook.started"; readonly slug: string; readonly docPath: string }
+  | {
+      readonly id: string;
+      readonly type: "rulebook.planned";
+      readonly slug: string;
+      readonly chunkCount: number;
+      readonly groups: readonly string[];
+    }
+  | {
+      readonly id: string;
+      readonly type: "rulebook.progress";
+      readonly slug: string;
+      readonly completed: number;
+      readonly total: number;
+      readonly rulesSoFar: number;
+      /** Running tally across every `rulebook.chunk` event coalesced into this one row — each event only reports whether *that* chunk was cached/failed, not a cumulative count. */
+      readonly cachedCount: number;
+      readonly failedCount: number;
+    }
+  | {
+      readonly id: string;
+      readonly type: "rulebook.merged";
+      readonly slug: string;
+      readonly ruleCount: number;
+      readonly droppedQuotes: number;
+      readonly consolidated: number;
+    }
+  | {
+      readonly id: string;
+      readonly type: "rulebook.group.audited";
+      readonly slug: string;
+      readonly group: string;
+      readonly passed: boolean;
+      readonly repairs: number;
+      readonly issues: readonly string[];
+    }
+  | {
+      readonly id: string;
+      readonly type: "rulebook.completed";
+      readonly slug: string;
+      readonly result: RulebookResult;
+    }
+  | {
+      readonly id: string;
+      readonly type: "rulebook.failed";
+      readonly slug: string;
+      readonly error: string;
     };
 
 export interface ChatState {
@@ -192,6 +241,91 @@ export function applyStreamEvent(state: ChatState, event: ChatStreamEvent): Chat
         volume: event.data.volume,
         chapter: event.data.chapter,
         issues: event.data.issues,
+      });
+
+    case "rulebook.started":
+      return withItem(state, {
+        type: "rulebook.started",
+        slug: event.data.slug,
+        docPath: event.data.docPath,
+      });
+
+    case "rulebook.planned":
+      return withItem(state, {
+        type: "rulebook.planned",
+        slug: event.data.slug,
+        chunkCount: event.data.chunkCount,
+        groups: event.data.groups,
+      });
+
+    case "rulebook.chunk": {
+      // Coalesces, like `text`'s trailing-bubble merge above — but keyed by
+      // `slug` rather than "the last item", since a run's chunk events are
+      // the only thing streaming for most of a rule book's lifetime and
+      // must collapse into one live row, not append dozens (a large source
+      // document can emit 100+ of these per run).
+      const index = state.items.findIndex(
+        (item) => item.type === "rulebook.progress" && item.slug === event.data.slug,
+      );
+      if (index === -1) {
+        return withItem(state, {
+          type: "rulebook.progress",
+          slug: event.data.slug,
+          completed: event.data.completed,
+          total: event.data.total,
+          rulesSoFar: event.data.rulesSoFar,
+          cachedCount: event.data.cached ? 1 : 0,
+          failedCount: event.data.failed ? 1 : 0,
+        });
+      }
+      const existing = state.items[index] as Extract<
+        TranscriptItem,
+        { type: "rulebook.progress" }
+      >;
+      const updated: TranscriptItem = {
+        ...existing,
+        completed: event.data.completed,
+        total: event.data.total,
+        rulesSoFar: event.data.rulesSoFar,
+        cachedCount: existing.cachedCount + (event.data.cached ? 1 : 0),
+        failedCount: existing.failedCount + (event.data.failed ? 1 : 0),
+      };
+      const items = [...state.items];
+      items[index] = updated;
+      return { ...state, items };
+    }
+
+    case "rulebook.merged":
+      return withItem(state, {
+        type: "rulebook.merged",
+        slug: event.data.slug,
+        ruleCount: event.data.ruleCount,
+        droppedQuotes: event.data.droppedQuotes,
+        consolidated: event.data.consolidated,
+      });
+
+    case "rulebook.group.audited":
+      return withItem(state, {
+        type: "rulebook.group.audited",
+        slug: event.data.slug,
+        group: event.data.group,
+        passed: event.data.passed,
+        repairs: event.data.repairs,
+        issues: event.data.issues,
+      });
+
+    case "rulebook.completed":
+      return withItem(state, {
+        type: "rulebook.completed",
+        slug: event.data.slug,
+        result: event.data.result,
+      });
+
+    case "rulebook.failed":
+      return withItem(state, {
+        type: "rulebook.failed",
+        slug: event.data.slug,
+        error: event.data.error,
       });
 
     case "error":

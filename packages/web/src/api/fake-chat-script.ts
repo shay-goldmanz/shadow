@@ -14,7 +14,7 @@
  * handler's module doc).
  */
 
-import type { ChatStreamEvent } from "./types.ts";
+import type { ChatInput, ChatStreamEvent } from "./types.ts";
 
 export function defaultChatScript(sessionId: string): ChatStreamEvent[] {
   return [
@@ -166,4 +166,136 @@ export function defaultChatScript(sessionId: string): ChatStreamEvent[] {
     },
     { event: "done", data: {} },
   ];
+}
+
+/**
+ * A rule-book run, narrated the same way: `rulebook.chunk` fires four times
+ * to demonstrate the coalescing progress row (`chat-transcript.ts`'s
+ * `rulebook.progress` case collapses these into one growing line rather
+ * than four), with one cached extraction and one failed chunk along the
+ * way, then two `rulebook.group.audited` events — one pass, one fail —
+ * mirroring `seedRulebook()`'s own fixture (`fake-data.ts`) so a demo run
+ * through this narration and a direct visit to the Rule books pages tell
+ * the same story about `loan-agreement-rules`.
+ */
+export function rulebookChatScript(sessionId: string): ChatStreamEvent[] {
+  return [
+    { event: "session", data: { sessionId } },
+    { event: "text", data: { delta: "On it — building a rule book from the loan agreement." } },
+    {
+      event: "rulebook.started",
+      data: { slug: "loan-agreement-rules", docPath: "/rnb_loan.pdf" },
+    },
+    {
+      event: "rulebook.planned",
+      data: {
+        slug: "loan-agreement-rules",
+        chunkCount: 4,
+        groups: ["Interest & Fees", "Default & Remedies"],
+      },
+    },
+    {
+      event: "rulebook.chunk",
+      data: {
+        slug: "loan-agreement-rules",
+        completed: 1,
+        total: 4,
+        rulesSoFar: 2,
+        cached: false,
+        failed: false,
+      },
+    },
+    {
+      event: "rulebook.chunk",
+      data: {
+        slug: "loan-agreement-rules",
+        completed: 2,
+        total: 4,
+        rulesSoFar: 5,
+        cached: true,
+        failed: false,
+      },
+    },
+    {
+      event: "rulebook.chunk",
+      data: {
+        slug: "loan-agreement-rules",
+        completed: 3,
+        total: 4,
+        rulesSoFar: 7,
+        cached: false,
+        failed: true,
+      },
+    },
+    {
+      event: "rulebook.chunk",
+      data: {
+        slug: "loan-agreement-rules",
+        completed: 4,
+        total: 4,
+        rulesSoFar: 9,
+        cached: false,
+        failed: false,
+      },
+    },
+    { event: "text", data: { delta: " Consolidating rules and auditing each group." } },
+    {
+      event: "rulebook.merged",
+      data: { slug: "loan-agreement-rules", ruleCount: 8, droppedQuotes: 1, consolidated: 1 },
+    },
+    {
+      event: "rulebook.group.audited",
+      data: {
+        slug: "loan-agreement-rules",
+        group: "interest-and-fees",
+        passed: true,
+        repairs: 0,
+        issues: [],
+      },
+    },
+    {
+      event: "rulebook.group.audited",
+      data: {
+        slug: "loan-agreement-rules",
+        group: "default-and-remedies",
+        passed: false,
+        repairs: 1,
+        issues: [
+          "Cited clause describes suspending refinancing on this one event of default; the rule generalizes to permanent forfeiture on every default under the agreement.",
+        ],
+      },
+    },
+    {
+      event: "rulebook.completed",
+      data: {
+        slug: "loan-agreement-rules",
+        result: {
+          slug: "loan-agreement-rules",
+          sourceId: "src_rnb_loan",
+          ruleCount: 8,
+          groupCount: 2,
+          publishedGroups: ["interest-and-fees"],
+          rejectedGroups: ["default-and-remedies"],
+          failedChunks: 1,
+          status: "draft",
+          assemblyDroppedQuotes: 1,
+          assemblyDroppedRules: 0,
+          usage: {
+            inputTokens: 18234,
+            outputTokens: 2210,
+            cacheReadTokens: 4096,
+            cacheWriteTokens: 512,
+          },
+        },
+      },
+    },
+    { event: "done", data: {} },
+  ];
+}
+
+/** `FakeApiClient`'s default chat script: picks the rule-book narration when the operator's message is actually about building one, the design-inspiration critical path otherwise — so `bun run dev` can demo either flow from the same running app. */
+export function chooseChatScript(sessionId: string, input: ChatInput): ChatStreamEvent[] {
+  return /rule\s*book/i.test(input.message)
+    ? rulebookChatScript(sessionId)
+    : defaultChatScript(sessionId);
 }

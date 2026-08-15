@@ -7,8 +7,17 @@
  */
 
 import type { ShadowApiClient } from "./client.ts";
-import { defaultChatScript } from "./fake-chat-script.ts";
-import { chapterSummariesOf, type SeedVolume, seedVolume, volumeSummaryOf } from "./fake-data.ts";
+import { chooseChatScript } from "./fake-chat-script.ts";
+import {
+  chapterSummariesOf,
+  rulebookGroupSummariesOf,
+  rulebookSummaryOf,
+  type SeedRulebook,
+  type SeedVolume,
+  seedRulebook,
+  seedVolume,
+  volumeSummaryOf,
+} from "./fake-data.ts";
 import {
   ApiError,
   type AuditRecord,
@@ -23,6 +32,9 @@ import {
   type LintReport,
   type PutChapterAudit,
   type PutChapterInput,
+  type Rulebook,
+  type RulebookGroupSummary,
+  type RulebookSummary,
   type SourceRecord,
   type UpdateVolumeInput,
   type Volume,
@@ -40,14 +52,16 @@ function slugify(title: string): string {
 
 export interface FakeApiClientOptions {
   readonly volumes?: readonly SeedVolume[];
+  readonly rulebooks?: readonly SeedRulebook[];
   /** Delay between streamed chat events, for a realistic demo feel. 0 in tests. */
   readonly streamDelayMs?: number;
-  /** Overrides the scripted chat turn. Defaults to the critical-path narration. */
+  /** Overrides the scripted chat turn. Defaults to the critical-path narration (or the rule-book narration, if the message mentions one — see `fake-chat-script.ts`'s `chooseChatScript`). */
   readonly chatScript?: (sessionId: string, input: ChatInput) => readonly ChatStreamEvent[];
 }
 
 export class FakeApiClient implements ShadowApiClient {
   private readonly volumes = new Map<string, SeedVolume>();
+  private readonly rulebooks = new Map<string, SeedRulebook>();
   private readonly streamDelayMs: number;
   private readonly chatScript: (sessionId: string, input: ChatInput) => readonly ChatStreamEvent[];
   private nextSessionId = 1;
@@ -56,8 +70,11 @@ export class FakeApiClient implements ShadowApiClient {
     for (const seed of options.volumes ?? [seedVolume()]) {
       this.volumes.set(seed.volume.slug, seed);
     }
+    for (const seed of options.rulebooks ?? [seedRulebook()]) {
+      this.rulebooks.set(seed.rulebook.slug, seed);
+    }
     this.streamDelayMs = options.streamDelayMs ?? 0;
-    this.chatScript = options.chatScript ?? ((sessionId) => defaultChatScript(sessionId));
+    this.chatScript = options.chatScript ?? chooseChatScript;
   }
 
   async listVolumes(): Promise<readonly VolumeSummary[]> {
@@ -248,6 +265,45 @@ export class FakeApiClient implements ShadowApiClient {
     return { events: this.requireVolume(slug).ledger };
   }
 
+  async listRulebooks(): Promise<readonly RulebookSummary[]> {
+    return [...this.rulebooks.values()].map(rulebookSummaryOf);
+  }
+
+  async getRulebook(
+    slug: string,
+  ): Promise<{ rulebook: Rulebook; groups: readonly RulebookGroupSummary[] }> {
+    const seed = this.requireRulebook(slug);
+    return { rulebook: seed.rulebook, groups: rulebookGroupSummariesOf(seed) };
+  }
+
+  async getRulebookGroup(
+    slug: string,
+    group: string,
+  ): Promise<{ group: Chapter; claims?: ClaimSidecar; audit?: AuditRecord }> {
+    const seed = this.requireRulebook(slug);
+    const entry = seed.groups.find((g) => g.group.slug === group);
+    if (!entry) {
+      throw new ApiError("group_not_found", `No group "${group}" in rule book "${slug}".`);
+    }
+    return { group: entry.group, claims: entry.claims, audit: entry.audit };
+  }
+
+  async getRulebookSource(slug: string, id: string): Promise<SourceRecord> {
+    const seed = this.requireRulebook(slug);
+    const src = seed.sources.find((s) => s.id === id);
+    if (!src) throw new ApiError("source_not_found", `No source "${id}" in rule book "${slug}".`);
+    return src;
+  }
+
+  async getRulebookSnapshot(slug: string, hash: string): Promise<string> {
+    const seed = this.requireRulebook(slug);
+    const snapshot = seed.snapshots[hash];
+    if (snapshot === undefined) {
+      throw new ApiError("snapshot_not_found", `No snapshot "${hash}" in rule book "${slug}".`);
+    }
+    return snapshot;
+  }
+
   async *chat(input: ChatInput): AsyncIterable<ChatStreamEvent> {
     const sessionId = input.sessionId ?? `sess_${this.nextSessionId++}`;
     for (const event of this.chatScript(sessionId, input)) {
@@ -259,6 +315,12 @@ export class FakeApiClient implements ShadowApiClient {
   private requireVolume(slug: string): SeedVolume {
     const seed = this.volumes.get(slug);
     if (!seed) throw new ApiError("volume_not_found", `No volume at slug "${slug}".`);
+    return seed;
+  }
+
+  private requireRulebook(slug: string): SeedRulebook {
+    const seed = this.rulebooks.get(slug);
+    if (!seed) throw new ApiError("rulebook_not_found", `No rule book at slug "${slug}".`);
     return seed;
   }
 }

@@ -10,7 +10,10 @@ export type Route =
   | { readonly name: "volumes" }
   | { readonly name: "volume"; readonly slug: string }
   | { readonly name: "chat"; readonly slug: string }
-  | { readonly name: "chapter"; readonly slug: string; readonly chapter: string };
+  | { readonly name: "chapter"; readonly slug: string; readonly chapter: string }
+  | { readonly name: "rulebooks" }
+  | { readonly name: "rulebook"; readonly slug: string }
+  | { readonly name: "rulebook-group"; readonly slug: string; readonly group: string };
 
 export function routePath(route: Route): string {
   switch (route.name) {
@@ -22,6 +25,12 @@ export function routePath(route: Route): string {
       return `#/v/${encodeURIComponent(route.slug)}/chat`;
     case "chapter":
       return `#/v/${encodeURIComponent(route.slug)}/c/${encodeURIComponent(route.chapter)}`;
+    case "rulebooks":
+      return "#/r";
+    case "rulebook":
+      return `#/r/${encodeURIComponent(route.slug)}`;
+    case "rulebook-group":
+      return `#/r/${encodeURIComponent(route.slug)}/g/${encodeURIComponent(route.group)}`;
   }
 }
 
@@ -34,6 +43,14 @@ export function parseHash(hash: string): Route {
       return { name: "chapter", slug, chapter: decodeURIComponent(segments[3]) };
     }
     return { name: "volume", slug };
+  }
+  if (segments[0] === "r") {
+    if (!segments[1]) return { name: "rulebooks" };
+    const slug = decodeURIComponent(segments[1]);
+    if (segments[2] === "g" && segments[3]) {
+      return { name: "rulebook-group", slug, group: decodeURIComponent(segments[3]) };
+    }
+    return { name: "rulebook", slug };
   }
   return { name: "volumes" };
 }

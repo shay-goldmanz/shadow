@@ -228,6 +228,112 @@ function TranscriptItemView({ item }: { readonly item: TranscriptItem }) {
         </div>
       );
 
+    case "rulebook.started":
+      return (
+        <div className="research-event">
+          <Badge tone="clay">Rule book started</Badge>{" "}
+          <span>
+            Building <code>{item.slug}</code> from <code>{item.docPath}</code>
+          </span>
+        </div>
+      );
+
+    case "rulebook.planned":
+      return (
+        <div className="research-event">
+          <Badge tone="clay">Planned</Badge>{" "}
+          <span>
+            {item.chunkCount} section{item.chunkCount === 1 ? "" : "s"} across{" "}
+            {item.groups.length} group{item.groups.length === 1 ? "" : "s"}
+            {item.groups.length > 0 && <>: {item.groups.join(", ")}</>}
+          </span>
+        </div>
+      );
+
+    case "rulebook.progress":
+      // A live, coalesced row (`chat-transcript.ts`'s `rulebook.chunk`
+      // case) — one per run, updated in place as chunks stream in, rather
+      // than a growing list of dozens of near-identical rows.
+      return (
+        <div className="research-event" aria-live="polite">
+          <Badge tone="neutral">Extracting rules</Badge>{" "}
+          <span>
+            {item.completed}/{item.total} sections · {item.rulesSoFar} rules so far
+            {item.cachedCount > 0 && ` · ${item.cachedCount} cached`}
+            {item.failedCount > 0 && ` · ${item.failedCount} failed`}
+          </span>
+        </div>
+      );
+
+    case "rulebook.merged":
+      return (
+        <div className="research-event">
+          <Badge tone="sage">Rules merged</Badge>{" "}
+          <span>
+            {item.ruleCount} rules after consolidation
+            {item.consolidated > 0 && ` (${item.consolidated} duplicates merged)`}
+            {item.droppedQuotes > 0 && ` · ${item.droppedQuotes} quotes dropped`}
+          </span>
+        </div>
+      );
+
+    case "rulebook.group.audited":
+      return (
+        <div
+          className={`research-event${item.passed ? "" : " research-event--error"}`}
+          role={item.passed ? undefined : "alert"}
+        >
+          <Badge tone={item.passed ? "sage" : "red"}>
+            {item.passed ? "Group passed" : "Group failed"}
+          </Badge>{" "}
+          <span>
+            {item.group}
+            {item.repairs > 0 &&
+              ` · ${item.repairs} repair${item.repairs === 1 ? "" : "s"} applied`}
+          </span>
+          {!item.passed && item.issues.length > 0 && (
+            <ul className="research-event__findings">
+              {item.issues.map((issue) => (
+                <li key={issue}>
+                  <Prose text={issue} />
+                </li>
+              ))}
+            </ul>
+          )}
+        </div>
+      );
+
+    case "rulebook.completed": {
+      const { result } = item;
+      // `result.status` is the single source of truth for stable/draft
+      // (computed once in `RulebookToolAgent.create` from the same
+      // expression that drives the store's own status) — read it directly
+      // rather than re-deriving it from counts.
+      const stable = result.status === "stable";
+      return (
+        <div className="research-event">
+          <Badge tone={stable ? "sage" : "amber"}>{stable ? "Stable" : "Needs review"}</Badge>{" "}
+          <span>
+            {result.ruleCount} rules in {result.groupCount} group
+            {result.groupCount === 1 ? "" : "s"} · {result.publishedGroups.length} published
+            {result.rejectedGroups.length > 0 && `, ${result.rejectedGroups.length} rejected`}
+            {result.failedChunks > 0 &&
+              ` · ${result.failedChunks} chunk${result.failedChunks === 1 ? "" : "s"} failed to extract`}
+          </span>
+        </div>
+      );
+    }
+
+    case "rulebook.failed":
+      return (
+        <div className="research-event research-event--error" role="alert">
+          <Badge tone="red">Rule book failed</Badge>{" "}
+          <span>
+            <Prose text={item.error} />
+          </span>
+        </div>
+      );
+
     case "error":
       return (
         <div className="research-event research-event--error" role="alert">

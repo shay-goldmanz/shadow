@@ -155,6 +155,20 @@ same shape and the same optionality — `claims`/`audit` are `undefined` until t
 through `publishGroup` at least once. A rule book's evidence store is a second, separate
 `EvidenceStore` instance scoped over its own directory tree, not the volume evidence store.
 
+### Rule book evidence
+
+```
+GET /api/rulebooks/:slug/sources/:id       → SourceRecord
+GET /api/rulebooks/:slug/snapshot/:hash    → text/plain, the pinned snapshot
+```
+
+Mirrors `GET /api/volumes/:slug/evidence/{sources/:id,snapshot/:hash}` field for field, just
+called against the rule book's own `EvidenceStore` (`deps.rulebookEvidenceStore`) instead of
+the volume one — same `SourceRecord` shape, same `text/plain` snapshot body, same 404 behavior
+(`source_not_found`/`snapshot_not_found`; neither handler checks that the rule book itself
+exists, only that the source/snapshot file is there, exactly like the volume handlers). No
+`ledger` route for rule books — there is no rule-book ledger endpoint.
+
 ## Wire types
 
 The endpoints above return the pillars' domain types. Their authoritative shapes live with

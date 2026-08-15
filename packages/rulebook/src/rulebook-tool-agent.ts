@@ -373,6 +373,7 @@ export class RulebookToolAgent implements RuleBookPort {
       assemblyDroppedQuotes,
       assemblyDroppedRules,
       usage,
+      status: isStable ? "stable" : "draft",
     };
 
     yield { type: "completed", result };

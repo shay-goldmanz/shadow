@@ -216,6 +216,7 @@ describe("Chat — SSE", () => {
       assemblyDroppedQuotes: 0,
       assemblyDroppedRules: 0,
       usage: ZERO_USAGE,
+      status: "draft",
     };
     const script: RulebookEvent[] = [
       { type: "started", slug: "rnb-loan-agreement", docPath: "/tmp/rnb_loan.pdf" },

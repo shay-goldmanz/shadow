@@ -157,6 +157,7 @@ describe("RulebookToolAgent", () => {
       expect(result.failedChunks).toBe(0);
       expect(result.ruleCount).toBe(4);
       expect(result.groupCount).toBe(2);
+      expect(result.status).toBe("stable");
 
       const rulebookSlug = toVolumeSlug("loan-rules");
       const rulebook = await rulebookStore.getRulebook(rulebookSlug);
@@ -227,6 +228,7 @@ describe("RulebookToolAgent", () => {
 
       expect(result.publishedGroups).toEqual(["payments"]);
       expect(result.rejectedGroups).toEqual(["collateral"]);
+      expect(result.status).toBe("draft");
 
       const groupAuditedEvents = events.filter((e) => e.type === "group-audited");
       const collateralEvent = groupAuditedEvents.find((e) => e.type === "group-audited" && e.group === "collateral");
@@ -277,6 +279,10 @@ describe("RulebookToolAgent", () => {
       expect(result.groupCount).toBe(0);
       expect(result.publishedGroups).toEqual([]);
       expect(result.rejectedGroups).toEqual([]);
+      // Zero groups is the degenerate edge: nothing was rejected and no
+      // chunk failed, but a book with no rules at all must not read as
+      // "stable" — there's nothing verified about it.
+      expect(result.status).toBe("draft");
       expect(events.some((e) => e.type === "group-audited")).toBe(false);
 
       const rulebookSlug = toVolumeSlug("empty-rules");
@@ -500,6 +506,7 @@ describe("RulebookToolAgent", () => {
       expect(result.failedChunks).toBe(1);
       expect(result.rejectedGroups).toEqual([]);
       expect(result.publishedGroups).toEqual(["payments"]);
+      expect(result.status).toBe("draft");
 
       // ...but a chunk failed outright, so the book must not read as fully
       // verified — a silently-missing rule is not the same as "verified".

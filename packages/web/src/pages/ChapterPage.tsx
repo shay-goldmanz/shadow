@@ -226,7 +226,8 @@ export function ChapterPage({
 
       <SnapshotDialog
         request={snapshotRequest}
-        volumeSlug={slug}
+        slug={slug}
+        scope="volume"
         client={client}
         onClose={() => setSnapshotRequest(undefined)}
       />

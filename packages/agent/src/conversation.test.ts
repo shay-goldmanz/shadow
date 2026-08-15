@@ -447,6 +447,7 @@ describe("ShadowConversation — shadow:rulebook directive", () => {
           publishedGroups: ["borrower-obligations", "default-remedies"],
           rejectedGroups: ["fees"],
           failedChunks: 0,
+          status: "draft",
           assemblyDroppedQuotes: 0,
           assemblyDroppedRules: 0,
           usage: ZERO_USAGE,

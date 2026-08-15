@@ -19,6 +19,9 @@ import type {
   LintReport,
   PutChapterAudit,
   PutChapterInput,
+  Rulebook,
+  RulebookGroupSummary,
+  RulebookSummary,
   SourceRecord,
   UpdateVolumeInput,
   Volume,
@@ -52,6 +55,27 @@ export interface ShadowApiClient {
   getSource(slug: string, id: string): Promise<SourceRecord>;
   getSnapshot(slug: string, hash: string): Promise<string>;
   getLedger(slug: string): Promise<{ events: readonly LedgerEvent[] }>;
+
+  /** Read-only: a rule book is only ever created via the `shadow:rulebook` chat directive, never through this client. */
+  listRulebooks(): Promise<readonly RulebookSummary[]>;
+  getRulebook(
+    slug: string,
+  ): Promise<{ rulebook: Rulebook; groups: readonly RulebookGroupSummary[] }>;
+  /** `group` mirrors `getChapter`'s shape exactly — a rule book group is a chapter-shaped document server-side. */
+  getRulebookGroup(
+    slug: string,
+    group: string,
+  ): Promise<{ group: Chapter; claims?: ClaimSidecar; audit?: AuditRecord }>;
+
+  /**
+   * A rule book's own evidence store — same `SourceRecord`/text
+   * shapes as `getSource`/`getSnapshot`, just scoped over the rule book's
+   * slug rather than a volume's. `SnapshotDialog` picks between these and
+   * `getSource`/`getSnapshot` by `scope`, not by trying the volume routes
+   * first and falling back.
+   */
+  getRulebookSource(slug: string, id: string): Promise<SourceRecord>;
+  getRulebookSnapshot(slug: string, hash: string): Promise<string>;
 
   /** Streams one chat turn. Consume with `for await`; the async iterable ends after `done` or `error`. */
   chat(input: ChatInput): AsyncIterable<ChatStreamEvent>;

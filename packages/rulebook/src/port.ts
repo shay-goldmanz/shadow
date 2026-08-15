@@ -78,6 +78,19 @@ export interface RulebookResult {
   /** Rules dropped entirely at assembly time because every one of their quotes failed to bind, summed across every group (`assembleGroup`'s `droppedRules`). */
   readonly assemblyDroppedRules: number;
   readonly usage: TokenUsage;
+  /**
+   * The single source of truth for whether this run reads as fully
+   * verified — computed once in `RulebookToolAgent.create` from the exact
+   * same expression that drives `RulebookStore.updateRulebook`'s own
+   * `status`, and carried here so no caller re-derives it. `"stable"` iff
+   * at least one group was finalized, no group was rejected by its audit,
+   * and no chunk failed extraction outright; `"draft"` otherwise —
+   * including the degenerate zero-groups case (a document that yields no
+   * rules is not "stable," it just has nothing to be unstable about).
+   * Every caller (`@shadow/agent`'s follow-up text, the web transcript's
+   * badge) must read this field rather than recomputing the predicate.
+   */
+  readonly status: "stable" | "draft";
 }
 
 /** The one entry point: hand in a brief, get a stream of progress events ending in `completed`/`failed`. */

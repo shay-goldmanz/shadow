@@ -251,13 +251,17 @@ function formatRulebookCompletion(result: RulebookResult): string {
         `rule book cannot be considered complete until this is resolved.`,
     );
   }
-  const isStable = result.rejectedGroups.length === 0 && result.failedChunks === 0;
-  lines.push(isStable ? "The rule book is stable." : "The rule book remains in draft.");
+  lines.push(
+    result.status === "stable" ? "The rule book is stable." : "The rule book remains in draft.",
+  );
   return lines.join(" ");
 }
 
 function formatRulebookFailure(slug: string, error: string): string {
-  return `Rule book "${slug}" failed: ${error}.`;
+  return (
+    `Rule book "${slug}" failed: ${error}. Only resubmit if something changed — e.g. the ` +
+    `operator supplies a corrected path; otherwise reply in plain prose.`
+  );
 }
 
 /** Shadow's per-conversation handle: one `AgenticSession`, reused for every `sendMessage` call (D6). Create via `ShadowAgent.startConversation`. */

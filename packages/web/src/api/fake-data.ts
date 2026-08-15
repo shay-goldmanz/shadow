@@ -16,6 +16,9 @@ import type {
   Claim,
   ClaimSidecar,
   LedgerEvent,
+  Rulebook,
+  RulebookGroupSummary,
+  RulebookSummary,
   SourceRecord,
   Volume,
   VolumeIndexDocument,
@@ -35,6 +38,20 @@ export interface SeedVolume {
   readonly sources: readonly SourceRecord[];
   readonly snapshots: Readonly<Record<string, string>>;
   readonly ledger: readonly LedgerEvent[];
+}
+
+/** A rule-book group is a chapter-shaped document (`group` reuses `Chapter`, same as the real API — `handlers/rulebooks.ts`'s module doc) — mirroring `SeedChapter`'s shape rather than inventing a parallel one. */
+export interface SeedRulebookGroup {
+  readonly group: Chapter;
+  readonly claims: ClaimSidecar;
+  readonly audit: AuditRecord;
+}
+
+export interface SeedRulebook {
+  readonly rulebook: Rulebook;
+  readonly groups: readonly SeedRulebookGroup[];
+  readonly sources: readonly SourceRecord[];
+  readonly snapshots: Readonly<Record<string, string>>;
 }
 
 const now = "2026-08-11T09:00:00.000Z";
@@ -525,5 +542,227 @@ export function chapterSummariesOf(seed: SeedVolume): ChapterSummary[] {
     frontmatter: c.chapter.frontmatter,
     updatedAt: c.chapter.updatedAt,
     createdAt: c.chapter.createdAt,
+  }));
+}
+
+// ---- rule book seed (Rule Book Creator) ------------------------------------
+//
+// One rule book extracted from a loan agreement,
+// narrated to show both states a run leaves behind: a group that fully
+// passed its audit, and one with an overreaching rule caught the same way
+// `epoch-one-pagers` catches `epoch-three-colours` above — same shape of
+// bug, same shape of fix, in a rule-book group instead of a chapter.
+
+const loanSource = source({
+  id: "src_rnb_loan",
+  url: "file:///rnb_loan.pdf",
+  title: "Loan Agreement (rnb_loan.pdf)",
+  author: null,
+  publishedAt: null,
+  transport: "file",
+});
+
+const interestFeesBody = `- Borrowers must pay interest at a fixed annual rate of 6.5%.[^int-rate]
+- Late payments incur a flat fee of $50 per occurrence.[^late-fee]
+`;
+
+const interestFeesClaims: Claim[] = [
+  claim({
+    id: "clm_int_rate",
+    label: "int-rate",
+    kind: "sourced",
+    text: "Borrowers must pay interest at a fixed annual rate of 6.5%.",
+    status: "supported",
+    sourceId: loanSource.id,
+    snapshotHash: "snap_int_rate",
+    exact: "the Borrower shall pay interest at a fixed rate of six and one-half percent (6.5%) per annum",
+    anchorStatus: "anchored",
+  }),
+  claim({
+    id: "clm_late_fee",
+    label: "late-fee",
+    kind: "sourced",
+    text: "Late payments incur a flat fee of $50 per occurrence.",
+    status: "supported",
+    sourceId: loanSource.id,
+    snapshotHash: "snap_late_fee",
+    exact: "a late fee of $50.00 shall be assessed for each late payment",
+    anchorStatus: "anchored",
+  }),
+];
+
+const interestFeesAudit: AuditRecord = {
+  chapter: "interest-and-fees",
+  auditedAt: now,
+  verdict: { chapter: "interest-and-fees", passed: true, outcomes: [] },
+};
+
+const defaultRemediesBody = `- The lender may declare a default if any payment is more than 30 days late.[^default-30]
+- Every default under this agreement permanently forfeits the borrower's right to refinance.[^default-forfeit]
+`;
+
+const defaultRemediesClaims: Claim[] = [
+  claim({
+    id: "clm_default_30",
+    label: "default-30",
+    kind: "sourced",
+    text: "The lender may declare a default if any payment is more than 30 days late.",
+    status: "supported",
+    sourceId: loanSource.id,
+    snapshotHash: "snap_default_30",
+    exact: "any payment outstanding for more than thirty (30) days shall constitute an event of default",
+    anchorStatus: "anchored",
+  }),
+  claim({
+    id: "clm_default_forfeit",
+    label: "default-forfeit",
+    kind: "sourced",
+    text: "Every default under this agreement permanently forfeits the borrower's right to refinance.",
+    status: "unsupported",
+    rationale:
+      "The cited clause describes the lender's remedy on the single default under discussion, not a universal forfeiture across every default this agreement could ever have. The absolute claim overreaches its evidence.",
+    sourceId: loanSource.id,
+    snapshotHash: "snap_default_forfeit",
+    exact: "upon such an event of default, the Lender may suspend the Borrower's refinancing option",
+    anchorStatus: "anchored",
+  }),
+];
+
+const defaultRemediesAudit: AuditRecord = {
+  chapter: "default-and-remedies",
+  auditedAt: now,
+  verdict: {
+    chapter: "default-and-remedies",
+    passed: false,
+    outcomes: [
+      {
+        checkId: "C3",
+        tier: 2,
+        blocking: true,
+        passed: false,
+        issues: [
+          {
+            code: "span-entailment",
+            label: "default-forfeit",
+            message:
+              "Cited clause describes suspending refinancing on this one event of default; the rule generalizes to permanent forfeiture on every default under the agreement.",
+          },
+        ],
+      },
+    ],
+  },
+};
+
+/** Seeds one rule book — `bun run dev`'s fake client and this package's fixtures both start from this, the same convention `seedVolume()` follows above. */
+export function seedRulebook(): SeedRulebook {
+  const rulebook: Rulebook = {
+    slug: "loan-agreement-rules",
+    title: "Loan Agreement Rules",
+    description: "Rules extracted from the loan agreement.",
+    type: "Rule Book",
+    status: "draft",
+    generated: { by: "rulebook-extraction@0.1.0", at: now },
+    verified: [],
+    sourceDoc: {
+      url: loanSource.url,
+      payloadSha256: "sha256:rnb-loan-payload",
+      snapshotSha256: "sha256:rnb-loan-normalized",
+    },
+    whenToUse: "Answering questions about this loan agreement's terms.",
+    keywords: ["loan", "interest-rate", "default"],
+    createdAt: now,
+    updatedAt: now,
+  };
+
+  const interestFeesGroup: Chapter = {
+    slug: "interest-and-fees",
+    title: "Interest & Fees",
+    body: interestFeesBody,
+    type: "Rule Group",
+    status: "stable",
+    staleAfter: null,
+    generated: { by: "rulebook-extraction@0.1.0", at: now },
+    verified: [],
+    frontmatter: {},
+    createdAt: now,
+    updatedAt: now,
+  };
+
+  const defaultRemediesGroup: Chapter = {
+    slug: "default-and-remedies",
+    title: "Default & Remedies",
+    body: defaultRemediesBody,
+    type: "Rule Group",
+    status: "draft",
+    staleAfter: null,
+    generated: { by: "rulebook-extraction@0.1.0", at: now },
+    verified: [],
+    frontmatter: {},
+    createdAt: now,
+    updatedAt: now,
+  };
+
+  return {
+    rulebook,
+    groups: [
+      {
+        group: interestFeesGroup,
+        claims: {
+          schemaVersion: "1.0",
+          chapter: interestFeesGroup.slug,
+          chapterTextSha256: "sha256:interest-and-fees-body",
+          auditedAt: now,
+          claims: interestFeesClaims,
+        },
+        audit: interestFeesAudit,
+      },
+      {
+        group: defaultRemediesGroup,
+        claims: {
+          schemaVersion: "1.0",
+          chapter: defaultRemediesGroup.slug,
+          chapterTextSha256: "sha256:default-and-remedies-body",
+          auditedAt: now,
+          claims: defaultRemediesClaims,
+        },
+        audit: defaultRemediesAudit,
+      },
+    ],
+    sources: [loanSource],
+    snapshots: {
+      snap_int_rate:
+        "Section 3.1 — the Borrower shall pay interest at a fixed rate of six and one-half percent (6.5%) per annum, calculated on the outstanding principal balance.",
+      snap_late_fee:
+        "Section 3.4 — a late fee of $50.00 shall be assessed for each late payment, due within five (5) business days of the missed due date.",
+      snap_default_30:
+        "Section 7.1 — any payment outstanding for more than thirty (30) days shall constitute an event of default under this Agreement.",
+      snap_default_forfeit:
+        "Section 7.3 — upon such an event of default, the Lender may suspend the Borrower's refinancing option under Section 9 until the default is cured.",
+    },
+  };
+}
+
+/** `ruleCount` mirrors `handlers/rulebooks.ts`'s `countRules` (a regex over `[^label]` footnote markers), duplicated here rather than imported — `@shadow/web` never depends on `@shadow/api`. */
+function countRuleMarkers(body: string): number {
+  const matches = body.match(/\[\^[^\]\s]+\]/g);
+  return matches?.length ?? 0;
+}
+
+export function rulebookSummaryOf(seed: SeedRulebook): RulebookSummary {
+  return {
+    slug: seed.rulebook.slug,
+    title: seed.rulebook.title,
+    status: seed.rulebook.status,
+    groupCount: seed.groups.length,
+    updatedAt: seed.rulebook.updatedAt,
+  };
+}
+
+export function rulebookGroupSummariesOf(seed: SeedRulebook): RulebookGroupSummary[] {
+  return seed.groups.map((g) => ({
+    slug: g.group.slug,
+    title: g.group.title,
+    status: g.group.status,
+    ruleCount: countRuleMarkers(g.group.body),
   }));
 }

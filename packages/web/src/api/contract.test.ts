@@ -25,6 +25,7 @@
  */
 
 import { describe, expect, test } from "bun:test";
+import { toChapterSlug, toVolumeSlug } from "../../../core/src/index.ts";
 import type { WithApiOptions } from "../../../api/src/test-helpers.ts";
 import { withApi, withScriptedApi } from "../../../api/src/test-helpers.ts";
 import { parseChapterBody } from "../components/chapter-body.ts";
@@ -206,6 +207,47 @@ describe("contract: HttpApiClient against a real @shadow/api server", () => {
         .filter((segment) => segment.type === "citation")
         .map((segment) => segment.label);
       expect(citationLabels).toContain("op-belief");
+    });
+  });
+
+  test("rule books: list, detail, and group round-trip with the real wire shape (group mirrors getChapter's optionality)", async () => {
+    await withApi(async ({ baseUrl, deps }) => {
+      const client = new HttpApiClient(`${baseUrl}/api`);
+
+      expect(await client.listRulebooks()).toEqual([]);
+
+      const slug = toVolumeSlug("loan-agreement-rules");
+      await deps.rulebookStore.createRulebook({ slug, title: "Loan Agreement Rules" });
+      await deps.rulebookStore.putGroup(slug, {
+        slug: toChapterSlug("interest-and-fees"),
+        title: "Interest & Fees",
+        body: "- Borrowers must pay interest at a fixed annual rate of 6.5%.[^int-rate]",
+      });
+
+      const listed = await client.listRulebooks();
+      expect(listed).toHaveLength(1);
+      expect(listed[0]).toMatchObject({
+        slug: "loan-agreement-rules",
+        title: "Loan Agreement Rules",
+        status: "draft",
+        groupCount: 1,
+      });
+
+      const { rulebook, groups } = await client.getRulebook("loan-agreement-rules");
+      expect(rulebook.slug).toBe("loan-agreement-rules");
+      expect(groups).toEqual([
+        { slug: "interest-and-fees", title: "Interest & Fees", status: "draft", ruleCount: 1 },
+      ]);
+
+      // Never published through `publishGroup` in this test — `claims`/
+      // `audit` are `undefined`, the same optionality `getChapter` has for
+      // an unaudited chapter (the bug this line would catch: `claims` ever
+      // regressing to a bare array-or-empty-array guess for an unaudited
+      // group instead of staying genuinely absent).
+      const group = await client.getRulebookGroup("loan-agreement-rules", "interest-and-fees");
+      expect(group.group.slug).toBe("interest-and-fees");
+      expect(group.claims).toBeUndefined();
+      expect(group.audit).toBeUndefined();
     });
   });
 

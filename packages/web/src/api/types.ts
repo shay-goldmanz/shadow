@@ -487,6 +487,83 @@ export interface LintReport {
   readonly findings: readonly LintFinding[];
 }
 
+// ---- rule books (Rule Book Creator) ----------------------------------------
+//
+// `@shadow/api`'s `handlers/rulebooks.ts` — three read-only endpoints, no
+// write path through this package (a rule book is only ever created via the
+// `shadow:rulebook` chat directive, `@shadow/agent`). The group-detail shape
+// deliberately mirrors `GET /api/volumes/:slug/chapters/:chapter` field for
+// field (`{ group, claims?, audit? }`, same optionality) — a rule book group
+// is a chapter-shaped document on the server (`Chapter` reused as-is), so
+// `group` below IS `Chapter`, not a parallel type.
+
+/** A rule book's provenance: the local document it was extracted from. `null` until extraction has run. */
+export interface RulebookSourceDoc {
+  readonly url: string;
+  readonly payloadSha256: string;
+  readonly snapshotSha256: string;
+}
+
+/** `@shadow/core`'s `Rulebook`, hand-mirrored (`rulebook-frontmatter.ts`) — its own bundle kind, deliberately not a `Volume`. */
+export interface Rulebook {
+  readonly slug: string;
+  readonly title: string;
+  readonly description: string;
+  readonly type: string;
+  readonly status: OkfStatus;
+  readonly generated: OkfActor;
+  readonly verified: readonly OkfActor[];
+  readonly sourceDoc: RulebookSourceDoc | null;
+  readonly whenToUse?: string;
+  readonly notFor?: string;
+  readonly keywords: readonly string[];
+  readonly createdAt: string;
+  readonly updatedAt: string;
+}
+
+/** `GET /api/rulebooks`'s list item (`handlers/rulebooks.ts`'s `toRulebookSummary`) — not a full `Rulebook`; `groupCount` comes from a `listGroups` call the list handler makes per rule book. */
+export interface RulebookSummary {
+  readonly slug: string;
+  readonly title: string;
+  readonly status: OkfStatus;
+  readonly groupCount: number;
+  readonly updatedAt: string;
+}
+
+/** `GET /api/rulebooks/:slug`'s per-group list item (`handlers/rulebooks.ts`'s `toGroupSummary`) — `ruleCount` is a regex count of `[^label]` footnote markers in the group's body, not a claim-sidecar count. */
+export interface RulebookGroupSummary {
+  readonly slug: string;
+  readonly title: string;
+  readonly status: OkfStatus;
+  readonly ruleCount: number;
+}
+
+/** `@shadow/model`'s `TokenUsage`, hand-mirrored — accumulated cost of one rule-book run. */
+export interface TokenUsage {
+  readonly inputTokens: number;
+  readonly outputTokens: number;
+  readonly cacheReadTokens: number;
+  readonly cacheWriteTokens: number;
+}
+
+/** `@shadow/rulebook`'s `RulebookResult` — the terminal shape of a completed run, carried unstripped on `rulebook.completed`. */
+export interface RulebookResult {
+  readonly slug: string;
+  readonly sourceId: string;
+  /** Post-consolidation rule count — the honest count of distinct rules in the book, not the pre-dedup total. */
+  readonly ruleCount: number;
+  readonly groupCount: number;
+  readonly publishedGroups: readonly string[];
+  readonly rejectedGroups: readonly string[];
+  /** Chunks whose extraction failed outright (both attempts) — a book with any of these must not read as fully verified even if every assembled group passed its own audit. */
+  readonly failedChunks: number;
+  readonly assemblyDroppedQuotes: number;
+  readonly assemblyDroppedRules: number;
+  readonly usage: TokenUsage;
+  /** The single source of truth for stable/draft — `"stable"` iff at least one group finalized, none was rejected by its audit, and no chunk failed extraction outright; `"draft"` otherwise (including the zero-groups case). Read this rather than re-deriving it from the other fields. */
+  readonly status: "stable" | "draft";
+}
+
 // ---- chat / SSE (D5, D6, D9) ----------------------------------------------
 
 export interface ChatInput {
@@ -592,6 +669,57 @@ export type ChatStreamEvent =
         readonly chapter: string;
         readonly issues: readonly CheckIssue[];
       };
+    }
+  | {
+      readonly event: "rulebook.started";
+      readonly data: { readonly slug: string; readonly docPath: string };
+    }
+  | {
+      readonly event: "rulebook.planned";
+      readonly data: {
+        readonly slug: string;
+        readonly chunkCount: number;
+        readonly groups: readonly string[];
+      };
+    }
+  | {
+      readonly event: "rulebook.chunk";
+      readonly data: {
+        readonly slug: string;
+        readonly completed: number;
+        readonly total: number;
+        readonly rulesSoFar: number;
+        readonly cached: boolean;
+        readonly failed: boolean;
+      };
+    }
+  | {
+      readonly event: "rulebook.merged";
+      readonly data: {
+        readonly slug: string;
+        readonly ruleCount: number;
+        readonly droppedQuotes: number;
+        readonly consolidated: number;
+      };
+    }
+  | {
+      readonly event: "rulebook.group.audited";
+      readonly data: {
+        readonly slug: string;
+        readonly group: string;
+        readonly passed: boolean;
+        /** A count, not `RepairDecision[]` — unlike the volume `audit` event's `repairs`, `@shadow/rulebook`'s `group-audited` port event only carries how many repairs happened. */
+        readonly repairs: number;
+        readonly issues: readonly string[];
+      };
+    }
+  | {
+      readonly event: "rulebook.completed";
+      readonly data: { readonly slug: string; readonly result: RulebookResult };
+    }
+  | {
+      readonly event: "rulebook.failed";
+      readonly data: { readonly slug: string; readonly error: string };
     }
   | { readonly event: "error"; readonly data: { readonly message: string; readonly code: string } }
   | { readonly event: "done"; readonly data: Record<string, never> };
