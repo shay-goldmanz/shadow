@@ -867,3 +867,48 @@ place for it: we do not own the consuming agent's system prompt, but we do own o
 teaches an agent to use it without us controlling that agent.
 
 **Cost.** A few tokens per result. Trivial against the cost of an agent taking a wrong turn.
+
+---
+
+## D26 — Model access is a provider strategy
+
+**Context.** D5's acceptance criterion is absolute: *"The entire stack runs on the
+operator's AI subscriptions, NOT on api keys."* That criterion was true unconditionally,
+because `@shadow/model` had exactly one way to build its two ports — the claude-code
+adapters, subscription-only by construction. Some operators run in AWS-governed
+environments where the constraint is inverted: model access must go through AWS Bedrock,
+authenticated with the account's standing AWS credentials, not a Claude subscription.
+Bedrock also removes the per-call `claude` CLI subprocess both existing adapters spawn.
+
+**Decision.** D5's subscription-only rule becomes the *default* strategy, not the *only*
+one. `@shadow/model` gains a second provider strategy, `bedrock`, behind the same two ports
+(`StructuredGenerationPort`, `AgenticSessionPort`) the claude-code strategy already
+implements — callers never see which strategy is in play. `bedrock` authenticates via the
+standard AWS credential chain: our code never reads or handles `ANTHROPIC_*` (or any AWS key
+material) itself, exactly as it never read `ANTHROPIC_API_KEY` under D5 — the AWS SDK
+resolves credentials, we just hand it the call.
+
+Selection is explicit configuration, never a fallback: an operator sets
+`SHADOW_MODEL_PROVIDER=bedrock` to opt in. A missing or unrecognized value resolves to
+`claude-code` — `bedrock` is only ever entered deliberately, never landed on by omission or
+typo. `@shadow/model`'s public factory (`createModel`) takes a `provider` field for exactly
+this; `@shadow/api`'s composition root reads the env var and passes it through.
+
+The claude-code strategy's guardrail (`assertSubscriptionAuth`, `guardrail.ts`) is untouched
+and still fails closed the moment that strategy's auth resolves to anything but the
+subscription — D5's acceptance criterion still holds *for that strategy*. It says nothing
+about a strategy an operator explicitly opted out of it for.
+
+**Why.** Some operators cannot or do not want a Claude subscription driving production
+traffic — Bedrock is how they stay on AWS-native billing, IAM, and network boundaries. As a
+second-order benefit, Bedrock calls the model API directly rather than shelling out to a
+CLI subprocess per call, cutting fixed per-call overhead the claude-code adapters pay.
+
+**Cost.** A discriminated-union config surface instead of a single implicit path, and a
+second SDK (`@ai-sdk/amazon-bedrock`) to keep compatible. Contained at the same one seam D5
+already established: no caller outside `@shadow/model` imports an AI SDK, Bedrock's
+included.
+
+**Guardrail.** `packages/agent/src/no-direct-fetch.test.ts` — D5's structural "only
+`@shadow/model` touches an AI SDK" guard — lists `@ai-sdk/amazon-bedrock` as forbidden
+alongside the existing two SDKs, before the dependency even enters the tree.

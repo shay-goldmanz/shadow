@@ -29,7 +29,13 @@ export {
   StructuredGenerationError,
   SubscriptionAuthError,
 } from "./errors.ts";
-export type { CreateModelOptions, Model } from "./factory.ts";
+export type {
+  BedrockModelOptions,
+  ClaudeCodeModelOptions,
+  CreateModelOptions,
+  Model,
+  ModelProvider,
+} from "./factory.ts";
 export { createModel } from "./factory.ts";
 export type {
   FakeAgenticTurnResponder,

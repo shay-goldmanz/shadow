@@ -27,6 +27,7 @@ async function listSourceFiles(): Promise<string[]> {
 const FORBIDDEN_AI_SDK_IMPORTS = [
   "@anthropic-ai/claude-agent-sdk",
   "ai-sdk-provider-claude-code",
+  "@ai-sdk/amazon-bedrock",
   '"ai"',
   "'ai'",
 ];

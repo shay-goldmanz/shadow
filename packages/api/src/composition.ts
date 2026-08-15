@@ -27,7 +27,7 @@ import {
   FileSystemEvidenceStore,
 } from "@shadow/evidence";
 import { FileMissLog, StructuralIndexer } from "@shadow/indexing";
-import { createModel } from "@shadow/model";
+import { createModel, type ModelProvider } from "@shadow/model";
 import {
   AgenticSearchProvider,
   createRetrievalTransport,
@@ -43,7 +43,16 @@ export interface BuildRealApiDepsOptions {
   readonly model?: string;
 }
 
-/** Build a fully real `ApiDeps` — live filesystem store, live evidence store, live model ports (subscription auth only, D5), live web retrieval. Used only by `start.ts`; never imported by a test. */
+/**
+ * Resolves `SHADOW_MODEL_PROVIDER` to a `ModelProvider` (D26). Selection is
+ * explicit: only the literal `"bedrock"` opts in; anything else — unset,
+ * empty, or a typo — is the subscription default, never a fallback.
+ */
+function resolveModelProvider(value: string | undefined): ModelProvider {
+  return value === "bedrock" ? "bedrock" : "claude-code";
+}
+
+/** Build a fully real `ApiDeps` — live filesystem store, live evidence store, live model ports (subscription auth only by default, D5/D26), live web retrieval. Used only by `start.ts`; never imported by a test. */
 export function buildRealApiDeps(options: BuildRealApiDepsOptions = {}): ApiDeps {
   const root = options.root ?? join(homedir(), ".shadow");
 
@@ -51,9 +60,13 @@ export function buildRealApiDeps(options: BuildRealApiDepsOptions = {}): ApiDeps
   const evidenceStore = new FileSystemEvidenceStore(volumeStore);
   const indexer = new StructuralIndexer({ rootDir: root });
 
+  const modelProvider = resolveModelProvider(process.env.SHADOW_MODEL_PROVIDER);
   const { structuredGeneration, agenticSession } = createModel({
-    structuredGeneration: options.model ? { model: options.model } : undefined,
-    agenticSession: options.model ? { model: options.model } : undefined,
+    provider: modelProvider,
+    claudeCode: {
+      structuredGeneration: options.model ? { model: options.model } : undefined,
+      agenticSession: options.model ? { model: options.model } : undefined,
+    },
   });
 
   const checkWorthinessClassifier = new BatchedCheckWorthinessClassifier(structuredGeneration);
