@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { parseShadowDirectives } from "./directives.ts";
 import { MalformedDirectiveError } from "./errors.ts";
+import { buildShadowSystemPrompt, RULEBOOK_DIRECTIVE_TAG } from "./system-prompt.ts";
 import { expectRejection } from "./test-helpers.ts";
 
 describe("parseShadowDirectives", () => {
@@ -101,6 +102,78 @@ describe("parseShadowDirectives", () => {
       "```",
     ].join("\n");
     expect(() => parseShadowDirectives(text)).toThrow(MalformedDirectiveError);
+  });
+
+  test("parses a rulebook directive with only required fields", () => {
+    const text = [
+      "```shadow:rulebook",
+      JSON.stringify({
+        slug: "rnb-loan-agreement",
+        title: "RNB Loan Agreement",
+        docPath: "/tmp/rnb_loan.pdf",
+      }),
+      "```",
+    ].join("\n");
+    const parsed = parseShadowDirectives(text);
+    expect(parsed.rulebooks).toHaveLength(1);
+    expect(parsed.rulebooks[0]).toEqual({
+      slug: "rnb-loan-agreement",
+      title: "RNB Loan Agreement",
+      docPath: "/tmp/rnb_loan.pdf",
+    });
+  });
+
+  test("parses a rulebook directive with optional fields", () => {
+    const text = [
+      "```shadow:rulebook",
+      JSON.stringify({
+        slug: "sar-filing",
+        title: "SAR Filing Rules",
+        docPath: "/tmp/sar.pdf",
+        scope: "focus on filing deadlines, not exemptions",
+        constraints: ["keep group titles under 6 words"],
+        maxGroups: 8,
+      }),
+      "```",
+    ].join("\n");
+    const parsed = parseShadowDirectives(text);
+    expect(parsed.rulebooks).toHaveLength(1);
+    expect(parsed.rulebooks[0]).toEqual({
+      slug: "sar-filing",
+      title: "SAR Filing Rules",
+      docPath: "/tmp/sar.pdf",
+      scope: "focus on filing deadlines, not exemptions",
+      constraints: ["keep group titles under 6 words"],
+      maxGroups: 8,
+    });
+  });
+
+  test("throws MalformedDirectiveError on invalid JSON in a rulebook block", () => {
+    const text = ["```shadow:rulebook", "{not json", "```"].join("\n");
+    expect(() => parseShadowDirectives(text)).toThrow(MalformedDirectiveError);
+  });
+
+  test("throws MalformedDirectiveError when a rulebook slug is not kebab-case", () => {
+    const text = [
+      "```shadow:rulebook",
+      JSON.stringify({ slug: "Not Kebab Case", title: "X", docPath: "/tmp/doc.md" }),
+      "```",
+    ].join("\n");
+    expect(() => parseShadowDirectives(text)).toThrow(MalformedDirectiveError);
+  });
+
+  test("throws MalformedDirectiveError when a rulebook directive is missing docPath", () => {
+    const text = ["```shadow:rulebook", JSON.stringify({ slug: "x", title: "X" }), "```"].join(
+      "\n",
+    );
+    expect(() => parseShadowDirectives(text)).toThrow(MalformedDirectiveError);
+  });
+});
+
+describe("buildShadowSystemPrompt", () => {
+  test("mentions the shadow:rulebook directive tag", () => {
+    const prompt = buildShadowSystemPrompt();
+    expect(prompt).toContain(RULEBOOK_DIRECTIVE_TAG);
   });
 });
 

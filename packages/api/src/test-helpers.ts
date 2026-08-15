@@ -13,7 +13,8 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { ShadowAgent } from "@shadow/agent";
-import { FileSystemVolumeStore, type VolumeSlug } from "@shadow/core";
+import { FakeRuleBookPort } from "@shadow/agent/test-helpers";
+import { FileSystemRulebookStore, FileSystemVolumeStore, type VolumeSlug } from "@shadow/core";
 import {
   type CheckWorthinessClassifier,
   type CheckWorthinessInput,
@@ -33,6 +34,7 @@ import {
   FakeStructuredGenerationPort,
 } from "@shadow/model";
 import type { ResearchBrief, ResearchBriefPort, ResearchResult } from "@shadow/research";
+import type { RuleBookPort } from "@shadow/rulebook";
 import { ConversationRegistry } from "./conversation-registry.ts";
 import type { ApiDeps } from "./deps.ts";
 import { createServer } from "./server.ts";
@@ -86,6 +88,8 @@ export interface WithApiOptions {
   /** Scripts Shadow's replies. @default a plain echo. */
   readonly respond?: FakeAgenticTurnResponder;
   readonly researchBriefPort?: ResearchBriefPort;
+  /** @default `FakeRuleBookPort` with no scripts (fails loudly if a `shadow:rulebook` directive ever calls it — no test in this harness currently issues one). */
+  readonly ruleBookPort?: RuleBookPort;
   readonly checkWorthinessClassifier?: CheckWorthinessClassifier;
   readonly entailmentRelevanceJudge?: EntailmentRelevanceJudge;
   readonly claimRestater?: ClaimRestater;
@@ -99,10 +103,13 @@ export async function withApi<T>(fn: (harness: TestHarness) => Promise<T>): Prom
     const evidenceStore = new FileSystemEvidenceStore(volumeStore);
     const indexer = new StructuralIndexer({ rootDir: root });
     const sessions = new FakeAgenticSessionPort();
+    const rulebookStore = new FileSystemRulebookStore(root);
+    const rulebookEvidenceStore = new FileSystemEvidenceStore(rulebookStore);
 
     const shadowAgent = new ShadowAgent({
       agenticSessionPort: sessions,
       researchBriefPort: unusedResearchBriefPort,
+      ruleBookPort: new FakeRuleBookPort([]),
       volumeStore,
       evidenceStore,
       indexer,
@@ -126,6 +133,8 @@ export async function withApi<T>(fn: (harness: TestHarness) => Promise<T>): Prom
       structuredGenerationPort: new FakeStructuredGenerationPort(),
       missLog: new InMemoryMissLog(),
       shadowAgent,
+      rulebookStore,
+      rulebookEvidenceStore,
       conversations: new ConversationRegistry(),
     };
 
@@ -146,7 +155,7 @@ export async function withApi<T>(fn: (harness: TestHarness) => Promise<T>): Prom
   }
 }
 
-/** Like `withApi`, but lets the caller fully script the conversation (a scripted `FakeAgenticSessionPort` responder and, if needed, Tier 2 verdicts) — for chat/SSE tests that need Shadow to emit `shadow:chapter`/`shadow:research` directives. */
+/** Like `withApi`, but lets the caller fully script the conversation (a scripted `FakeAgenticSessionPort` responder and, if needed, Tier 2 verdicts) — for chat/SSE tests that need Shadow to emit `shadow:chapter`/`shadow:research`/`shadow:rulebook` directives. */
 export async function withScriptedApi<T>(
   options: WithApiOptions,
   fn: (harness: TestHarness) => Promise<T>,
@@ -157,6 +166,8 @@ export async function withScriptedApi<T>(
     const evidenceStore = new FileSystemEvidenceStore(volumeStore);
     const indexer = new StructuralIndexer({ rootDir: root });
     const sessions = new FakeAgenticSessionPort(options.respond);
+    const rulebookStore = new FileSystemRulebookStore(root);
+    const rulebookEvidenceStore = new FileSystemEvidenceStore(rulebookStore);
 
     const checkWorthinessClassifier =
       options.checkWorthinessClassifier ?? alwaysNarrativeClassifier;
@@ -170,6 +181,7 @@ export async function withScriptedApi<T>(
     const shadowAgent = new ShadowAgent({
       agenticSessionPort: sessions,
       researchBriefPort: options.researchBriefPort ?? unusedResearchBriefPort,
+      ruleBookPort: options.ruleBookPort ?? new FakeRuleBookPort([]),
       volumeStore,
       evidenceStore,
       indexer,
@@ -189,6 +201,8 @@ export async function withScriptedApi<T>(
       structuredGenerationPort: new FakeStructuredGenerationPort(),
       missLog: new InMemoryMissLog(),
       shadowAgent,
+      rulebookStore,
+      rulebookEvidenceStore,
       conversations: new ConversationRegistry(),
     };
 

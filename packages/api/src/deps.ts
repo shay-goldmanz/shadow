@@ -10,7 +10,7 @@
  */
 
 import type { ShadowAgent } from "@shadow/agent";
-import type { VolumeStore } from "@shadow/core";
+import type { RulebookStore, VolumeStore } from "@shadow/core";
 import type {
   CheckWorthinessClassifier,
   ClaimRestater,
@@ -37,6 +37,22 @@ export interface ApiDeps {
   readonly structuredGenerationPort: StructuredGenerationPort;
   readonly missLog: MissLogStore;
   readonly shadowAgent: ShadowAgent;
+  /**
+   * The rule book bundle store (`<shadow-root>/rulebooks/<slug>/`) — used
+   * only by `handlers/rulebooks.ts`'s read endpoints. `RuleBookPort`
+   * writes through this same store internally (`composition.ts`); handlers
+   * never construct or write to it directly, only read.
+   */
+  readonly rulebookStore: RulebookStore;
+  /**
+   * `EvidenceStore` scoped over `rulebookStore` rather than `volumeStore` —
+   * a rule book's groups are chapter-shaped documents (`RulebookStore`'s
+   * module doc) with their own claim sidecars and audit records, keyed by
+   * `(rulebookSlug, groupSlug)` exactly like a volume's chapters. Used by
+   * `GET /api/rulebooks/:slug/groups/:group` to mirror
+   * `GET .../chapters/:chapter`'s `{ chapter, claims?, audit? }` shape.
+   */
+  readonly rulebookEvidenceStore: EvidenceStore;
   /**
    * In-memory registry of live conversations, keyed by the `sessionId` the
    * `session` SSE event hands the client (`handlers/chat.ts`). Reusing the

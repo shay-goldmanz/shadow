@@ -93,6 +93,13 @@ since research is slow and silence reads as failure:
 | `chapter.restated` | `{ claim, from, to, reason, outcome }` | conservative repair, or an escalation |
 | `chapter.published` | `{ volume, chapter }` | passed the audit and was written |
 | `chapter.rejected` | `{ volume, chapter, issues }` | failed the audit; **not** an error |
+| `rulebook.started` | `{ slug, docPath }` | a `shadow:rulebook` directive began running |
+| `rulebook.planned` | `{ slug, chunkCount, groups }` | taxonomy planned; `groups` is the proposed group-slug list |
+| `rulebook.chunk` | `{ slug, completed, total, rulesSoFar, cached, failed }` | one chunk finished extraction |
+| `rulebook.merged` | `{ slug, ruleCount, droppedQuotes, consolidated }` | rules validated and consolidated across chunks |
+| `rulebook.group.audited` | `{ slug, group, passed, repairs, issues }` | one group's Chain-of-Evidence audit finished — **may be a failure** |
+| `rulebook.completed` | `{ slug, result }` | `result` is the full `RulebookResult` (rule/group counts, published/rejected groups, failed chunks, usage) |
+| `rulebook.failed` | `{ slug, error }` | the run failed outright; **not** an `error` event — the turn continues |
 | `error` | `{ message, code }` | terminal for this turn |
 | `done` | `{}` | turn complete |
 
@@ -122,6 +129,31 @@ ones.
 
 `chapter.restated` is deliberately visible in the stream: D9 requires that what Shadow softened
 and why stays in front of the operator rather than being quietly cleaned up.
+
+## Rule books
+
+```
+GET /api/rulebooks                        → { rulebooks: RulebookSummary[] }
+GET /api/rulebooks/:slug                  → { rulebook, groups: GroupSummary[] }
+GET /api/rulebooks/:slug/groups/:group    → { group, claims?, audit? }
+```
+
+Read-only. A rule book is only ever written by a `shadow:rulebook` chat directive
+(`RuleBookPort.create`, streamed as the `rulebook.*` SSE events above) — these three endpoints
+exist for a client to fetch what a run already produced, nothing more.
+
+`RulebookSummary` is `{ slug, title, status, groupCount, updatedAt }` — the list view, one entry
+per rule book, `groupCount` from `listGroups().length`. `GroupSummary` is
+`{ slug, title, status, ruleCount }` — `ruleCount` is the group's footnote-marker count
+(`[^label]`), cheap to compute from the already-loaded body rather than re-parsing the claim
+sidecar just to count entries.
+
+**`GET .../groups/:group` deliberately mirrors `GET .../chapters/:chapter`**: a group is a
+chapter-shaped document (own claim sidecar, own audit record, keyed by
+`(rulebookSlug, groupSlug)` exactly like a volume's `(volume, chapter)`), so its response has the
+same shape and the same optionality — `claims`/`audit` are `undefined` until the group has been
+through `publishGroup` at least once. A rule book's evidence store is a second, separate
+`EvidenceStore` instance scoped over its own directory tree, not the volume evidence store.
 
 ## Wire types
 

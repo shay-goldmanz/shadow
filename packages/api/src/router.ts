@@ -15,6 +15,7 @@ import { postChat } from "./handlers/chat.ts";
 import { getLedger, getSnapshot, getSource } from "./handlers/evidence.ts";
 import { getIndex, reindex } from "./handlers/indexing.ts";
 import { getLint } from "./handlers/lint.ts";
+import { getRulebook, getRulebookGroup, listRulebooks } from "./handlers/rulebooks.ts";
 import {
   createVolume,
   deleteVolume,
@@ -85,6 +86,18 @@ export function buildRoutes(deps: ApiDeps) {
     },
     "/api/chat": {
       POST: bind(deps, postChat),
+      OPTIONS: () => corsPreflightResponse(),
+    },
+    "/api/rulebooks": {
+      GET: bind(deps, listRulebooks),
+      OPTIONS: () => corsPreflightResponse(),
+    },
+    "/api/rulebooks/:slug": {
+      GET: bind(deps, getRulebook),
+      OPTIONS: () => corsPreflightResponse(),
+    },
+    "/api/rulebooks/:slug/groups/:group": {
+      GET: bind(deps, getRulebookGroup),
       OPTIONS: () => corsPreflightResponse(),
     },
   } as const;

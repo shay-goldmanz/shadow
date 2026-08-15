@@ -32,8 +32,11 @@ import {
 import {
   ChapterNotFoundError,
   ChapterParseError,
+  GroupNotFoundError,
   InvalidSlugError,
   ReservedFrontmatterKeyError,
+  RulebookNotFoundError,
+  RulebookParseError,
   VolumeAlreadyExistsError,
   VolumeNotFoundError,
   VolumeParseError,
@@ -100,6 +103,9 @@ const PILLAR_ERROR_TABLE: ReadonlyArray<readonly [AnyErrorCtor, number, string]>
   [ChapterNotFoundError, 404, "chapter_not_found"],
   [ChapterParseError, 500, "chapter_parse_error"],
   [VolumeParseError, 500, "volume_parse_error"],
+  [RulebookNotFoundError, 404, "rulebook_not_found"],
+  [GroupNotFoundError, 404, "group_not_found"],
+  [RulebookParseError, 500, "rulebook_parse_error"],
 
   // ---- @shadow/evidence ----
   [InvalidIdError, 400, "invalid_id"],

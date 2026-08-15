@@ -19,7 +19,7 @@
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { ShadowAgent } from "@shadow/agent";
-import { FileSystemVolumeStore } from "@shadow/core";
+import { FileSystemRulebookStore, FileSystemVolumeStore } from "@shadow/core";
 import {
   BatchedCheckWorthinessClassifier,
   BatchedClaimRestater,
@@ -34,6 +34,7 @@ import {
   UnavailableSearchProvider,
   WebResearchToolAgent,
 } from "@shadow/research";
+import { RulebookToolAgent } from "@shadow/rulebook";
 import { ConversationRegistry } from "./conversation-registry.ts";
 import type { ApiDeps } from "./deps.ts";
 
@@ -82,6 +83,29 @@ export function buildRealApiDeps(options: BuildRealApiDepsOptions = {}): ApiDeps
   const entailmentRelevanceJudge = new BatchedEntailmentRelevanceJudge(structuredGeneration);
   const claimRestater = new BatchedClaimRestater(structuredGeneration);
 
+  // Rule books live in their own bundle kind under the same shadow root
+  // (`RulebookStore`'s module doc) — not a volume. Its evidence store is a
+  // second `FileSystemEvidenceStore` instance scoped over `rulebookStore`
+  // rather than `volumeStore`, since a group's claim sidecar/audit/sources
+  // are keyed by `(rulebookSlug, groupSlug)`, structurally identical to a
+  // volume's `(volume, chapter)` but a genuinely separate directory tree.
+  const rulebookStore = new FileSystemRulebookStore(root);
+  const rulebookEvidenceStore = new FileSystemEvidenceStore(rulebookStore);
+
+  // Reuses the already-constructed `structuredGeneration` port and the
+  // three Tier 2 `Batched*` adapters above rather than building a second
+  // set — the rule book pipeline's audit gate (`publishGroup`) needs the
+  // exact same Tier 2 ports a chapter's audit does, and there is no reason
+  // for two separate instances of each to exist in one process.
+  const ruleBookPort = new RulebookToolAgent({
+    rulebookStore,
+    evidenceStore: rulebookEvidenceStore,
+    structuredGeneration,
+    checkWorthinessClassifier,
+    entailmentRelevanceJudge,
+    claimRestater,
+  });
+
   // `AgenticSearchProvider` is a deliberately separate, narrow session from
   // `researchBriefPort`'s own (see that class's module doc, and
   // `agentic-search-provider.ts`'s) — it is the one thing in this wiring
@@ -116,6 +140,7 @@ export function buildRealApiDeps(options: BuildRealApiDepsOptions = {}): ApiDeps
   const shadowAgent = new ShadowAgent({
     agenticSessionPort: agenticSession,
     researchBriefPort,
+    ruleBookPort,
     volumeStore,
     evidenceStore,
     indexer,
@@ -148,6 +173,8 @@ export function buildRealApiDeps(options: BuildRealApiDepsOptions = {}): ApiDeps
     // exactly the split T2.7 already fixed on the CLI side.
     missLog: new FileMissLog(join(root, "misses.jsonl")),
     shadowAgent,
+    rulebookStore,
+    rulebookEvidenceStore,
     conversations: new ConversationRegistry(),
   };
 }

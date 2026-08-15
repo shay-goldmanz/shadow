@@ -65,8 +65,9 @@ import type { Indexer } from "@shadow/indexing";
 import type { AgenticSession, AgenticSessionPort } from "@shadow/model";
 import type { ResearchBrief, ResearchBriefPort, ResearchResult } from "@shadow/research";
 import { recordSessionTranscriptSource } from "@shadow/research";
+import type { RuleBookPort, RulebookBrief, RulebookResult } from "@shadow/rulebook";
 import { draftChapter } from "./chapter-draft.ts";
-import type { ChapterDirective, ResearchDirective } from "./directives.ts";
+import type { ChapterDirective, ResearchDirective, RulebookDirective } from "./directives.ts";
 import { parseShadowDirectives } from "./directives.ts";
 import { AutoTurnBudgetExceededError } from "./errors.ts";
 import { publishChapter } from "./publish.ts";
@@ -76,6 +77,7 @@ import { buildShadowSystemPrompt } from "./system-prompt.ts";
 export interface ShadowAgentDeps {
   readonly agenticSessionPort: AgenticSessionPort;
   readonly researchBriefPort: ResearchBriefPort;
+  readonly ruleBookPort: RuleBookPort;
   readonly volumeStore: VolumeStore;
   readonly evidenceStore: EvidenceStore;
   readonly indexer: Indexer;
@@ -129,6 +131,39 @@ export type ShadowEvent =
       readonly chapter: ChapterSlug;
       readonly issues: readonly CheckIssue[];
     }
+  | { readonly type: "rulebook-started"; readonly slug: string; readonly docPath: string }
+  | {
+      readonly type: "rulebook-planned";
+      readonly slug: string;
+      readonly chunkCount: number;
+      readonly groups: readonly string[];
+    }
+  | {
+      readonly type: "rulebook-chunk";
+      readonly slug: string;
+      readonly completed: number;
+      readonly total: number;
+      readonly rulesSoFar: number;
+      readonly cached: boolean;
+      readonly failed: boolean;
+    }
+  | {
+      readonly type: "rulebook-merged";
+      readonly slug: string;
+      readonly ruleCount: number;
+      readonly droppedQuotes: number;
+      readonly consolidated: number;
+    }
+  | {
+      readonly type: "rulebook-group-audited";
+      readonly slug: string;
+      readonly group: string;
+      readonly passed: boolean;
+      readonly repairs: number;
+      readonly issues: readonly string[];
+    }
+  | { readonly type: "rulebook-completed"; readonly slug: string; readonly result: RulebookResult }
+  | { readonly type: "rulebook-failed"; readonly slug: string; readonly error: string }
   | { readonly type: "error"; readonly error: string };
 
 function toResearchBrief(volume: VolumeSlug, directive: ResearchDirective): ResearchBrief {
@@ -138,6 +173,17 @@ function toResearchBrief(volume: VolumeSlug, directive: ResearchDirective): Rese
     subjectDomains: directive.subjectDomains,
     constraints: directive.constraints,
     maxSources: directive.maxSources,
+  };
+}
+
+function toRulebookBrief(directive: RulebookDirective): RulebookBrief {
+  return {
+    slug: directive.slug,
+    title: directive.title,
+    docPath: directive.docPath,
+    scope: directive.scope,
+    constraints: directive.constraints,
+    maxGroups: directive.maxGroups,
   };
 }
 
@@ -188,6 +234,30 @@ function formatChapterOutcome(
 
 function formatChapterDraftFailure(slug: string, error: string): string {
   return `Your shadow:chapter block for "${slug}" could not be drafted: ${error}. Fix and resubmit.`;
+}
+
+function formatRulebookCompletion(result: RulebookResult): string {
+  const lines = [
+    `Rule book "${result.slug}" finished: ${result.ruleCount} rule(s) across ` +
+      `${result.groupCount} group(s).`,
+    `Published groups: ${result.publishedGroups.length > 0 ? result.publishedGroups.join(", ") : "none"}.`,
+  ];
+  if (result.rejectedGroups.length > 0) {
+    lines.push(`Rejected groups (failed their audit): ${result.rejectedGroups.join(", ")}.`);
+  }
+  if (result.failedChunks > 0) {
+    lines.push(
+      `${result.failedChunks} chunk(s) of the source document failed extraction outright — the ` +
+        `rule book cannot be considered complete until this is resolved.`,
+    );
+  }
+  const isStable = result.rejectedGroups.length === 0 && result.failedChunks === 0;
+  lines.push(isStable ? "The rule book is stable." : "The rule book remains in draft.");
+  return lines.join(" ");
+}
+
+function formatRulebookFailure(slug: string, error: string): string {
+  return `Rule book "${slug}" failed: ${error}.`;
 }
 
 /** Shadow's per-conversation handle: one `AgenticSession`, reused for every `sendMessage` call (D6). Create via `ShadowAgent.startConversation`. */
@@ -272,7 +342,11 @@ export class ShadowConversation {
       yield { type: "assistant-message", text: finalText };
 
       const directives = parseShadowDirectives(finalText);
-      if (directives.research.length === 0 && directives.chapters.length === 0) {
+      if (
+        directives.research.length === 0 &&
+        directives.chapters.length === 0 &&
+        directives.rulebooks.length === 0
+      ) {
         return;
       }
 
@@ -284,6 +358,11 @@ export class ShadowConversation {
       }
       for (const directive of directives.chapters) {
         for await (const event of this.runChapterDirective(directive, followUps)) {
+          yield event;
+        }
+      }
+      for (const directive of directives.rulebooks) {
+        for await (const event of this.runRulebookDirective(directive, followUps)) {
           yield event;
         }
       }
@@ -342,6 +421,68 @@ export class ShadowConversation {
       yield { type: "chapter-rejected", volume: this.volume, chapter: slug, issues };
     }
     followUps.push(formatChapterOutcome(slug, result.published, issues, result.repairs));
+  }
+
+  private async *runRulebookDirective(
+    directive: RulebookDirective,
+    followUps: string[],
+  ): AsyncGenerator<ShadowEvent, void, undefined> {
+    const brief = toRulebookBrief(directive);
+    for await (const event of this.deps.ruleBookPort.create(brief)) {
+      switch (event.type) {
+        case "started":
+          yield { type: "rulebook-started", slug: event.slug, docPath: event.docPath };
+          break;
+        case "planned":
+          yield {
+            type: "rulebook-planned",
+            slug: directive.slug,
+            chunkCount: event.chunkCount,
+            groups: event.groups,
+          };
+          break;
+        case "chunk-extracted":
+          yield {
+            type: "rulebook-chunk",
+            slug: directive.slug,
+            completed: event.completed,
+            total: event.total,
+            rulesSoFar: event.rulesSoFar,
+            cached: event.cached,
+            failed: event.failed,
+          };
+          break;
+        case "merged":
+          yield {
+            type: "rulebook-merged",
+            slug: directive.slug,
+            ruleCount: event.ruleCount,
+            droppedQuotes: event.droppedQuotes,
+            consolidated: event.consolidated,
+          };
+          break;
+        case "group-audited":
+          yield {
+            type: "rulebook-group-audited",
+            slug: directive.slug,
+            group: event.group,
+            passed: event.passed,
+            repairs: event.repairs,
+            issues: event.issues,
+          };
+          break;
+        case "completed":
+          yield { type: "rulebook-completed", slug: directive.slug, result: event.result };
+          followUps.push(formatRulebookCompletion(event.result));
+          break;
+        case "failed":
+          // A port-level `failed` event is data, not a thrown error — the
+          // turn continues with a failure follow-up rather than aborting.
+          yield { type: "rulebook-failed", slug: directive.slug, error: event.error };
+          followUps.push(formatRulebookFailure(directive.slug, event.error));
+          break;
+      }
+    }
   }
 
   private async getOrCreateSession(): Promise<AgenticSession> {

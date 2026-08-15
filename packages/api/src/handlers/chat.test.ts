@@ -1,6 +1,9 @@
 import { describe, expect, test } from "bun:test";
+import { FakeRuleBookPort } from "@shadow/agent/test-helpers";
 import { toVolumeSlug } from "@shadow/core";
 import type { FakeAgenticTurnResponder } from "@shadow/model";
+import { ZERO_USAGE } from "@shadow/model";
+import type { RulebookEvent, RulebookResult } from "@shadow/rulebook";
 import { readAllSseEvents, seedVolume, withScriptedApi } from "../test-helpers.ts";
 
 describe("Chat — SSE", () => {
@@ -199,5 +202,173 @@ describe("Chat — SSE", () => {
         expect(events.at(-1)?.event).toBe("done");
       },
     );
+  });
+
+  test("a shadow:rulebook block maps every RulebookEvent to its rulebook.* SSE counterpart", async () => {
+    const result: RulebookResult = {
+      slug: "rnb-loan-agreement",
+      sourceId: "src_rnb_loan",
+      ruleCount: 12,
+      groupCount: 2,
+      publishedGroups: ["borrower-obligations"],
+      rejectedGroups: ["fees"],
+      failedChunks: 0,
+      assemblyDroppedQuotes: 0,
+      assemblyDroppedRules: 0,
+      usage: ZERO_USAGE,
+    };
+    const script: RulebookEvent[] = [
+      { type: "started", slug: "rnb-loan-agreement", docPath: "/tmp/rnb_loan.pdf" },
+      { type: "planned", chunkCount: 5, groups: ["borrower-obligations", "fees"] },
+      {
+        type: "chunk-extracted",
+        completed: 1,
+        total: 5,
+        rulesSoFar: 3,
+        cached: false,
+        failed: false,
+      },
+      { type: "merged", ruleCount: 14, droppedQuotes: 1, consolidated: 12 },
+      {
+        type: "group-audited",
+        group: "borrower-obligations",
+        passed: true,
+        repairs: 0,
+        issues: [],
+      },
+      { type: "completed", result },
+    ];
+    const ruleBookPort = new FakeRuleBookPort([script]);
+
+    const respond: FakeAgenticTurnResponder = (_prompt, { turnIndex }) => {
+      if (turnIndex === 0) {
+        return {
+          text: [
+            "```shadow:rulebook",
+            JSON.stringify({
+              slug: "rnb-loan-agreement",
+              title: "RNB Loan Agreement",
+              docPath: "/tmp/rnb_loan.pdf",
+            }),
+            "```",
+          ].join("\n"),
+        };
+      }
+      return { text: "Done." };
+    };
+
+    await withScriptedApi({ respond, ruleBookPort }, async ({ baseUrl, deps }) => {
+      const volume = toVolumeSlug("design-craft");
+      await seedVolume(deps, volume);
+
+      const res = await fetch(`${baseUrl}/api/chat`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          volumeSlug: "design-craft",
+          message: "Build a rule book from /tmp/rnb_loan.pdf",
+        }),
+      });
+      expect(res.status).toBe(200);
+      const events = await readAllSseEvents(res);
+
+      const byEvent = (name: string) => events.filter((e) => e.event === name);
+
+      expect(byEvent("rulebook.started")).toHaveLength(1);
+      expect(byEvent("rulebook.started")[0]?.data).toEqual({
+        slug: "rnb-loan-agreement",
+        docPath: "/tmp/rnb_loan.pdf",
+      });
+
+      expect(byEvent("rulebook.planned")[0]?.data).toEqual({
+        slug: "rnb-loan-agreement",
+        chunkCount: 5,
+        groups: ["borrower-obligations", "fees"],
+      });
+
+      expect(byEvent("rulebook.chunk")[0]?.data).toEqual({
+        slug: "rnb-loan-agreement",
+        completed: 1,
+        total: 5,
+        rulesSoFar: 3,
+        cached: false,
+        failed: false,
+      });
+
+      expect(byEvent("rulebook.merged")[0]?.data).toEqual({
+        slug: "rnb-loan-agreement",
+        ruleCount: 14,
+        droppedQuotes: 1,
+        consolidated: 12,
+      });
+
+      expect(byEvent("rulebook.group.audited")[0]?.data).toEqual({
+        slug: "rnb-loan-agreement",
+        group: "borrower-obligations",
+        passed: true,
+        repairs: 0,
+        issues: [],
+      });
+
+      const completed = byEvent("rulebook.completed");
+      expect(completed).toHaveLength(1);
+      expect(completed[0]?.data).toEqual({ slug: "rnb-loan-agreement", result });
+
+      expect(events.some((e) => e.event === "rulebook.failed")).toBe(false);
+      expect(events.at(-1)?.event).toBe("done");
+    });
+  });
+
+  test("a failed RulebookEvent maps to a rulebook.failed SSE event, not an error", async () => {
+    const script: RulebookEvent[] = [
+      { type: "started", slug: "broken-doc", docPath: "/tmp/broken.pdf" },
+      { type: "failed", error: "document could not be decoded" },
+    ];
+    const ruleBookPort = new FakeRuleBookPort([script]);
+
+    const respond: FakeAgenticTurnResponder = (_prompt, { turnIndex }) => {
+      if (turnIndex === 0) {
+        return {
+          text: [
+            "```shadow:rulebook",
+            JSON.stringify({
+              slug: "broken-doc",
+              title: "Broken Doc",
+              docPath: "/tmp/broken.pdf",
+            }),
+            "```",
+          ].join("\n"),
+        };
+      }
+      return { text: "Done." };
+    };
+
+    await withScriptedApi({ respond, ruleBookPort }, async ({ baseUrl, deps }) => {
+      const volume = toVolumeSlug("design-craft");
+      await seedVolume(deps, volume);
+
+      const res = await fetch(`${baseUrl}/api/chat`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          volumeSlug: "design-craft",
+          message: "Build a rule book from /tmp/broken.pdf",
+        }),
+      });
+      expect(res.status).toBe(200);
+      const events = await readAllSseEvents(res);
+
+      expect(events.some((e) => e.event === "rulebook.failed")).toBe(true);
+      const failed = events.find((e) => e.event === "rulebook.failed");
+      expect(failed?.data).toEqual({
+        slug: "broken-doc",
+        error: "document could not be decoded",
+      });
+      // A port-level `failed` event is data, not a thrown fault — no
+      // top-level SSE `error` event, same as `@shadow/agent`'s own
+      // "failed is a follow-up, not a rejection" contract.
+      expect(events.some((e) => e.event === "error")).toBe(false);
+      expect(events.at(-1)?.event).toBe("done");
+    });
   });
 });

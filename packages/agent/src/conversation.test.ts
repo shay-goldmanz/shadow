@@ -22,12 +22,14 @@ import { join } from "node:path";
 import { toChapterSlug } from "@shadow/core";
 import type { IndexDocument } from "@shadow/indexing";
 import type { AgenticSessionOptions, FakeAgenticTurnResponder } from "@shadow/model";
-import { FakeAgenticSessionPort } from "@shadow/model";
+import { FakeAgenticSessionPort, ZERO_USAGE } from "@shadow/model";
 import type { Finding, ResearchBrief, ResearchResult } from "@shadow/research";
+import type { RulebookEvent, RulebookResult } from "@shadow/rulebook";
 import { ShadowAgent, type ShadowAgentDeps, type ShadowEvent } from "./conversation.ts";
 import {
   alwaysNarrativeClassifier,
   FakeResearchBriefPort,
+  FakeRuleBookPort,
   freshIndexer,
   scriptedClaimRestater,
   scriptedEntailmentJudge,
@@ -234,6 +236,7 @@ describe("ShadowConversation — critical path", () => {
         const deps: ShadowAgentDeps = {
           agenticSessionPort: sessions,
           researchBriefPort: research,
+          ruleBookPort: new FakeRuleBookPort([]),
           volumeStore,
           evidenceStore,
           indexer: freshIndexer(root),
@@ -346,6 +349,7 @@ describe("ShadowConversation — a conversational reply with no directives ends 
         const deps: ShadowAgentDeps = {
           agenticSessionPort: sessions,
           researchBriefPort: research,
+          ruleBookPort: new FakeRuleBookPort([]),
           volumeStore,
           evidenceStore,
           indexer: freshIndexer(root),
@@ -384,6 +388,7 @@ describe("ShadowConversation — a second sendMessage reuses the same session (D
         const deps: ShadowAgentDeps = {
           agenticSessionPort: sessions,
           researchBriefPort: research,
+          ruleBookPort: new FakeRuleBookPort([]),
           volumeStore,
           evidenceStore,
           indexer: freshIndexer(root),
@@ -421,6 +426,212 @@ describe("ShadowConversation — a second sendMessage reuses the same session (D
 
         await conversation.dispose();
         expect(sessions.sessions[0]?.isClosed).toBe(true);
+      });
+    });
+  });
+});
+
+describe("ShadowConversation — shadow:rulebook directive", () => {
+  test("a shadow:rulebook block runs the RuleBookPort, maps its events, and feeds a summary follow-up", async () => {
+    await withVolumeHarness(async ({ evidenceStore, volumeStore, volume, root }) => {
+      await withSessionCwd(async (sessionCwd) => {
+        const research = new FakeResearchBriefPort(evidenceStore, () => {
+          throw new Error("should not be called");
+        });
+
+        const result: RulebookResult = {
+          slug: "rnb-loan-agreement",
+          sourceId: "src_rnb_loan",
+          ruleCount: 12,
+          groupCount: 3,
+          publishedGroups: ["borrower-obligations", "default-remedies"],
+          rejectedGroups: ["fees"],
+          failedChunks: 0,
+          assemblyDroppedQuotes: 0,
+          assemblyDroppedRules: 0,
+          usage: ZERO_USAGE,
+        };
+        const script: RulebookEvent[] = [
+          { type: "started", slug: "rnb-loan-agreement", docPath: "/tmp/rnb_loan.pdf" },
+          {
+            type: "planned",
+            chunkCount: 5,
+            groups: ["borrower-obligations", "default-remedies", "fees"],
+          },
+          {
+            type: "chunk-extracted",
+            completed: 1,
+            total: 5,
+            rulesSoFar: 3,
+            cached: false,
+            failed: false,
+          },
+          { type: "merged", ruleCount: 14, droppedQuotes: 1, consolidated: 12 },
+          {
+            type: "group-audited",
+            group: "borrower-obligations",
+            passed: true,
+            repairs: 0,
+            issues: [],
+          },
+          {
+            type: "group-audited",
+            group: "fees",
+            passed: false,
+            repairs: 1,
+            issues: ["unsupported claim"],
+          },
+          { type: "completed", result },
+        ];
+        const ruleBookPort = new FakeRuleBookPort([script]);
+
+        const sessions = new FakeAgenticSessionPort((_prompt, context) => {
+          if (context.turnIndex === 0) {
+            return {
+              text: [
+                "Building that rule book now.",
+                "```shadow:rulebook",
+                JSON.stringify({
+                  slug: "rnb-loan-agreement",
+                  title: "RNB Loan Agreement",
+                  docPath: "/tmp/rnb_loan.pdf",
+                }),
+                "```",
+              ].join("\n"),
+            };
+          }
+          return { text: "Done." };
+        });
+
+        const deps: ShadowAgentDeps = {
+          agenticSessionPort: sessions,
+          researchBriefPort: research,
+          ruleBookPort,
+          volumeStore,
+          evidenceStore,
+          indexer: freshIndexer(root),
+          checkWorthinessClassifier: alwaysNarrativeClassifier,
+          entailmentRelevanceJudge: scriptedEntailmentJudge(),
+          claimRestater: scriptedClaimRestater(() => {
+            throw new Error("should not be called");
+          }),
+          sessionCwd,
+        };
+
+        const agent = new ShadowAgent(deps);
+        const conversation = agent.startConversation(volume);
+
+        const events: ShadowEvent[] = [];
+        for await (const event of conversation.sendMessage(
+          "Build a rule book from /tmp/rnb_loan.pdf",
+        )) {
+          events.push(event);
+        }
+
+        expect(ruleBookPort.briefs).toHaveLength(1);
+        expect(ruleBookPort.briefs[0]).toEqual({
+          slug: "rnb-loan-agreement",
+          title: "RNB Loan Agreement",
+          docPath: "/tmp/rnb_loan.pdf",
+          scope: undefined,
+          constraints: undefined,
+          maxGroups: undefined,
+        });
+
+        expect(events.map((e) => e.type)).toEqual([
+          "operator-turn-recorded",
+          "assistant-message",
+          "rulebook-started",
+          "rulebook-planned",
+          "rulebook-chunk",
+          "rulebook-merged",
+          "rulebook-group-audited",
+          "rulebook-group-audited",
+          "rulebook-completed",
+          "assistant-message",
+        ]);
+
+        const completed = events.find((e) => e.type === "rulebook-completed") as Extract<
+          ShadowEvent,
+          { type: "rulebook-completed" }
+        >;
+        expect(completed.result).toEqual(result);
+
+        // --- the follow-up summary reached Shadow's next auto-turn --------
+        expect(sessions.sessions).toHaveLength(1);
+        const secondPrompt = sessions.sessions[0]?.prompts[1];
+        expect(secondPrompt).toContain("rnb-loan-agreement");
+        expect(secondPrompt).toContain("12 rule(s)");
+        expect(secondPrompt).toContain("Rejected groups");
+        expect(secondPrompt).toContain("fees");
+
+        expect(events.some((e) => e.type === "error")).toBe(false);
+      });
+    });
+  });
+
+  test("a port-level failed event yields rulebook-failed and a failure follow-up, without throwing", async () => {
+    await withVolumeHarness(async ({ evidenceStore, volumeStore, volume, root }) => {
+      await withSessionCwd(async (sessionCwd) => {
+        const research = new FakeResearchBriefPort(evidenceStore, () => {
+          throw new Error("should not be called");
+        });
+
+        const script: RulebookEvent[] = [
+          { type: "started", slug: "broken-doc", docPath: "/tmp/broken.pdf" },
+          { type: "failed", error: "document could not be decoded" },
+        ];
+        const ruleBookPort = new FakeRuleBookPort([script]);
+
+        const sessions = new FakeAgenticSessionPort((_prompt, context) => {
+          if (context.turnIndex === 0) {
+            return {
+              text: [
+                "```shadow:rulebook",
+                JSON.stringify({
+                  slug: "broken-doc",
+                  title: "Broken Doc",
+                  docPath: "/tmp/broken.pdf",
+                }),
+                "```",
+              ].join("\n"),
+            };
+          }
+          return { text: "Understood, I'll wait for a fixed file." };
+        });
+
+        const deps: ShadowAgentDeps = {
+          agenticSessionPort: sessions,
+          researchBriefPort: research,
+          ruleBookPort,
+          volumeStore,
+          evidenceStore,
+          indexer: freshIndexer(root),
+          checkWorthinessClassifier: alwaysNarrativeClassifier,
+          entailmentRelevanceJudge: scriptedEntailmentJudge(),
+          claimRestater: scriptedClaimRestater(() => {
+            throw new Error("should not be called");
+          }),
+          sessionCwd,
+        };
+
+        const agent = new ShadowAgent(deps);
+        const conversation = agent.startConversation(volume);
+
+        const events: ShadowEvent[] = [];
+        for await (const event of conversation.sendMessage(
+          "Build a rule book from /tmp/broken.pdf",
+        )) {
+          events.push(event);
+        }
+
+        expect(events.some((e) => e.type === "rulebook-failed")).toBe(true);
+        expect(events.some((e) => e.type === "rulebook-completed")).toBe(false);
+        expect(events.some((e) => e.type === "error")).toBe(false);
+
+        const secondPrompt = sessions.sessions[0]?.prompts[1];
+        expect(secondPrompt).toContain("broken-doc");
+        expect(secondPrompt).toContain("document could not be decoded");
       });
     });
   });

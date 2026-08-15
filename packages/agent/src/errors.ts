@@ -44,17 +44,17 @@ export class SkillInstallError extends ShadowAgentError {
 }
 
 /**
- * A ```shadow:research``` or ```shadow:chapter``` fenced block in Shadow's
- * own turn text was not valid JSON, or did not match the expected shape.
- * This is Shadow (the model) misusing its own protocol, not an operator
- * error — surfaced distinctly so a caller can log it and feed the reason
- * back for a retry.
+ * A ```shadow:research```, ```shadow:chapter```, or ```shadow:rulebook```
+ * fenced block in Shadow's own turn text was not valid JSON, or did not
+ * match the expected shape. This is Shadow (the model) misusing its own
+ * protocol, not an operator error — surfaced distinctly so a caller can log
+ * it and feed the reason back for a retry.
  */
 export class MalformedDirectiveError extends ShadowAgentError {
   override readonly name = "MalformedDirectiveError";
 
   constructor(
-    public readonly kind: "research" | "chapter",
+    public readonly kind: "research" | "chapter" | "rulebook",
     public readonly raw: string,
     public readonly reason: string,
   ) {

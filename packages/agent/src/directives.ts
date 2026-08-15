@@ -9,9 +9,10 @@
  * it and feed the reason back on the next turn for Shadow to fix.
  */
 
+import { GROUP_SLUG_PATTERN } from "@shadow/rulebook";
 import { z } from "zod";
 import { MalformedDirectiveError } from "./errors.ts";
-import { RESEARCH_DIRECTIVE_TAG } from "./system-prompt.ts";
+import { RESEARCH_DIRECTIVE_TAG, RULEBOOK_DIRECTIVE_TAG } from "./system-prompt.ts";
 
 const claimKindSchema = z.enum(["sourced", "derived", "operator"]);
 const confidenceSchema = z.enum(["high", "medium", "provisional"]);
@@ -60,18 +61,29 @@ const chapterDirectiveSchema = z.object({
   claims: z.array(claimDirectiveSchema),
 });
 
+const rulebookDirectiveSchema = z.object({
+  slug: z.string().regex(GROUP_SLUG_PATTERN),
+  title: z.string().min(1),
+  docPath: z.string().min(1),
+  scope: z.string().optional(),
+  constraints: z.array(z.string().min(1)).optional(),
+  maxGroups: z.number().int().positive().max(32).optional(),
+});
+
 export type ClaimKindDirective = z.infer<typeof claimKindSchema>;
 export type ChapterClaimEvidenceInput = z.infer<typeof evidenceRefSchema>;
 export type ChapterClaimDirective = z.infer<typeof claimDirectiveSchema>;
 export type ResearchDirective = z.infer<typeof researchDirectiveSchema>;
 export type ChapterDirective = z.infer<typeof chapterDirectiveSchema>;
+export type RulebookDirective = z.infer<typeof rulebookDirectiveSchema>;
 
 export interface ParsedDirectives {
   readonly research: readonly ResearchDirective[];
   readonly chapters: readonly ChapterDirective[];
+  readonly rulebooks: readonly RulebookDirective[];
 }
 
-const DIRECTIVE_PATTERN = /```(shadow:research|shadow:chapter)\n([\s\S]*?)\n```/g;
+const DIRECTIVE_PATTERN = /```(shadow:research|shadow:chapter|shadow:rulebook)\n([\s\S]*?)\n```/g;
 
 function zodIssuesToReason(error: z.ZodError): string {
   return error.issues
@@ -83,11 +95,17 @@ function zodIssuesToReason(error: z.ZodError): string {
 export function parseShadowDirectives(text: string): ParsedDirectives {
   const research: ResearchDirective[] = [];
   const chapters: ChapterDirective[] = [];
+  const rulebooks: RulebookDirective[] = [];
 
   for (const match of text.matchAll(DIRECTIVE_PATTERN)) {
     const tag = match[1];
     const raw = match[2] ?? "";
-    const kind: "research" | "chapter" = tag === RESEARCH_DIRECTIVE_TAG ? "research" : "chapter";
+    const kind: "research" | "chapter" | "rulebook" =
+      tag === RESEARCH_DIRECTIVE_TAG
+        ? "research"
+        : tag === RULEBOOK_DIRECTIVE_TAG
+          ? "rulebook"
+          : "chapter";
 
     let parsed: unknown;
     try {
@@ -106,6 +124,12 @@ export function parseShadowDirectives(text: string): ParsedDirectives {
         throw new MalformedDirectiveError(kind, raw, zodIssuesToReason(result.error));
       }
       research.push(result.data);
+    } else if (kind === "rulebook") {
+      const result = rulebookDirectiveSchema.safeParse(parsed);
+      if (!result.success) {
+        throw new MalformedDirectiveError(kind, raw, zodIssuesToReason(result.error));
+      }
+      rulebooks.push(result.data);
     } else {
       const result = chapterDirectiveSchema.safeParse(parsed);
       if (!result.success) {
@@ -115,5 +139,5 @@ export function parseShadowDirectives(text: string): ParsedDirectives {
     }
   }
 
-  return { research, chapters };
+  return { research, chapters, rulebooks };
 }

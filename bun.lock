@@ -22,6 +22,7 @@
         "@shadow/indexing": "workspace:*",
         "@shadow/model": "workspace:*",
         "@shadow/research": "workspace:*",
+        "@shadow/rulebook": "workspace:*",
         "zod": "^4.4.3",
       },
     },
@@ -35,6 +36,7 @@
         "@shadow/indexing": "workspace:*",
         "@shadow/model": "workspace:*",
         "@shadow/research": "workspace:*",
+        "@shadow/rulebook": "workspace:*",
       },
     },
     "packages/cli": {

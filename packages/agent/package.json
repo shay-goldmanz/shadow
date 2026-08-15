@@ -15,6 +15,7 @@
     "@shadow/indexing": "workspace:*",
     "@shadow/model": "workspace:*",
     "@shadow/research": "workspace:*",
+    "@shadow/rulebook": "workspace:*",
     "zod": "^4.4.3"
   }
 }

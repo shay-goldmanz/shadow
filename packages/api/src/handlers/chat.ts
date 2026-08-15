@@ -246,6 +246,54 @@ export async function postChat(deps: ApiDeps, req: BunRequest<"/api/chat">): Pro
                 issues: event.issues,
               });
               break;
+            case "rulebook-started":
+              send("rulebook.started", { slug: event.slug, docPath: event.docPath });
+              break;
+            case "rulebook-planned":
+              send("rulebook.planned", {
+                slug: event.slug,
+                chunkCount: event.chunkCount,
+                groups: event.groups,
+              });
+              break;
+            case "rulebook-chunk":
+              send("rulebook.chunk", {
+                slug: event.slug,
+                completed: event.completed,
+                total: event.total,
+                rulesSoFar: event.rulesSoFar,
+                cached: event.cached,
+                failed: event.failed,
+              });
+              break;
+            case "rulebook-merged":
+              send("rulebook.merged", {
+                slug: event.slug,
+                ruleCount: event.ruleCount,
+                droppedQuotes: event.droppedQuotes,
+                consolidated: event.consolidated,
+              });
+              break;
+            case "rulebook-group-audited":
+              send("rulebook.group.audited", {
+                slug: event.slug,
+                group: event.group,
+                passed: event.passed,
+                repairs: event.repairs,
+                issues: event.issues,
+              });
+              break;
+            case "rulebook-completed":
+              // The full `RulebookResult` passes through unstripped — the
+              // operator needs rule/group counts, which groups
+              // published/were rejected, failed-chunk count, and usage to
+              // judge the run, the same reasoning `chapter.published`
+              // above doesn't need (a chapter has no equivalent summary).
+              send("rulebook.completed", { slug: event.slug, result: event.result });
+              break;
+            case "rulebook-failed":
+              send("rulebook.failed", { slug: event.slug, error: event.error });
+              break;
             case "error":
               // `docs/API.md`: "terminal for this turn." `ShadowEvent`'s
               // `error` carries only a string, no stable code — this isn't

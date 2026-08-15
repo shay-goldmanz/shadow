@@ -24,6 +24,7 @@ import {
 } from "@shadow/evidence";
 import { StructuralIndexer } from "@shadow/indexing";
 import type { Finding, ResearchBrief, ResearchBriefPort, ResearchResult } from "@shadow/research";
+import type { RuleBookPort, RulebookBrief, RulebookEvent } from "@shadow/rulebook";
 
 // biome-ignore lint/suspicious/noExplicitAny: constructor signatures are inherently heterogeneous
 type ErrorConstructor<E> = new (...args: any[]) => E;
@@ -170,4 +171,34 @@ export function scriptedClaimRestater(proposalFor: RestatementProposalFn): Claim
   return {
     restate: async (inputs: readonly RestatementCandidateInput[]) => inputs.map(proposalFor),
   };
+}
+
+// ---------------------------------------------------------------------------
+// A fake `RuleBookPort`: replays one scripted event sequence per `create()`
+// call, in call order. Records every brief it was handed so a test can
+// assert the directive was translated correctly.
+// ---------------------------------------------------------------------------
+
+/** Scripted `RuleBookPort`: `scripts[n]` is the event sequence replayed on the (n+1)th `create()` call. Throws if `create` is called more times than there are scripts. */
+export class FakeRuleBookPort implements RuleBookPort {
+  readonly briefs: RulebookBrief[] = [];
+  private callIndex = 0;
+
+  constructor(private readonly scripts: readonly (readonly RulebookEvent[])[]) {}
+
+  create(brief: RulebookBrief): AsyncIterable<RulebookEvent> {
+    this.briefs.push(brief);
+    const index = this.callIndex++;
+    const script = this.scripts[index];
+    if (!script) {
+      throw new Error(
+        `FakeRuleBookPort.create called more times (${index + 1}) than scripts provided (${this.scripts.length})`,
+      );
+    }
+    return (async function* () {
+      for (const event of script) {
+        yield event;
+      }
+    })();
+  }
 }
