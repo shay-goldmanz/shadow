@@ -193,52 +193,26 @@ describe("finalizeGroups", () => {
     }
   });
 
-  test("splits a group exceeding maxRulesPerGroup into -2, -3, ... in rule order, inheriting parent metadata", async () => {
-    const { root, rulebookStore, slug } = await makeRulebookStore("split-basic");
+  test("a group with no cap on rule count stays a single group, however large", async () => {
+    const { root, rulebookStore, slug } = await makeRulebookStore("no-split-large-group");
     try {
-      const rules = Array.from({ length: 5 }, (_, i) => rule({ label: `r-${i}` }));
+      // 90 rules, all assigned "payments" — there is no per-group rule cap
+      // (since removed), so this stays exactly one group carrying every
+      // label, never split into `-2`/`-3` siblings.
+      const rules = manyRules(90);
       const groups = [group({ slug: "payments", title: "Payments" })];
 
-      const structuredGeneration = new FakeStructuredGenerationPort([
-        { assignments: rules.map((r) => ({ label: r.label, group: "payments" })) },
-      ]);
-
       const result = await finalizeGroups(
-        { structuredGeneration, rulebookStore },
-        { rulebookSlug: slug, rules, groups, maxRulesPerGroup: 2 },
+        { structuredGeneration: new FakeStructuredGenerationPort(respondAssigningAllTo("payments")), rulebookStore },
+        { rulebookSlug: slug, rules, groups, batchSize: 60 },
       );
 
-      expect(result.groups.map((g) => g.slug)).toEqual(["payments", "payments-2", "payments-3"]);
-      expect(result.groups.map((g) => g.title)).toEqual(["Payments", "Payments (2)", "Payments (3)"]);
-      // Every split still carries the parent's routing metadata.
-      expect(result.groups.every((g) => g.when_to_use === groups[0]?.when_to_use)).toBe(true);
-
-      expect(result.assignments.get("r-0")).toBe("payments");
-      expect(result.assignments.get("r-1")).toBe("payments");
-      expect(result.assignments.get("r-2")).toBe("payments-2");
-      expect(result.assignments.get("r-3")).toBe("payments-2");
-      expect(result.assignments.get("r-4")).toBe("payments-3");
-    } finally {
-      await rm(root, { recursive: true, force: true });
-    }
-  });
-
-  test("does not split a group exactly at maxRulesPerGroup", async () => {
-    const { root, rulebookStore, slug } = await makeRulebookStore("split-exact");
-    try {
-      const rules = Array.from({ length: 2 }, (_, i) => rule({ label: `r-${i}` }));
-      const groups = [group({ slug: "payments" })];
-
-      const structuredGeneration = new FakeStructuredGenerationPort([
-        { assignments: rules.map((r) => ({ label: r.label, group: "payments" })) },
-      ]);
-
-      const result = await finalizeGroups(
-        { structuredGeneration, rulebookStore },
-        { rulebookSlug: slug, rules, groups, maxRulesPerGroup: 2 },
-      );
-
+      expect(result.totalBatches).toBe(2);
       expect(result.groups.map((g) => g.slug)).toEqual(["payments"]);
+      expect(result.assignments.size).toBe(90);
+      for (const r of rules) {
+        expect(result.assignments.get(r.label)).toBe("payments");
+      }
     } finally {
       await rm(root, { recursive: true, force: true });
     }
@@ -253,7 +227,7 @@ describe("finalizeGroups", () => {
 
       const batchedResult = await finalizeGroups(
         { structuredGeneration: new FakeStructuredGenerationPort(respondAssigningAllTo("payments")), rulebookStore },
-        { rulebookSlug: slug, rules, groups, maxRulesPerGroup: 40, batchSize: 5 },
+        { rulebookSlug: slug, rules, groups, batchSize: 5 },
       );
 
       const singleBatchResult = await finalizeGroups(
@@ -261,7 +235,7 @@ describe("finalizeGroups", () => {
           structuredGeneration: new FakeStructuredGenerationPort(respondAssigningAllTo("payments")),
           rulebookStore: reference.rulebookStore,
         },
-        { rulebookSlug: reference.slug, rules, groups, maxRulesPerGroup: 40, batchSize: 1000 },
+        { rulebookSlug: reference.slug, rules, groups, batchSize: 1000 },
       );
 
       expect(batchedResult.totalBatches).toBe(8); // ceil(37 / 5)
@@ -274,48 +248,6 @@ describe("finalizeGroups", () => {
     } finally {
       await rm(root, { recursive: true, force: true });
       await rm(reference.root, { recursive: true, force: true });
-    }
-  });
-
-  test("global split correctness across batch boundaries: a group whose rules straddle two different batches still splits once, correctly, not once per batch", async () => {
-    const { root, rulebookStore, slug } = await makeRulebookStore("split-across-batches");
-    try {
-      // 90 rules, all assigned "payments" — with batchSize 60, this straddles
-      // two batches (60 + 30). maxRulesPerGroup 40 must still split the
-      // GLOBAL bucket of 90 into 40/40/10 (three groups), never split
-      // per-batch (which would wrongly yield 40/20 from batch one and 30
-      // from batch two — four groups, with a broken rule count in the last
-      // one of the first batch's split).
-      const rules = manyRules(90);
-      const groups = [group({ slug: "payments", title: "Payments" })];
-
-      const result = await finalizeGroups(
-        { structuredGeneration: new FakeStructuredGenerationPort(respondAssigningAllTo("payments")), rulebookStore },
-        { rulebookSlug: slug, rules, groups, maxRulesPerGroup: 40, batchSize: 60 },
-      );
-
-      expect(result.totalBatches).toBe(2);
-      expect(result.groups.map((g) => g.slug)).toEqual(["payments", "payments-2", "payments-3"]);
-
-      const countsBySlug = new Map<string, number>();
-      for (const slugAssigned of result.assignments.values()) {
-        countsBySlug.set(slugAssigned, (countsBySlug.get(slugAssigned) ?? 0) + 1);
-      }
-      expect(countsBySlug.get("payments")).toBe(40);
-      expect(countsBySlug.get("payments-2")).toBe(40);
-      expect(countsBySlug.get("payments-3")).toBe(10);
-
-      // The split boundary follows overall rule order (r-00000 .. r-00089),
-      // not batch order — r-00039 (index 39, the 40th rule) is the last rule
-      // in the first split even though it falls in the first 60-rule batch,
-      // and r-00040 (index 40, still within the first batch) is already in
-      // the second split.
-      expect(result.assignments.get("r-00039")).toBe("payments");
-      expect(result.assignments.get("r-00040")).toBe("payments-2");
-      expect(result.assignments.get("r-00079")).toBe("payments-2");
-      expect(result.assignments.get("r-00080")).toBe("payments-3");
-    } finally {
-      await rm(root, { recursive: true, force: true });
     }
   });
 
@@ -494,7 +426,7 @@ describe("finalizeGroups", () => {
 
       const result = await finalizeGroups(
         { structuredGeneration: new FakeStructuredGenerationPort(respondAssigningAllTo("payments")), rulebookStore },
-        { rulebookSlug: slug, rules, groups, maxRulesPerGroup: total },
+        { rulebookSlug: slug, rules, groups },
       );
 
       expect(result.totalBatches).toBe(2);
@@ -534,7 +466,7 @@ describe("finalizeGroups", () => {
     // module must sort by label before batching/bucketing rather than trust
     // that order. Two runs over the same rule set, shuffled differently,
     // must hit the identical per-batch cache key and land every rule in the
-    // identical (possibly split) group.
+    // identical group.
     const forward = await makeRulebookStore("determinism-forward");
     const shuffled = await makeRulebookStore("determinism-shuffled");
     try {
@@ -545,7 +477,7 @@ describe("finalizeGroups", () => {
       const forwardPort = new FakeStructuredGenerationPort(respondAssigningAllTo("payments"));
       const forwardResult = await finalizeGroups(
         { structuredGeneration: forwardPort, rulebookStore: forward.rulebookStore },
-        { rulebookSlug: forward.slug, rules, groups, maxRulesPerGroup: 40, batchSize: 60 },
+        { rulebookSlug: forward.slug, rules, groups, batchSize: 60 },
       );
 
       // Same rules, arrival order reversed, batch size shifted so batch
@@ -554,7 +486,7 @@ describe("finalizeGroups", () => {
       const shuffledPort = new FakeStructuredGenerationPort(respondAssigningAllTo("payments"));
       const shuffledResult = await finalizeGroups(
         { structuredGeneration: shuffledPort, rulebookStore: shuffled.rulebookStore },
-        { rulebookSlug: shuffled.slug, rules: reversedRules, groups, maxRulesPerGroup: 40, batchSize: 37 },
+        { rulebookSlug: shuffled.slug, rules: reversedRules, groups, batchSize: 37 },
       );
 
       const byLabel = (a: readonly [string, string], b: readonly [string, string]) => a[0].localeCompare(b[0]);
@@ -571,13 +503,13 @@ describe("finalizeGroups", () => {
       try {
         await finalizeGroups(
           { structuredGeneration: new FakeStructuredGenerationPort(respondAssigningAllTo("payments")), rulebookStore: primed.rulebookStore },
-          { rulebookSlug: primed.slug, rules, groups, maxRulesPerGroup: 40, batchSize: 60 },
+          { rulebookSlug: primed.slug, rules, groups, batchSize: 60 },
         );
 
         const rerunPort = new FakeStructuredGenerationPort([]); // no fixtures queued — a call would throw
         const rerun = await finalizeGroups(
           { structuredGeneration: rerunPort, rulebookStore: primed.rulebookStore },
-          { rulebookSlug: primed.slug, rules: reversedRules, groups, maxRulesPerGroup: 40, batchSize: 60 },
+          { rulebookSlug: primed.slug, rules: reversedRules, groups, batchSize: 60 },
         );
 
         expect(rerun.cachedBatches).toBe(rerun.totalBatches);

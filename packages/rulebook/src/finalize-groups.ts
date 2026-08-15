@@ -18,11 +18,8 @@
  * (`stream-concurrency.ts`'s `streamWithConcurrency`, bounded by
  * `FinalizeGroupsArgs.concurrency`). **Every batch's `assignments` is
  * concatenated into one `responseByLabel` map before any bucketing
- * happens** — the client-side bucket/split/drop pass below runs exactly
- * once, globally, over the merged responses. Bucketing per batch instead
- * would fabricate `-2`/`-3` splits at batch boundaries that shouldn't
- * exist (a group with 25 rules in batch 1 and 25 in batch 2 must split
- * once at 40, not twice at 25).
+ * happens** — the client-side bucket/drop pass below runs exactly once,
+ * globally, over the merged responses.
  *
  * **Memoized per batch**, mirroring `extraction.ts`'s pattern: keyed off a
  * hash of the group menu, a hash of that batch's rules, and the effective
@@ -41,15 +38,12 @@
  * - A label the merged responses don't cover at all falls back to that
  *   rule's own chunk-proposed group (validated against the menu the same
  *   way).
- * - A group whose bucket exceeds `maxRulesPerGroup` (default
- *   {@link DEFAULT_MAX_RULES_PER_GROUP}) splits into `<slug>-2`, `<slug>-3`,
- *   ... in rule order — the first `maxRulesPerGroup` rules keep the
- *   original slug/title, each subsequent chunk gets a `-N`-suffixed slug and
- *   a `(N)`-suffixed title, both inheriting every other field from the
- *   parent plan.
  * - A group with zero rules assigned to it (its bucket is empty) is dropped
  *   from the final group list entirely — nothing downstream (`assembly.ts`)
- *   ever sees an empty group.
+ *   ever sees an empty group. There is no cap on how many rules a single
+ *   group can carry (the prior 40-rule split was removed) — a group's
+ *   bucket, however large, stays one group and drives one audit batch
+ *   downstream, i.e. one C3/C5 judge call over every claim in that group.
  */
 
 import type { RulebookStore, VolumeSlug } from "@shadow/core";
@@ -58,9 +52,6 @@ import { GENERAL_GROUP_SLUG } from "./taxonomy.ts";
 import type { ConsolidatedRule } from "./merge.ts";
 import { type GroupAssignment, groupFinalizationSchema, type TaxonomyGroup } from "./schemas.ts";
 import { streamWithConcurrency } from "./stream-concurrency.ts";
-
-/** Groups larger than this split client-side into `<slug>-2`, `-3`, ... */
-export const DEFAULT_MAX_RULES_PER_GROUP = 40;
 
 /** Bump on a meaningful prompt/instruction change — invalidates every cached batch's assignments. */
 export const FINALIZE_PROMPT_VERSION = "v1";
@@ -85,8 +76,6 @@ export interface FinalizeGroupsArgs {
   readonly rules: readonly ConsolidatedRule[];
   /** The taxonomy's final group menu (`planTaxonomy`'s output, `general` included). */
   readonly groups: readonly TaxonomyGroup[];
-  /** Default {@link DEFAULT_MAX_RULES_PER_GROUP}. */
-  readonly maxRulesPerGroup?: number;
   /** Caps in-flight batch calls (see `stream-concurrency.ts`'s `streamWithConcurrency`). Default 6. */
   readonly concurrency?: number;
   /** Test-only override of {@link FINALIZE_BATCH_SIZE} — lets tests compare a multi-batch run against a single-batch run over the byte-identical input to prove batch-boundary neutrality. Production callers should not set this. */
@@ -96,9 +85,9 @@ export interface FinalizeGroupsArgs {
 }
 
 export interface FinalizeGroupsResult {
-  /** Every rule's label mapped to its final (possibly `-N`-suffixed) group slug. */
+  /** Every rule's label mapped to its final group slug. */
   readonly assignments: ReadonlyMap<string, string>;
-  /** The final group list — only groups with at least one assigned rule, in menu order, splits inserted immediately after their parent. */
+  /** The final group list — only groups with at least one assigned rule, in menu order. */
   readonly groups: readonly TaxonomyGroup[];
   readonly usage: TokenUsage;
   /** Batches served from the cache rather than a fresh LLM call. */
@@ -200,10 +189,10 @@ async function finalizeBatch(
  * Reconcile every rule's chunk-proposed group against the taxonomy's final
  * menu with batched, parallel, memoized structured calls (one per batch of
  * up to {@link FINALIZE_BATCH_SIZE} rules — see module doc for why batching
- * is semantically neutral), then deterministically bucket, split, and drop
- * groups client-side exactly once over the merged responses.
- * Short-circuits (no call at all) when `rules` is empty — the degenerate
- * "nothing survived extraction/validation" path.
+ * is semantically neutral), then deterministically bucket and drop groups
+ * client-side exactly once over the merged responses. Short-circuits (no
+ * call at all) when `rules` is empty — the degenerate "nothing survived
+ * extraction/validation" path.
  */
 export async function finalizeGroups(
   deps: FinalizeGroupsDeps,
@@ -213,17 +202,16 @@ export async function finalizeGroups(
     return { assignments: new Map(), groups: [], usage: ZERO_USAGE, cachedBatches: 0, totalBatches: 0 };
   }
 
-  // Sort by label before batching/bucketing. `args.rules`' incoming order
-  // follows chunk-extraction COMPLETION order (`consolidateRules` preserves
+  // Sort by label before batching. `args.rules`' incoming order follows
+  // chunk-extraction COMPLETION order (`consolidateRules` preserves
   // first-seen order over whatever `streamWithConcurrency` handed it), which
   // is nondeterministic even on an otherwise byte-identical, fully-cached
-  // re-run. That instability propagated two ways: each batch's
-  // `batchRulesHash` (this file's cache key) depended on which rules
-  // happened to land in it, so a warm re-run's arrival order could shuffle
-  // rules between batches and miss a cache that should have hit; and the
-  // client-side split below buckets in `rules` order, so which rules land in
-  // a `-2`/`-3` split group could drift run to run. Sorting once here, up
-  // front, makes both deterministic for a given rule set.
+  // re-run. That instability propagated into each batch's `batchRulesHash`
+  // (this file's cache key): it depended on which rules happened to land in
+  // it, so a warm re-run's arrival order could shuffle rules between batches
+  // and miss a cache that should have hit. Sorting once here, up front,
+  // makes batch membership — and so the cache key — a pure function of the
+  // rule set, not of arrival order.
   const rules = [...args.rules].sort((a, b) => a.label.localeCompare(b.label));
 
   const knownSlugs = new Set(args.groups.map((group) => group.slug));
@@ -266,7 +254,6 @@ export async function finalizeGroups(
     }
   }
 
-  const maxRulesPerGroup = args.maxRulesPerGroup ?? DEFAULT_MAX_RULES_PER_GROUP;
   const assignments = new Map<string, string>();
   const finalGroups: TaxonomyGroup[] = [];
 
@@ -274,20 +261,8 @@ export async function finalizeGroups(
     const labels = labelsByGroup.get(group.slug);
     if (!labels || labels.length === 0) continue; // empty groups dropped
 
-    if (labels.length <= maxRulesPerGroup) {
-      finalGroups.push(group);
-      for (const label of labels) assignments.set(label, group.slug);
-      continue;
-    }
-
-    for (let start = 0, splitIndex = 1; start < labels.length; start += maxRulesPerGroup, splitIndex++) {
-      const chunkLabels = labels.slice(start, start + maxRulesPerGroup);
-      const isFirstSplit = splitIndex === 1;
-      const splitSlug = isFirstSplit ? group.slug : `${group.slug}-${splitIndex}`;
-      const splitTitle = isFirstSplit ? group.title : `${group.title} (${splitIndex})`;
-      finalGroups.push({ ...group, slug: splitSlug, title: splitTitle });
-      for (const label of chunkLabels) assignments.set(label, splitSlug);
-    }
+    finalGroups.push(group);
+    for (const label of labels) assignments.set(label, group.slug);
   }
 
   return { assignments, groups: finalGroups, usage, cachedBatches, totalBatches: batches.length };
