@@ -6,9 +6,13 @@
  * `AgenticSessionPort` (tools, skills, subagents, streaming) — over the two
  * transports decided in `DECISIONS.md` D5, and owns session reuse (D6).
  *
- * Invariant this package exists to enforce: the entire stack runs on the
- * operator's subscription. `assertSubscriptionAuth` fails loudly rather
- * than let a call silently fall back to an API key — see `guardrail.ts`.
+ * Invariant this package exists to enforce: the default `"claude-code"`
+ * provider strategy runs on the operator's subscription —
+ * `assertSubscriptionAuth` fails loudly rather than let a call silently fall
+ * back to an API key (see `guardrail.ts`). `"bedrock"` is an opt-in second
+ * strategy (D26) with its own AWS-SDK-credential-chain auth, selected only
+ * by explicitly passing `provider: "bedrock"` to `createModel` — see
+ * `factory.ts`.
  *
  * Callers depend on the port interfaces exported here, never on a concrete
  * adapter (`ClaudeCodeStructuredGenerationPort` /
@@ -16,6 +20,11 @@
  * through the factory functions below). Tests depend on the fakes.
  */
 
+export type {
+  BedrockAgenticSessionDefaults,
+  BedrockAgenticSessionPortDeps,
+} from "./adapters/bedrock-agentic-session.ts";
+export { createBedrockAgenticSessionPort } from "./adapters/bedrock-agentic-session.ts";
 export type {
   BedrockStructuredGenerationOptions,
   BedrockStructuredGenerationPortDeps,

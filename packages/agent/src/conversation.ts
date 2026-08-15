@@ -350,6 +350,10 @@ export class ShadowConversation {
     const cwd = this.deps.sessionCwd ?? join(homedir(), ".shadow");
     await ensureWritingVolumesSkillInstalled(cwd);
 
+    // This options literal's shape (cwd/systemPrompt/skills/settingSources/
+    // allowedTools/disallowedTools/permissionMode) is mirrored by hand in
+    // `@shadow/model`'s `bedrock-agentic-session.test.ts` "conversation-harness
+    // proof" test — update both together.
     this.session = this.deps.agenticSessionPort.createSession({
       model: this.deps.model,
       cwd,

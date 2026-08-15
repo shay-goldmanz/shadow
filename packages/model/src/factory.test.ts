@@ -43,12 +43,16 @@ describe("createModel — provider strategy selection (D26)", () => {
     expect(typeof model.structuredGeneration.generate).toBe("function");
   });
 
-  test("provider: 'bedrock' still stubs agenticSession: createSession throws the clear not-yet-implemented error", () => {
+  test("provider: 'bedrock' builds a real agenticSession port: createSession succeeds and returns a working handle", () => {
     const model = createModel({ provider: "bedrock" });
-    expect(() => model.agenticSession.createSession()).toThrow(/not implemented yet/);
+    const session = model.agenticSession.createSession();
+    expect(typeof session.stream).toBe("function");
+    // No turn is sent — that would be a live Bedrock call — construction and
+    // `createSession` alone must not touch the network.
+    expect(session.sessionId).toBeUndefined();
   });
 
-  test("bedrock options (model/region/apiKey) are forwarded to the structuredGeneration adapter, not dropped", () => {
+  test("bedrock options (model/region/apiKey) are forwarded to both adapters, not dropped", () => {
     // No live call is made — this only proves construction succeeds when
     // every `BedrockModelOptions` field is supplied, guarding against a
     // future edit silently ignoring one.

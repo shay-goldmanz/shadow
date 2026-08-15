@@ -14,12 +14,13 @@
  * untouched) when omitted. `"bedrock"` is a second strategy that
  * authenticates via the AWS SDK's own credential chain instead — see D26 for
  * why that's a deliberate amendment, not a silent bypass, of D5's
- * acceptance criterion. The structured-generation half now has a real
- * adapter (over `@ai-sdk/amazon-bedrock`); `agenticSession` is still a stub,
- * which throws only when `createSession(...)` is actually called, not at
- * construction — see `createBedrockModel`.
+ * acceptance criterion. Both ports have real adapters: `structuredGeneration`
+ * over `@ai-sdk/amazon-bedrock`, and `agenticSession` over Vercel AI SDK
+ * `streamText`, whose tool-loop design is documented in
+ * `adapters/bedrock-agentic-session.ts` — see `createBedrockModel`.
  */
 
+import { createBedrockAgenticSessionPort } from "./adapters/bedrock-agentic-session.ts";
 import { createBedrockStructuredGenerationPort } from "./adapters/bedrock-structured-generation.ts";
 import {
   type ClaudeAgentSdkSessionDefaults,
@@ -29,7 +30,7 @@ import {
   type ClaudeCodeStructuredGenerationOptions,
   createClaudeCodeStructuredGenerationPort,
 } from "./adapters/claude-code-structured-generation.ts";
-import type { AgenticSession, AgenticSessionPort } from "./ports/agentic-session.ts";
+import type { AgenticSessionPort } from "./ports/agentic-session.ts";
 import type { StructuredGenerationPort } from "./ports/structured-generation.ts";
 
 export interface Model {
@@ -47,8 +48,9 @@ export interface ClaudeCodeModelOptions {
 }
 
 /**
- * Options for the `"bedrock"` strategy. `model` is the one option every
- * caller of this factory already knows how to supply (a short name like
+ * Options for the `"bedrock"` strategy, shared by both of its adapters
+ * (structured generation and agentic session). `model` is the one option
+ * every caller of this factory already knows how to supply (a short name like
  * `"sonnet"` or a full Bedrock inference-profile id — see
  * `bedrock-structured-generation.ts`'s `MODEL_SHORT_NAMES`). `region` and
  * `apiKey` are optional overrides for the same adapter's settings — both
@@ -102,20 +104,12 @@ function createClaudeCodeModel(options: ClaudeCodeModelOptions = {}): Model {
 /** Fallback region when neither `BedrockModelOptions.region` nor `AWS_REGION` is set. Documented default, not a silent guess — see `BedrockModelOptions`'s doc. */
 const BEDROCK_DEFAULT_REGION = "us-east-1";
 
-/** The agentic-session stub message — same shape as the original construction-time throw, scoped down now that the structured-generation half has a real adapter. */
-const BEDROCK_AGENTIC_SESSION_STUB_MESSAGE =
-  "@shadow/model: bedrock agenticSession is not implemented yet " +
-  "(see docs/DECISIONS.md D26).";
-
 /**
- * The `"bedrock"` strategy (D26). The structured-generation half now has a
- * real adapter over `@ai-sdk/amazon-bedrock`; `agenticSession` is still a
- * stub — constructing this `Model` never throws (structured generation is
- * real and usable immediately), but calling
- * `agenticSession.createSession(...)` does, so selecting `"bedrock"` before
- * the agentic-session adapter lands fails loudly and immediately at the
- * point of actual use rather than handing back something that behaves like
- * a real port.
+ * The `"bedrock"` strategy (D26). Both ports are real: structured generation
+ * over `generateObject`, agentic sessions over `streamText`'s own multi-step
+ * tool loop (see `adapters/bedrock-agentic-session.ts` for the loop design).
+ * `region`/`apiKey` are shared by both adapters, same as `model` defaulting
+ * per port via the one shared `BEDROCK_DEFAULT_MODEL`.
  */
 function createBedrockModel(options: BedrockModelOptions = {}): Model {
   const region = options.region ?? process.env.AWS_REGION ?? BEDROCK_DEFAULT_REGION;
@@ -126,10 +120,10 @@ function createBedrockModel(options: BedrockModelOptions = {}): Model {
       region,
       apiKey: options.apiKey,
     }),
-    agenticSession: {
-      createSession(): AgenticSession {
-        throw new Error(BEDROCK_AGENTIC_SESSION_STUB_MESSAGE);
-      },
-    },
+    agenticSession: createBedrockAgenticSessionPort({
+      model: options.model,
+      region,
+      apiKey: options.apiKey,
+    }),
   };
 }

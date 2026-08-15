@@ -48,9 +48,21 @@ export interface ToolServerHandle {
   readonly toolNames: readonly string[];
 }
 
-/** `ToolServerHandle` plus the real Agent SDK config, visible only inside this package. */
+/**
+ * `ToolServerHandle` plus everything an adapter needs to actually run these
+ * tools, visible only inside this package. Two adapters, two different
+ * needs from the same handle: `config` is the Claude Agent SDK's opaque
+ * in-process MCP server descriptor (`claude-agent-sdk-session.ts` drops it
+ * straight into `Options.mcpServers`); `definitions` is the plain
+ * `ToolDefinition` list this server was built from (`bedrock-agentic-session.ts`
+ * has no MCP transport to speak of, so it converts each definition directly
+ * into an AI SDK `tool()` and calls `handler` itself — see that file's
+ * `buildTools`).
+ */
 export interface ResolvedToolServerHandle extends ToolServerHandle {
   readonly config: unknown;
+  // biome-ignore lint/suspicious/noExplicitAny: same heterogeneous-array rationale as `createToolServer`'s `tools` parameter below
+  readonly definitions: ReadonlyArray<ToolDefinition<any>>;
 }
 
 /** Define one tool. Pass the result to `createToolServer` to make it callable. */
@@ -98,5 +110,6 @@ export function createToolServer(
     name: serverName,
     toolNames: tools.map((definition) => definition.name),
     config,
+    definitions: tools,
   };
 }

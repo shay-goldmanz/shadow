@@ -31,8 +31,14 @@ import { addUsage, type TokenUsage, ZERO_USAGE } from "../usage.ts";
 /** The provider instance `createAmazonBedrock` returns — kept as a `ReturnType` so this file needs no separate type import for it. */
 type AmazonBedrockProvider = ReturnType<typeof createAmazonBedrock>;
 
-/** Reasonable default for tool-less structured work, same rationale as Port 1's claude-code adapter: balanced cost/quality. Resolved through `MODEL_SHORT_NAMES` below like any other short name. */
-const BEDROCK_DEFAULT_MODEL = "sonnet";
+/**
+ * Reasonable default for tool-less structured work, same rationale as Port
+ * 1's claude-code adapter: balanced cost/quality. Resolved through
+ * `MODEL_SHORT_NAMES` below like any other short name. Exported so
+ * `bedrock-agentic-session.ts` shares the exact same default and short-name
+ * map rather than maintaining a second one that could drift.
+ */
+export const BEDROCK_DEFAULT_MODEL = "sonnet";
 
 /**
  * Short names accepted at every existing call site (`request.model`/
@@ -53,14 +59,15 @@ const BEDROCK_DEFAULT_MODEL = "sonnet";
  * needs a newer id can always pass the full profile id directly — unknown
  * names pass through unmodified.
  */
-const MODEL_SHORT_NAMES: Readonly<Record<string, string>> = {
+export const MODEL_SHORT_NAMES: Readonly<Record<string, string>> = {
   sonnet: "us.anthropic.claude-sonnet-5",
   haiku: "us.anthropic.claude-haiku-4-5-20251001-v1:0",
   opus: "us.anthropic.claude-opus-4-8",
   fable: "us.anthropic.claude-fable-5",
 };
 
-function resolveModelId(modelId: string): string {
+/** Exported for reuse by `bedrock-agentic-session.ts` — see `MODEL_SHORT_NAMES`'s doc. */
+export function resolveModelId(modelId: string): string {
   return MODEL_SHORT_NAMES[modelId] ?? modelId;
 }
 
