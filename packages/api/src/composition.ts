@@ -31,6 +31,7 @@ import { createModel, type ModelProvider } from "@shadow/model";
 import {
   AgenticSearchProvider,
   createRetrievalTransport,
+  UnavailableSearchProvider,
   WebResearchToolAgent,
 } from "@shadow/research";
 import { ConversationRegistry } from "./conversation-registry.ts";
@@ -90,7 +91,21 @@ export function buildRealApiDeps(options: BuildRealApiDepsOptions = {}): ApiDeps
   // `SearchProvider`, not as a tool `researchBriefPort`'s own session can
   // call, so that session's `WebSearch`/`WebFetch`/`Bash` denial (D23,
   // D2's determinism) stays intact.
-  const searchProvider = new AgenticSearchProvider({ sessions: agenticSession });
+  //
+  // On `bedrock`, `AgenticSearchProvider` would be worse than nothing: it
+  // builds a session with `allowedTools: ["WebSearch"]`, but the Bedrock
+  // adapter (`@shadow/model`'s `bedrock-agentic-session.ts`) only ever
+  // builds tools from `toolServers` and silently ignores any built-in name
+  // it doesn't recognize — so that session would run with *no* tools at
+  // all, and the model would either hallucinate a result or fail the
+  // required-JSON-output contract in a confusing way, never a clean error.
+  // `UnavailableSearchProvider` fails loudly and immediately instead — see
+  // `SearchUnavailableError`'s doc in `@shadow/research` for the exact
+  // operator-facing message.
+  const searchProvider =
+    modelProvider === "bedrock"
+      ? new UnavailableSearchProvider()
+      : new AgenticSearchProvider({ sessions: agenticSession });
   const transport = createRetrievalTransport({ mode: "live", live: { search: searchProvider } });
   const researchBriefPort = new WebResearchToolAgent({
     transport,

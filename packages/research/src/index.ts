@@ -21,7 +21,11 @@
  * search-provider API key to use instead (`docs/ACCEPTANCE.md`). It is a
  * distinct, narrow session from `WebResearchToolAgent`'s own — see that
  * class's doc for why the two must never share a session, and
- * `agentic-search-provider.ts`'s doc for the full design.
+ * `agentic-search-provider.ts`'s doc for the full design. For the `bedrock`
+ * model provider (D26), which has no Claude Code `WebSearch` tool to back
+ * that session, `UnavailableSearchProvider` (`unavailable-search-provider.ts`)
+ * is wired in instead — it always rejects with `SearchUnavailableError`, a
+ * clean, operator-actionable failure rather than a confused model turn.
  *
  * **Normalization and digests are `@shadow/evidence`'s, not ours.** Steps
  * 2-5 of `nfc-ws-v1` (`normalizeNfcWs`, `computeSnapshotDigests`,
@@ -128,6 +132,7 @@ export {
   RetrievalTimeoutError,
   SearchResultParseError,
   SearchSessionTurnFailedError,
+  SearchUnavailableError,
   ShadowResearchError,
   SourceBudgetExceededError,
   UnboundCitationError,
@@ -152,6 +157,7 @@ export type { ResearchToolsDeps } from "./retrieval-tools.ts";
 export { buildResearchTools, MAX_TOOL_RESULT_CHARS } from "./retrieval-tools.ts";
 export type { RecordSessionTranscriptSourceOptions } from "./transcript-source.ts";
 export { recordSessionTranscriptSource } from "./transcript-source.ts";
+export { UnavailableSearchProvider } from "./unavailable-search-provider.ts";
 export type {
   FetchedPage,
   FetchLike,

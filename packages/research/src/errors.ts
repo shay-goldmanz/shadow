@@ -314,3 +314,38 @@ export class SearchResultParseError extends ShadowResearchError {
     );
   }
 }
+
+// ---------------------------------------------------------------------------
+// UnavailableSearchProvider — no live search backend for this model provider
+// ---------------------------------------------------------------------------
+
+/**
+ * `UnavailableSearchProvider.search()` was called. Live web research needs a
+ * `SearchProvider` (`types.ts`) plugged into `LiveTransportOptions.search`;
+ * this one is wired in whenever the resolved model provider (D26) has none.
+ * Concretely, today that is `bedrock`: this package's only real
+ * `SearchProvider`, `AgenticSearchProvider`, is backed by Claude Code's
+ * built-in `WebSearch` tool, which does not exist on the Bedrock adapter's
+ * tool-calling surface (`@shadow/model`'s `bedrock-agentic-session.ts`
+ * silently ignores any built-in tool name it doesn't recognize — see that
+ * file's `buildTools` doc — so a session built for `AgenticSearchProvider`
+ * would run over Bedrock with no tool at all rather than failing loudly).
+ * Composition (`packages/api/src/composition.ts`) wires this class in
+ * instead so the failure is immediate and actionable, not a confused model
+ * turn or a silent no-op. Distinct from `LiveSearchUnavailableError`, which
+ * fires when `LiveTransportOptions.search` is omitted entirely; this one
+ * fires from a `SearchProvider` that *is* wired in but is a deliberate
+ * placeholder for a provider strategy with nothing to plug in yet.
+ */
+export class SearchUnavailableError extends ShadowResearchError {
+  override readonly name = "SearchUnavailableError";
+
+  constructor(public readonly query: string) {
+    super(
+      `Live web research requires a search provider (query: ${JSON.stringify(query)}); the ` +
+        `"bedrock" model provider has none configured. Either run with ` +
+        `SHADOW_MODEL_PROVIDER=claude-code to use the subscription's built-in WebSearch tool, ` +
+        `or configure a search provider for bedrock once one is implemented.`,
+    );
+  }
+}

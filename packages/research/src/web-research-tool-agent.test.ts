@@ -42,10 +42,13 @@ import {
   NoFindingsProducedError,
   ResearchAgentBusyError,
   ResearchTurnFailedError,
+  SearchUnavailableError,
 } from "./errors.ts";
 import { FixtureCorpus } from "./fixture-corpus.ts";
+import { LiveTransport } from "./live-transport.ts";
 import { ReplayTransport } from "./replay-transport.ts";
 import { expectRejection } from "./test-helpers.ts";
+import { UnavailableSearchProvider } from "./unavailable-search-provider.ts";
 import { WebResearchToolAgent, type WebResearchToolAgentDeps } from "./web-research-tool-agent.ts";
 
 const LINEAR_URL = "https://linear.app/blog/design-system";
@@ -308,6 +311,44 @@ describe("WebResearchToolAgent — concurrency guard", () => {
       // rejects too) — the point is only that it was not corrupted by the
       // concurrent attempt.
       await expectRejection(first, NoFindingsProducedError);
+    });
+  });
+});
+
+describe("WebResearchToolAgent — search provider unavailable", () => {
+  test("a search tool call whose provider throws SearchUnavailableError propagates out of research(), not an unhandled turn error", async () => {
+    // The real seam this exercises: `createRetrievalTransport({ mode:
+    // "live", live: { search } })` (`composition.ts`, `bedrock` branch)
+    // wires exactly this — `LiveTransport` over `UnavailableSearchProvider`
+    // — so this is `LiveTransport.search()` delegating to the provider,
+    // not a stand-in for it.
+    await withHarness(async ({ evidenceStore, volume }) => {
+      const transport = new LiveTransport({ search: new UnavailableSearchProvider() });
+      let agent: WebResearchToolAgent | undefined;
+      const sessions = new ScriptedToolLoopSessionPort(
+        () => toolDefinitionsOf(agent as WebResearchToolAgent),
+        async (tools) => {
+          // The scripted loop calls the `search` tool exactly as the real
+          // Agent SDK tool-dispatch loop would; the handler's own call
+          // into `transport.search()` is what throws here.
+          await findTool(tools, "search").handler({ query: "how Linear builds its sidebar" });
+          return "unreachable — search always throws";
+        },
+      );
+      agent = new WebResearchToolAgent({ transport, evidenceStore, sessions });
+
+      // Thrown directly out of research() (not wrapped in ResearchTurnFailedError,
+      // since this same-process test double calls tool handlers directly rather
+      // than routing through the AI SDK's own tool-error catching — see the
+      // module doc). This is exactly the kind of error `@shadow/agent`'s
+      // `runResearchDirective` already catches (any thrown error, not just an
+      // `isError` turn result) and turns into the graceful `research-failed`
+      // event/SSE path — never an unhandled turn error. On the real Bedrock
+      // adapter, the same thrown handler exception is instead caught by the AI
+      // SDK as a `tool-error` step and surfaces as `done.result.isError: true`,
+      // which `research()` turns into `ResearchTurnFailedError` — a different
+      // exception type, but the same graceful `research-failed` destination.
+      await expectRejection(agent.research(brief(volume)), SearchUnavailableError);
     });
   });
 });

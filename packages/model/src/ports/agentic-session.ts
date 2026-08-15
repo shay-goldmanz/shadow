@@ -34,11 +34,15 @@ export type PermissionMode = "default" | "acceptEdits" | "bypassPermissions" | "
  * - omit entirely: the Agent SDK's own default, which is **minimal** —
  *   unlike the `claude` CLI, `query()` does not start from the Claude Code
  *   system prompt unless told to.
- * - `string`: a fully custom system prompt.
+ * - `string`: a fully custom system prompt. This is what Shadow chat
+ *   actually passes — `buildShadowSystemPrompt()` (`@shadow/agent`'s
+ *   `system-prompt.ts`) — not the preset form below.
  * - `{ type: "preset", preset: "claude_code", append? }`: CLI parity — the
  *   full Claude Code system prompt, optionally with extra instructions
- *   appended. This is what Shadow chat wants; a narrow research tool-agent
- *   more often wants a custom string instead.
+ *   appended. No current caller in this codebase uses it; it exists for
+ *   contract completeness (parity with the Agent SDK's own option) and any
+ *   future caller that genuinely wants the stock CLI preamble rather than a
+ *   fully custom prompt.
  */
 export type SystemPromptOption =
   | string
