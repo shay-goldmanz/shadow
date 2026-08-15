@@ -107,6 +107,16 @@
         "zod": "^4.4.3",
       },
     },
+    "packages/rulebook": {
+      "name": "@shadow/rulebook",
+      "version": "0.0.0",
+      "dependencies": {
+        "@shadow/core": "workspace:*",
+        "@shadow/evidence": "workspace:*",
+        "@shadow/model": "workspace:*",
+        "zod": "^4.4.3",
+      },
+    },
     "packages/web": {
       "name": "@shadow/web",
       "version": "0.0.0",
@@ -253,6 +263,8 @@
     "@shadow/model": ["@shadow/model@workspace:packages/model"],
 
     "@shadow/research": ["@shadow/research@workspace:packages/research"],
+
+    "@shadow/rulebook": ["@shadow/rulebook@workspace:packages/rulebook"],
 
     "@shadow/web": ["@shadow/web@workspace:packages/web"],
 
