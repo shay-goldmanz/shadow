@@ -14,11 +14,13 @@
  * untouched) when omitted. `"bedrock"` is a second strategy that
  * authenticates via the AWS SDK's own credential chain instead — see D26 for
  * why that's a deliberate amendment, not a silent bypass, of D5's
- * acceptance criterion. Until Bedrock's real adapters land,
- * `provider: "bedrock"` builds a stub that throws immediately rather than
- * silently returning something that behaves like a real port.
+ * acceptance criterion. The structured-generation half now has a real
+ * adapter (over `@ai-sdk/amazon-bedrock`); `agenticSession` is still a stub,
+ * which throws only when `createSession(...)` is actually called, not at
+ * construction — see `createBedrockModel`.
  */
 
+import { createBedrockStructuredGenerationPort } from "./adapters/bedrock-structured-generation.ts";
 import {
   type ClaudeAgentSdkSessionDefaults,
   createClaudeAgentSdkSessionPort,
@@ -27,7 +29,7 @@ import {
   type ClaudeCodeStructuredGenerationOptions,
   createClaudeCodeStructuredGenerationPort,
 } from "./adapters/claude-code-structured-generation.ts";
-import type { AgenticSessionPort } from "./ports/agentic-session.ts";
+import type { AgenticSession, AgenticSessionPort } from "./ports/agentic-session.ts";
 import type { StructuredGenerationPort } from "./ports/structured-generation.ts";
 
 export interface Model {
@@ -45,13 +47,19 @@ export interface ClaudeCodeModelOptions {
 }
 
 /**
- * Options for the `"bedrock"` strategy. Deliberately minimal here — the real
- * adapters will extend this shape as needed (region, inference profile,
- * etc.); `model` is the one option every caller of this factory already
- * knows how to supply.
+ * Options for the `"bedrock"` strategy. `model` is the one option every
+ * caller of this factory already knows how to supply (a short name like
+ * `"sonnet"` or a full Bedrock inference-profile id — see
+ * `bedrock-structured-generation.ts`'s `MODEL_SHORT_NAMES`). `region` and
+ * `apiKey` are optional overrides for the same adapter's settings — both
+ * left `undefined` here fall through to `createBedrockModel`'s own
+ * `AWS_REGION`/`"us-east-1"` resolution and the Bedrock SDK's own
+ * `AWS_BEARER_TOKEN_BEDROCK`/AWS-credential-chain resolution, respectively.
  */
 export interface BedrockModelOptions {
   readonly model?: string;
+  readonly region?: string;
+  readonly apiKey?: string;
 }
 
 export interface CreateModelOptions {
@@ -91,14 +99,37 @@ function createClaudeCodeModel(options: ClaudeCodeModelOptions = {}): Model {
   };
 }
 
+/** Fallback region when neither `BedrockModelOptions.region` nor `AWS_REGION` is set. Documented default, not a silent guess — see `BedrockModelOptions`'s doc. */
+const BEDROCK_DEFAULT_REGION = "us-east-1";
+
+/** The agentic-session stub message — same shape as the original construction-time throw, scoped down now that the structured-generation half has a real adapter. */
+const BEDROCK_AGENTIC_SESSION_STUB_MESSAGE =
+  "@shadow/model: bedrock agenticSession is not implemented yet " +
+  "(see docs/DECISIONS.md D26).";
+
 /**
- * Stub for the `"bedrock"` strategy (D26). Real adapters over
- * `@ai-sdk/amazon-bedrock` replace this; until then, selecting this provider
- * fails loudly and immediately rather than handing back a port that would
- * fail confusingly on first use.
+ * The `"bedrock"` strategy (D26). The structured-generation half now has a
+ * real adapter over `@ai-sdk/amazon-bedrock`; `agenticSession` is still a
+ * stub — constructing this `Model` never throws (structured generation is
+ * real and usable immediately), but calling
+ * `agenticSession.createSession(...)` does, so selecting `"bedrock"` before
+ * the agentic-session adapter lands fails loudly and immediately at the
+ * point of actual use rather than handing back something that behaves like
+ * a real port.
  */
-function createBedrockModel(_options?: BedrockModelOptions): Model {
-  throw new Error(
-    "@shadow/model: provider \"bedrock\" is not implemented yet (see docs/DECISIONS.md D26).",
-  );
+function createBedrockModel(options: BedrockModelOptions = {}): Model {
+  const region = options.region ?? process.env.AWS_REGION ?? BEDROCK_DEFAULT_REGION;
+
+  return {
+    structuredGeneration: createBedrockStructuredGenerationPort({
+      model: options.model,
+      region,
+      apiKey: options.apiKey,
+    }),
+    agenticSession: {
+      createSession(): AgenticSession {
+        throw new Error(BEDROCK_AGENTIC_SESSION_STUB_MESSAGE);
+      },
+    },
+  };
 }

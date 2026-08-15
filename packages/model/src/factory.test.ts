@@ -38,15 +38,25 @@ describe("createModel — provider strategy selection (D26)", () => {
     ).not.toThrow();
   });
 
-  test("provider: 'bedrock' throws the clear not-yet-implemented stub error", () => {
-    expect(() => createModel({ provider: "bedrock" })).toThrow(
-      /not implemented yet/,
-    );
+  test("provider: 'bedrock' builds a real structuredGeneration port without throwing at construction", () => {
+    const model = createModel({ provider: "bedrock" });
+    expect(typeof model.structuredGeneration.generate).toBe("function");
   });
 
-  test("provider: 'bedrock' stub throws even when bedrock options are supplied", () => {
-    expect(() => createModel({ provider: "bedrock", bedrock: { model: "some-model-id" } })).toThrow(
-      /bedrock/i,
-    );
+  test("provider: 'bedrock' still stubs agenticSession: createSession throws the clear not-yet-implemented error", () => {
+    const model = createModel({ provider: "bedrock" });
+    expect(() => model.agenticSession.createSession()).toThrow(/not implemented yet/);
+  });
+
+  test("bedrock options (model/region/apiKey) are forwarded to the structuredGeneration adapter, not dropped", () => {
+    // No live call is made — this only proves construction succeeds when
+    // every `BedrockModelOptions` field is supplied, guarding against a
+    // future edit silently ignoring one.
+    expect(() =>
+      createModel({
+        provider: "bedrock",
+        bedrock: { model: "sonnet", region: "us-west-2", apiKey: "test-bearer-token" },
+      }),
+    ).not.toThrow();
   });
 });

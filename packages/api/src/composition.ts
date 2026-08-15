@@ -67,6 +67,14 @@ export function buildRealApiDeps(options: BuildRealApiDepsOptions = {}): ApiDeps
       structuredGeneration: options.model ? { model: options.model } : undefined,
       agenticSession: options.model ? { model: options.model } : undefined,
     },
+    // Unset env vars leave both fields undefined, so createModel's own
+    // bedrock defaults (AWS_REGION / "us-east-1" for region, the adapter's
+    // built-in default model) apply. Read unconditionally; simply unused
+    // whenever modelProvider resolves to "claude-code".
+    bedrock: {
+      model: process.env.SHADOW_BEDROCK_MODEL,
+      region: process.env.SHADOW_BEDROCK_REGION,
+    },
   });
 
   const checkWorthinessClassifier = new BatchedCheckWorthinessClassifier(structuredGeneration);

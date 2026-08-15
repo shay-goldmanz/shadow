@@ -17,6 +17,11 @@
  */
 
 export type {
+  BedrockStructuredGenerationOptions,
+  BedrockStructuredGenerationPortDeps,
+} from "./adapters/bedrock-structured-generation.ts";
+export { createBedrockStructuredGenerationPort } from "./adapters/bedrock-structured-generation.ts";
+export type {
   ClaudeAgentSdkSessionDefaults,
   ClaudeAgentSdkSessionPortDeps,
 } from "./adapters/claude-agent-sdk-session.ts";
