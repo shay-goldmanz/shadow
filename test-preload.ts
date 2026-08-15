@@ -14,6 +14,19 @@
  * `Bun.serve` instance and call it over the loopback interface, fail with
  * "Parse Error" against happy-dom's client.
  *
+ * happy-dom also replaces `ReadableStream`/`WritableStream`/`TransformStream`
+ * (`BrowserWindow.ts` wires `ReadableStream` to Node's `stream/web` version,
+ * and — more surprisingly — `WritableStream`/`TransformStream` to Node's
+ * *classic* `Stream.Writable`/`Stream.Transform`, which aren't WHATWG stream
+ * classes at all). Bun's native fetch/undici stack does `instanceof
+ * ReadableStream` against its own class when consuming a streamed response
+ * body, so once happy-dom's globals are in place that check fails against a
+ * genuinely-native stream. Any `streamText`-based code (e.g. the Bedrock
+ * agentic-session port) then throws `TypeError: readable should be
+ * ReadableStream` within milliseconds, before any network call happens —
+ * only under `bun test`, since the preload never runs under plain `bun run`.
+ * (Found live in Bedrock smoke-test verification.)
+ *
  * Nothing in the codebase wants happy-dom's network stack: the web tests
  * drive a fake API client and never touch `fetch`, while every package that
  * does real I/O wants Bun's native implementation. So we take the DOM and
@@ -30,6 +43,9 @@ if (!(globalThis as Record<symbol, unknown>)[registered]) {
   const nativeResponse = globalThis.Response;
   const nativeRequest = globalThis.Request;
   const nativeHeaders = globalThis.Headers;
+  const nativeReadableStream = globalThis.ReadableStream;
+  const nativeWritableStream = globalThis.WritableStream;
+  const nativeTransformStream = globalThis.TransformStream;
 
   GlobalRegistrator.register();
 
@@ -37,6 +53,9 @@ if (!(globalThis as Record<symbol, unknown>)[registered]) {
   globalThis.Response = nativeResponse;
   globalThis.Request = nativeRequest;
   globalThis.Headers = nativeHeaders;
+  globalThis.ReadableStream = nativeReadableStream;
+  globalThis.WritableStream = nativeWritableStream;
+  globalThis.TransformStream = nativeTransformStream;
 
   (globalThis as Record<symbol, unknown>)[registered] = true;
 }
