@@ -12,16 +12,21 @@ export abstract class ShadowCoreError extends Error {
   abstract override readonly name: string;
 }
 
-/** A volume or chapter slug failed validation (see `slug.ts`). */
+/**
+ * A volume slug, chapter slug (see `slug.ts`), or rulebook extraction-cache
+ * key (see `rulebook-layout.ts`) failed validation. `"cache-key"` is not a
+ * branded slug type — it's the same character-class check reused to keep a
+ * caller-supplied cache key from escaping `cache/extraction/`.
+ */
 export class InvalidSlugError extends ShadowCoreError {
   override readonly name = "InvalidSlugError";
 
   constructor(
-    public readonly kind: "volume" | "chapter",
+    public readonly kind: "volume" | "chapter" | "cache-key",
     public readonly input: string,
     public readonly reason: string,
   ) {
-    super(`Invalid ${kind} slug ${JSON.stringify(input)}: ${reason}`);
+    super(`Invalid ${kind} ${JSON.stringify(input)}: ${reason}`);
   }
 }
 
@@ -113,5 +118,59 @@ export class ReservedFrontmatterKeyError extends ShadowCoreError {
         `${keys.map((key) => JSON.stringify(key)).join(", ")} — title/createdAt/updatedAt are ` +
         `typed fields owned by @shadow/core, not part of the open frontmatter record.`,
     );
+  }
+}
+
+// ---- rule books (Rule Book Creator) — own bundle kind, not a volume ----
+
+/**
+ * `getRulebook`, `putGroup`, `getGroup`, `listGroups`, `ensureEvidenceDir`,
+ * `readExtractionCache`, or `writeExtractionCache` targeted a slug with no
+ * rule book on disk. Mirrors `VolumeNotFoundError`. `updateRulebook` never
+ * throws this — it upserts.
+ */
+export class RulebookNotFoundError extends ShadowCoreError {
+  override readonly name = "RulebookNotFoundError";
+
+  constructor(public readonly slug: string) {
+    super(`Rulebook not found: ${slug}`);
+  }
+}
+
+/** `createRulebook` targeted a slug that already has a rule book on disk. Mirrors `VolumeAlreadyExistsError`. */
+export class RulebookAlreadyExistsError extends ShadowCoreError {
+  override readonly name = "RulebookAlreadyExistsError";
+
+  constructor(public readonly slug: string) {
+    super(`Rulebook already exists: ${slug}`);
+  }
+}
+
+/** `getGroup` targeted a slug with no group on disk within an (existing) rule book. Mirrors `ChapterNotFoundError`. */
+export class GroupNotFoundError extends ShadowCoreError {
+  override readonly name = "GroupNotFoundError";
+
+  constructor(
+    public readonly rulebookSlug: string,
+    public readonly groupSlug: string,
+  ) {
+    super(`Group not found: ${rulebookSlug}/${groupSlug}`);
+  }
+}
+
+/**
+ * An on-disk `RULEBOOK.md` document could not be parsed as frontmatter +
+ * Markdown. Mirrors `VolumeParseError`. A malformed group document (chapter-
+ * shaped) still throws `ChapterParseError` — groups reuse the chapter
+ * parser as-is.
+ */
+export class RulebookParseError extends ShadowCoreError {
+  override readonly name = "RulebookParseError";
+
+  constructor(
+    public readonly rulebookSlug: string,
+    public readonly reason: string,
+  ) {
+    super(`Failed to parse rulebook "${rulebookSlug}": ${reason}`);
   }
 }

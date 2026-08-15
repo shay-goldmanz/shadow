@@ -10,14 +10,21 @@
 export {
   ChapterNotFoundError,
   ChapterParseError,
+  GroupNotFoundError,
   InvalidSlugError,
   ReservedFrontmatterKeyError,
+  RulebookAlreadyExistsError,
+  RulebookNotFoundError,
+  RulebookParseError,
   ShadowCoreError,
   VolumeAlreadyExistsError,
   VolumeNotFoundError,
   VolumeParseError,
 } from "./errors.ts";
+export { FileSystemRulebookStore } from "./filesystem-rulebook-store.ts";
 export { FileSystemVolumeStore } from "./filesystem-volume-store.ts";
+export type { Rulebook, RulebookInput, RulebookSourceDoc } from "./rulebook-frontmatter.ts";
+export type { RulebookStore } from "./rulebook-store.ts";
 export type { ChapterSlug, VolumeSlug } from "./slug.ts";
 export {
   isValidChapterSlug,

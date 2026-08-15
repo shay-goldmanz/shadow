@@ -8,5 +8,8 @@
   },
   "scripts": {
     "typecheck": "tsc -p ."
+  },
+  "devDependencies": {
+    "@shadow/evidence": "workspace:*"
   }
 }
