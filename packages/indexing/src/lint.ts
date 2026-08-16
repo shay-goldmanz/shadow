@@ -32,6 +32,12 @@ import { type ContradictionOptions, checkContradiction } from "./lint-contradict
 import { type CostModelOptions, checkChapterCost } from "./lint-cost-model.ts";
 import { checkDiscriminability, type DiscriminabilityOptions } from "./lint-discriminability.ts";
 import type { MissLogStore } from "./lint-miss-log.ts";
+import {
+  checkOkfConformance,
+  type OkfBundleArtifacts,
+  type OkfChapterRecord,
+  type OkfVolumeRecord,
+} from "./lint-okf.ts";
 import { checkOrphans } from "./lint-orphan.ts";
 import { checkSelfRetrieval, type SelfRetrievalProbe } from "./lint-self-retrieval.ts";
 import type { LintCheckResult } from "./lint-types.ts";
@@ -53,11 +59,17 @@ export interface LintOptions {
   readonly contradiction?: ContradictionOptions;
   /** Injectable clock, threaded through to check 2's miss-log timestamps. */
   readonly now?: () => Date;
+  /** When provided, runs the OKF v0.2 conformance check (check 7). */
+  readonly okf?: {
+    readonly chapters: readonly OkfChapterRecord[];
+    readonly volumes: readonly OkfVolumeRecord[];
+    readonly artifacts: OkfBundleArtifacts;
+  };
 }
 
 export interface LintReport {
   readonly offline: boolean;
-  /** One result per check that ran — 3 entries offline, 5 online. */
+  /** One result per check that ran. */
   readonly checks: readonly LintCheckResult[];
   /** Every self-retrieval probe run this pass. Empty when `offline`. `@shadow/evaluation` (T4.1) consumes this as a metric. */
   readonly probes: readonly SelfRetrievalProbe[];
@@ -95,6 +107,17 @@ export async function runLint(
   }
 
   checks.push(checkOrphans(document, coverage));
+
+  if (options.okf) {
+    checks.push(
+      checkOkfConformance({
+        index: document,
+        chapters: options.okf.chapters,
+        volumes: options.okf.volumes,
+        artifacts: options.okf.artifacts,
+      }),
+    );
+  }
 
   return { offline, checks, probes };
 }

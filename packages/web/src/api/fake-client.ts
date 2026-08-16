@@ -77,6 +77,11 @@ export class FakeApiClient implements ShadowApiClient {
       slug,
       title: input.title,
       description: input.description ?? "",
+      type: "Concept",
+      status: "draft",
+      staleAfter: null,
+      generated: { by: "shadow/1.0", at: now },
+      verified: [],
       frontmatter: {},
       createdAt: now,
       updatedAt: now,
@@ -114,6 +119,11 @@ export class FakeApiClient implements ShadowApiClient {
       ...seed.volume,
       title: input.title ?? seed.volume.title,
       description: input.description ?? seed.volume.description,
+      type: (input.type as string | undefined) ?? seed.volume.type,
+      status: (input.status as Volume["status"] | undefined) ?? seed.volume.status,
+      staleAfter: (input.staleAfter as string | null | undefined) ?? seed.volume.staleAfter,
+      generated: (input.generated as Volume["generated"] | undefined) ?? seed.volume.generated,
+      verified: (input.verified as Volume["verified"] | undefined) ?? seed.volume.verified,
       frontmatter: input.frontmatter ?? seed.volume.frontmatter,
       updatedAt: new Date().toISOString(),
     };
@@ -150,6 +160,15 @@ export class FakeApiClient implements ShadowApiClient {
       slug: chapter,
       title: input.title,
       body: input.body,
+      type: (input.type as string | undefined) ?? existing?.chapter.type ?? "Concept",
+      status:
+        (input.status as Chapter["status"] | undefined) ?? existing?.chapter.status ?? "draft",
+      staleAfter:
+        (input.staleAfter as string | null | undefined) ?? existing?.chapter.staleAfter ?? null,
+      generated: (input.generated as Chapter["generated"] | undefined) ??
+        existing?.chapter.generated ?? { by: "shadow/1.0", at: now },
+      verified:
+        (input.verified as Chapter["verified"] | undefined) ?? existing?.chapter.verified ?? [],
       frontmatter: input.frontmatter ?? existing?.chapter.frontmatter ?? {},
       createdAt: existing?.chapter.createdAt ?? now,
       updatedAt: now,

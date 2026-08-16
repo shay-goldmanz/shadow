@@ -13,6 +13,8 @@ import { loadCorpusIndex } from "../loaders.ts";
 export interface VolumeManifestRow {
   readonly volume_id: string;
   readonly title: string;
+  /** OKF v0.2 concept type (OKF §4.1). */
+  readonly type?: string;
   readonly when_to_use?: string;
   readonly not_for?: string;
   readonly keywords?: readonly string[];
@@ -28,6 +30,7 @@ function toManifestRow(volume: VolumeIndexNode): VolumeManifestRow {
   return {
     volume_id: volume.volume_id,
     title: volume.title,
+    type: volume.type,
     when_to_use: volume.when_to_use,
     not_for: volume.not_for,
     keywords: volume.keywords,

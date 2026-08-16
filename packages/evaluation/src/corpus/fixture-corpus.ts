@@ -69,7 +69,7 @@ export async function loadFixtureCorpus(
   }
 
   const store = new FileSystemVolumeStore(scratchRoot);
-  const indexer = new StructuralIndexer();
+  const indexer = new StructuralIndexer({ rootDir: scratchRoot });
   const { document } = await indexer.reindex(store);
 
   let cleaned = false;

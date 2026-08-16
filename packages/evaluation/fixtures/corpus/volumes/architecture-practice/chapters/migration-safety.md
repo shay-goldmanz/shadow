@@ -1,5 +1,6 @@
 ---
 title: A migration that can't roll back isn't done
+type: Design Guidance
 createdAt: 2026-01-01T00:00:00.000Z
 updatedAt: 2026-01-01T00:00:00.000Z
 when_to_use: >

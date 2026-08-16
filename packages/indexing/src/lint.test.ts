@@ -12,16 +12,16 @@ import { InMemoryMissLog } from "./lint-miss-log.ts";
 import { expectRejection } from "./test-helpers.ts";
 import type { IndexDocument } from "./types.ts";
 
-async function withStore(fn: (store: VolumeStore) => Promise<void>): Promise<void> {
+async function withStore(fn: (store: VolumeStore, root: string) => Promise<void>): Promise<void> {
   const root = await mkdtemp(join(tmpdir(), "shadow-lint-test-"));
   try {
-    await fn(new FileSystemVolumeStore(root));
+    await fn(new FileSystemVolumeStore(root), root);
   } finally {
     await rm(root, { recursive: true, force: true });
   }
 }
 
-async function buildFixture(store: VolumeStore): Promise<IndexDocument> {
+async function buildFixture(store: VolumeStore, root: string): Promise<IndexDocument> {
   const volumeSlug = toVolumeSlug("ui-design");
   await store.createVolume({ slug: volumeSlug, title: "Interface Design" });
 
@@ -47,7 +47,7 @@ async function buildFixture(store: VolumeStore): Promise<IndexDocument> {
     },
   });
 
-  const indexer = new StructuralIndexer();
+  const indexer = new StructuralIndexer({ rootDir: root });
   const { document: builtDocument } = await indexer.build(store);
   return builtDocument;
 }
@@ -114,8 +114,8 @@ describe("runLint online", () => {
   });
 
   test("runs all five checks, feeding self-retrieval's coverage into orphan detection", async () => {
-    await withStore(async (store) => {
-      const doc = await buildFixture(store);
+    await withStore(async (store, root) => {
+      const doc = await buildFixture(store, root);
       const density = doc.volumes[0]?.chapters.find((c) => c.slug === "linear-density");
       const onboarding = doc.volumes[0]?.chapters.find((c) => c.slug === "onboarding");
       if (!density || !onboarding) {

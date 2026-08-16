@@ -147,6 +147,17 @@ export interface ReadResult {
   readonly parent_when_to_use?: string;
   readonly sibling_titles: readonly string[];
   readonly content_hash: string;
+  /** OKF v0.2 concept type (OKF §4.1). */
+  readonly type: string;
+  /** OKF v0.2 lifecycle status (OKF §5.4). */
+  readonly status: string;
+  /** OKF stale-after date as ISO 8601, or `null` (OKF §5.5). */
+  readonly stale_after: string | null;
+  /** OKF `generated` actor (OKF §5.2). */
+  readonly generated_by: string;
+  readonly generated_at: string;
+  /** OKF `verified` actors. Empty array = unverified (OKF §5.3). */
+  readonly verified: readonly { by: string; at: string }[];
 }
 
 /**
@@ -181,5 +192,11 @@ export async function readNode(
     parent_when_to_use: ctx.parent_when_to_use,
     sibling_titles: ctx.sibling_titles,
     content_hash: ctx.content_hash,
+    type: chapter.type,
+    status: chapter.status,
+    stale_after: chapter.staleAfter ? chapter.staleAfter.toISOString().slice(0, 10) : null,
+    generated_by: chapter.generated.by,
+    generated_at: chapter.generated.at.toISOString(),
+    verified: chapter.verified.map((v) => ({ by: v.by, at: v.at.toISOString() })),
   };
 }

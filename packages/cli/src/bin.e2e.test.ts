@@ -70,7 +70,7 @@ describe("bin.ts — real subprocess, real shebang", () => {
   test("shadow index, then shadow find, then shadow read — a full real session", async () => {
     await withRoot(async (root) => {
       const store = new FileSystemVolumeStore(root);
-      await buildSmallFixture(store);
+      await buildSmallFixture(store, root);
 
       const indexed = await spawnShadow(["index"], root);
       expect(indexed.exitCode).toBe(0);

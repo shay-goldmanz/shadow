@@ -63,8 +63,8 @@ export async function withVolumeHarness<T>(fn: (harness: VolumeHarness) => Promi
   }
 }
 
-export function freshIndexer(): StructuralIndexer {
-  return new StructuralIndexer();
+export function freshIndexer(rootDir: string): StructuralIndexer {
+  return new StructuralIndexer({ rootDir });
 }
 
 // ---------------------------------------------------------------------------

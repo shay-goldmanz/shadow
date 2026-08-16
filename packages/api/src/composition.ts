@@ -49,7 +49,7 @@ export function buildRealApiDeps(options: BuildRealApiDepsOptions = {}): ApiDeps
 
   const volumeStore = new FileSystemVolumeStore(root);
   const evidenceStore = new FileSystemEvidenceStore(volumeStore);
-  const indexer = new StructuralIndexer();
+  const indexer = new StructuralIndexer({ rootDir: root });
 
   const { structuredGeneration, agenticSession } = createModel({
     structuredGeneration: options.model ? { model: options.model } : undefined,

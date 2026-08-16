@@ -18,10 +18,22 @@
 
 // ---- volumes ----------------------------------------------------------
 
+export interface OkfActor {
+  readonly by: string;
+  readonly at: string;
+}
+
+export type OkfStatus = "draft" | "stable" | "deprecated";
+
 export interface Volume {
   readonly slug: string;
   readonly title: string;
   readonly description: string;
+  readonly type: string;
+  readonly status: OkfStatus;
+  readonly staleAfter: string | null;
+  readonly generated: OkfActor;
+  readonly verified: readonly OkfActor[];
   readonly frontmatter: Readonly<Record<string, unknown>>;
   readonly createdAt: string;
   readonly updatedAt: string;
@@ -47,6 +59,11 @@ export interface CreateVolumeInput {
 export interface UpdateVolumeInput {
   readonly title?: string;
   readonly description?: string;
+  readonly type?: string;
+  readonly status?: OkfStatus;
+  readonly staleAfter?: string | null;
+  readonly generated?: OkfActor;
+  readonly verified?: readonly OkfActor[];
   readonly frontmatter?: Readonly<Record<string, unknown>>;
 }
 
@@ -62,6 +79,11 @@ export interface UpdateVolumeInput {
 export interface ChapterSummary {
   readonly slug: string;
   readonly title: string;
+  readonly type: string;
+  readonly status: OkfStatus;
+  readonly staleAfter: string | null;
+  readonly generated: OkfActor;
+  readonly verified: readonly OkfActor[];
   readonly frontmatter: Readonly<Record<string, unknown>>;
   readonly createdAt: string;
   readonly updatedAt: string;
@@ -71,6 +93,11 @@ export interface Chapter {
   readonly slug: string;
   readonly title: string;
   readonly body: string;
+  readonly type: string;
+  readonly status: OkfStatus;
+  readonly staleAfter: string | null;
+  readonly generated: OkfActor;
+  readonly verified: readonly OkfActor[];
   readonly frontmatter: Readonly<Record<string, unknown>>;
   readonly createdAt: string;
   readonly updatedAt: string;
@@ -85,6 +112,11 @@ export function whenToUseOf(chapter: ChapterSummary | Chapter): string | undefin
 export interface PutChapterInput {
   readonly title: string;
   readonly body: string;
+  readonly type?: string;
+  readonly status?: OkfStatus;
+  readonly staleAfter?: string | null;
+  readonly generated?: OkfActor;
+  readonly verified?: readonly OkfActor[];
   readonly frontmatter?: Readonly<Record<string, unknown>>;
 }
 

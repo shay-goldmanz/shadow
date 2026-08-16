@@ -101,7 +101,7 @@ export async function withTinyCorpus<T>(fn: (corpus: TinyCorpus) => Promise<T>):
       },
     });
 
-    const indexer = new StructuralIndexer();
+    const indexer = new StructuralIndexer({ rootDir: root });
     const { document } = await indexer.build(store);
     return await fn({ store, document });
   } finally {

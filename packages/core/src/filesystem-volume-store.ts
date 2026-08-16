@@ -54,6 +54,11 @@ export class FileSystemVolumeStore implements VolumeStore {
       slug: input.slug,
       title: input.title,
       description: input.description ?? "",
+      type: input.type ?? "Concept",
+      status: input.status ?? "draft",
+      staleAfter: input.staleAfter ?? null,
+      generated: input.generated ?? { by: "unknown", at: now },
+      verified: input.verified ?? [],
       frontmatter,
       createdAt: now,
       updatedAt: now,
@@ -97,6 +102,11 @@ export class FileSystemVolumeStore implements VolumeStore {
       ...existing,
       title: patch.title ?? existing.title,
       description: patch.description ?? existing.description,
+      type: patch.type ?? existing.type,
+      status: patch.status ?? existing.status,
+      staleAfter: patch.staleAfter !== undefined ? patch.staleAfter : existing.staleAfter,
+      generated: patch.generated ?? existing.generated,
+      verified: patch.verified ?? existing.verified,
       frontmatter: patch.frontmatter ?? existing.frontmatter,
       updatedAt: new Date(),
     };
@@ -111,6 +121,7 @@ export class FileSystemVolumeStore implements VolumeStore {
 
   // ---- chapters ---------------------------------------------------------
 
+  /** Upsert-not-clobber semantics for the OKF fields are documented on the `VolumeStore.putChapter` port. */
   async putChapter(volume: VolumeSlug, input: ChapterInput): Promise<Chapter> {
     await this.readVolumeRecord(volume); // throws VolumeNotFoundError if missing
 
@@ -122,8 +133,10 @@ export class FileSystemVolumeStore implements VolumeStore {
     let createdAt = now;
 
     const existingFile = Bun.file(path);
-    if (await existingFile.exists()) {
-      const existing = parseChapterDocument(input.slug, await existingFile.text());
+    const existing = (await existingFile.exists())
+      ? parseChapterDocument(input.slug, await existingFile.text())
+      : undefined;
+    if (existing) {
       createdAt = existing.createdAt;
     }
 
@@ -131,6 +144,12 @@ export class FileSystemVolumeStore implements VolumeStore {
       slug: input.slug,
       title: input.title,
       body: input.body,
+      type: input.type ?? existing?.type ?? "Concept",
+      status: input.status ?? existing?.status ?? "draft",
+      staleAfter:
+        input.staleAfter !== undefined ? input.staleAfter : (existing?.staleAfter ?? null),
+      generated: input.generated ?? existing?.generated ?? { by: "unknown", at: now },
+      verified: input.verified ?? existing?.verified ?? [],
       frontmatter,
       createdAt,
       updatedAt: now,

@@ -92,6 +92,16 @@ function buildFrontmatter(directive: ChapterDirective): Record<string, unknown> 
   return frontmatter;
 }
 
+/** Derive an OKF `type` from a chapter directive. Defaults to `"Design Guidance"`. */
+function chapterType(directive: ChapterDirective): string {
+  return directive.okf?.type ?? "Design Guidance";
+}
+
+/** Derive an OKF `status` from a chapter directive. Defaults to `"draft"`. */
+function chapterStatus(directive: ChapterDirective): "draft" | "stable" | "deprecated" {
+  return directive.okf?.status ?? "draft";
+}
+
 export interface ChapterDraft {
   readonly chapter: Chapter;
   readonly sidecar: ClaimSidecar;
@@ -118,6 +128,10 @@ export async function draftChapter(
     slug,
     title: directive.title,
     body: directive.body,
+    type: chapterType(directive),
+    status: chapterStatus(directive),
+    generated: { by: "shadow/1.0", at: new Date() },
+    verified: [],
     frontmatter: buildFrontmatter(directive),
   });
 

@@ -6,8 +6,8 @@ import { runChapters } from "./chapters.ts";
 
 describe("runChapters", () => {
   test("lists a volume's chapter rows in natural order when unranked", async () => {
-    await withStore(async (store) => {
-      await buildSmallFixture(store);
+    await withStore(async (store, root) => {
+      await buildSmallFixture(store, root);
       const result = await runChapters(store, "ui-design", {});
 
       expect(result.volume_id).toBe("ui-design");
@@ -24,8 +24,8 @@ describe("runChapters", () => {
   });
 
   test("--rank orders chapters by BM25 relevance to the given task", async () => {
-    await withStore(async (store) => {
-      await buildSmallFixture(store);
+    await withStore(async (store, root) => {
+      await buildSmallFixture(store, root);
       const result = await runChapters(store, "ui-design", { rank: "dense table row height" });
 
       expect(result.chapters[0]?.title).toBe("How Linear handles information density");
@@ -34,8 +34,8 @@ describe("runChapters", () => {
   });
 
   test("unranked rows carry no score field", async () => {
-    await withStore(async (store) => {
-      await buildSmallFixture(store);
+    await withStore(async (store, root) => {
+      await buildSmallFixture(store, root);
       const result = await runChapters(store, "ui-design", {});
       for (const row of result.chapters) {
         expect(row.score).toBeUndefined();
@@ -44,8 +44,8 @@ describe("runChapters", () => {
   });
 
   test("next_steps points at `shadow read` with a real node_id", async () => {
-    await withStore(async (store) => {
-      await buildSmallFixture(store);
+    await withStore(async (store, root) => {
+      await buildSmallFixture(store, root);
       const result = await runChapters(store, "ui-design", {});
       const firstId = result.chapters[0]?.node_id;
       expect(result.next_steps.some((s) => firstId && s.includes(firstId))).toBe(true);
@@ -53,8 +53,8 @@ describe("runChapters", () => {
   });
 
   test("throws VolumeLookupError (with next_steps) for an unknown volume_id", async () => {
-    await withStore(async (store) => {
-      await buildSmallFixture(store);
+    await withStore(async (store, root) => {
+      await buildSmallFixture(store, root);
       const error = await runChapters(store, "does-not-exist", {}).catch((e) => e);
       expect(error).toBeInstanceOf(VolumeLookupError);
       expect(error.nextSteps.length).toBeGreaterThan(0);

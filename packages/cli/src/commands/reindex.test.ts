@@ -6,9 +6,9 @@ import { runIndexCommand } from "./reindex.ts";
 
 describe("runIndexCommand", () => {
   test("without --check: builds and persists the corpus index, reporting stats", async () => {
-    await withStore(async (store) => {
-      await buildSmallFixture(store); // already reindexed once by the fixture
-      const result = await runIndexCommand(store, { check: false });
+    await withStore(async (store, root) => {
+      await buildSmallFixture(store, root); // already reindexed once by the fixture
+      const result = await runIndexCommand(store, root, { check: false });
       if (result.up_to_date) throw new Error("unreachable: check was false");
 
       expect(result.stats.volumes).toBe(2);
@@ -19,13 +19,13 @@ describe("runIndexCommand", () => {
   });
 
   test("mints missing chapter ids as a side effect (D13), reported in minted_ids", async () => {
-    await withStore(async (store) => {
+    await withStore(async (store, root) => {
       const { toChapterSlug, toVolumeSlug } = await import("@shadow/core");
       const slug = toVolumeSlug("v");
       await store.createVolume({ slug, title: "V" });
       await store.putChapter(slug, { slug: toChapterSlug("c"), title: "C", body: "body" });
 
-      const result = await runIndexCommand(store, { check: false });
+      const result = await runIndexCommand(store, root, { check: false });
       if (result.up_to_date) throw new Error("unreachable: check was false");
       expect(result.minted_ids).toHaveLength(1);
       expect(result.minted_ids[0]?.chapterSlug).toBe("c");
@@ -33,17 +33,17 @@ describe("runIndexCommand", () => {
   });
 
   test("--check succeeds silently when the persisted index matches a fresh build", async () => {
-    await withStore(async (store) => {
-      await buildSmallFixture(store);
-      const result = await runIndexCommand(store, { check: true });
+    await withStore(async (store, root) => {
+      await buildSmallFixture(store, root);
+      const result = await runIndexCommand(store, root, { check: true });
       expect(result.up_to_date).toBe(true);
       expect(result.next_steps.length).toBeGreaterThan(0);
     });
   });
 
   test("--check throws StaleIndexError when a chapter changed after the last build", async () => {
-    await withStore(async (store) => {
-      await buildSmallFixture(store);
+    await withStore(async (store, root) => {
+      await buildSmallFixture(store, root);
       const { toChapterSlug, toVolumeSlug } = await import("@shadow/core");
       // Mutate a chapter body without reindexing.
       await store.putChapter(toVolumeSlug("ui-design"), {
@@ -55,26 +55,26 @@ describe("runIndexCommand", () => {
         ).frontmatter,
       });
 
-      const error = await runIndexCommand(store, { check: true }).catch((e) => e);
+      const error = await runIndexCommand(store, root, { check: true }).catch((e) => e);
       expect(error).toBeInstanceOf(StaleIndexError);
       expect(error.nextSteps.length).toBeGreaterThan(0);
     });
   });
 
   test("--check throws StaleIndexError when no index has ever been persisted", async () => {
-    await withStore(async (store) => {
+    await withStore(async (store, root) => {
       const { toVolumeSlug } = await import("@shadow/core");
       await store.createVolume({ slug: toVolumeSlug("v"), title: "V" });
-      const error = await runIndexCommand(store, { check: true }).catch((e) => e);
+      const error = await runIndexCommand(store, root, { check: true }).catch((e) => e);
       expect(error).toBeInstanceOf(StaleIndexError);
     });
   });
 
   test("sanity: a corpus reindexed twice in a row is always up to date", async () => {
-    await withStore(async (store) => {
-      await buildSmallFixture(store);
-      await new StructuralIndexer().reindex(store);
-      const result = await runIndexCommand(store, { check: true });
+    await withStore(async (store, root) => {
+      await buildSmallFixture(store, root);
+      await new StructuralIndexer({ rootDir: root }).reindex(store);
+      const result = await runIndexCommand(store, root, { check: true });
       expect(result.up_to_date).toBe(true);
     });
   });

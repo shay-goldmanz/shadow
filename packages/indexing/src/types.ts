@@ -80,6 +80,18 @@ export interface ChapterIndexNode {
   readonly confidence?: Confidence;
   readonly supersedes?: readonly string[];
   readonly aliases?: readonly string[];
+  /** OKF v0.2 concept type, e.g. `Design Guidance`, `Attested Computation` (OKF §4.1). */
+  readonly type?: string;
+  /** OKF v0.2 lifecycle status — `draft`, `stable`, or `deprecated` (OKF §5.4). */
+  readonly status?: string;
+  /** Attested Computation frontmatter fields, present only when `type: "Attested Computation"` (OKF §10.2). */
+  readonly attestedComputation?: {
+    readonly runtime: string;
+    readonly parameters: readonly { name: string; type: string; required: boolean }[];
+    readonly computation?: string;
+    readonly executor: { readonly resource: string; readonly receipt: readonly string[] };
+    readonly attester: { readonly resource: string };
+  };
 
   readonly updated?: string;
   readonly tokens: number;
@@ -97,6 +109,8 @@ export interface ChapterIndexNode {
 export interface VolumeIndexNode {
   readonly volume_id: string; // volume slug
   readonly title: string;
+  /** OKF v0.2 concept type (OKF §4.1). */
+  readonly type?: string;
   readonly when_to_use?: string;
   readonly not_for?: string;
   readonly keywords?: readonly string[];

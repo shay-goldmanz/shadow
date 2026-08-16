@@ -4,8 +4,8 @@ import { runVolumes } from "./volumes.ts";
 
 describe("runVolumes", () => {
   test("lists every volume's manifest row, cheapest-first shape (no chapters, no body)", async () => {
-    await withStore(async (store) => {
-      await buildSmallFixture(store);
+    await withStore(async (store, root) => {
+      await buildSmallFixture(store, root);
       const result = await runVolumes(store);
 
       expect(result.volumes).toHaveLength(2);
@@ -20,8 +20,8 @@ describe("runVolumes", () => {
   });
 
   test("never carries a per-chapter list or body text — only the routing manifest", async () => {
-    await withStore(async (store) => {
-      await buildSmallFixture(store);
+    await withStore(async (store, root) => {
+      await buildSmallFixture(store, root);
       const result = await runVolumes(store);
 
       for (const row of result.volumes) {
@@ -34,8 +34,8 @@ describe("runVolumes", () => {
   });
 
   test("next_steps is present and non-empty when volumes exist", async () => {
-    await withStore(async (store) => {
-      await buildSmallFixture(store);
+    await withStore(async (store, root) => {
+      await buildSmallFixture(store, root);
       const result = await runVolumes(store);
       expect(result.next_steps.length).toBeGreaterThan(0);
       expect(result.next_steps.some((s) => s.includes("shadow chapters"))).toBe(true);
@@ -43,10 +43,10 @@ describe("runVolumes", () => {
   });
 
   test("returns [] with steering next_steps when the corpus has no volumes yet", async () => {
-    await withStore(async (store) => {
+    await withStore(async (store, root) => {
       // Build an empty corpus index (no volumes at all).
       const { StructuralIndexer } = await import("@shadow/indexing");
-      await new StructuralIndexer().reindex(store);
+      await new StructuralIndexer({ rootDir: root }).reindex(store);
 
       const result = await runVolumes(store);
       expect(result.volumes).toEqual([]);

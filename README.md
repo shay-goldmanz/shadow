@@ -39,6 +39,7 @@ directly via Bun.
 | [`docs/INDEXING.md`](docs/INDEXING.md) | indexing schema and algorithms |
 | [`docs/EVIDENCE.md`](docs/EVIDENCE.md) | chain-of-evidence schema, checks, and metrics |
 | [`docs/API.md`](docs/API.md) | HTTP contract between the interface and the pillars |
+| [`docs/OKF_SPEC_REFERENCES.md`](docs/OKF_SPEC_REFERENCES.md) | OKF v0.2 spec sections the code cites, as this codebase understands and enforces them |
 
 ## Running it
 

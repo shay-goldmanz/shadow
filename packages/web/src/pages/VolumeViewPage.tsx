@@ -98,6 +98,19 @@ export function VolumeViewPage({
       ? new Map(indexState.index.volume.chapters.map((node) => [node.slug, node]))
       : new Map();
 
+  const volumeStatusLabel =
+    data.volume.status === "stable"
+      ? "Stable"
+      : data.volume.status === "deprecated"
+        ? "Deprecated"
+        : "Draft";
+  const volumeStatusBadgeClass =
+    data.volume.status === "stable"
+      ? "badge badge--sage"
+      : data.volume.status === "deprecated"
+        ? "badge badge--red"
+        : "badge badge--neutral";
+
   return (
     <div className="page volume-view-page">
       <header className="page__header">
@@ -105,6 +118,14 @@ export function VolumeViewPage({
           ← Volumes
         </button>
         <h1>{data.volume.title}</h1>
+        <div className="volume-view-page__meta">
+          <span className={volumeStatusBadgeClass} aria-label={`Status: ${volumeStatusLabel}`}>
+            {volumeStatusLabel}
+          </span>
+          {data.volume.type && data.volume.type !== "Concept" && (
+            <span className="badge badge--neutral">{data.volume.type}</span>
+          )}
+        </div>
         {data.volume.description && <p className="page__subtitle">{data.volume.description}</p>}
         <button
           type="button"

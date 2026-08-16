@@ -43,6 +43,9 @@ export async function getLint(deps: ApiDeps, req: BunRequest<"/api/lint">): Prom
   };
 
   const offline = url.searchParams.get("offline") === "true";
+  // No `?okf=true` here yet — `LintOptions.okf` (`shadow lint --okf`, CLI-only for now) needs
+  // `okfChapterRecordsFrom`/`okfVolumeRecordsFrom` + `loadOkfBundleArtifacts(root)`, and this
+  // handler has no `root` (`ApiDeps` exposes `volumeStore`, not a filesystem root). Out of scope here.
   const report = await runLint(
     scoped,
     { store: deps.volumeStore, port: deps.structuredGenerationPort, missLog: deps.missLog },

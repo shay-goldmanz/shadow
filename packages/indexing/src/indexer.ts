@@ -10,10 +10,14 @@
  * `navigator.ts` for the retrieval seam); neither is implemented here.
  */
 
+import { dirname, join } from "node:path";
 import type { Chapter, VolumeSlug, VolumeStore } from "@shadow/core";
+import type { LedgerEvent } from "@shadow/evidence";
 import { buildChapterIndexNode } from "./chapter-index.ts";
 import { buildIndexDocument } from "./corpus-index.ts";
 import { ChapterIndexBuildError } from "./errors.ts";
+import { generateRootIndexMd, generateVolumeIndexMd } from "./index-md.ts";
+import { generateRootLogMd, generateVolumeLogMd } from "./log-md.ts";
 import { coerceRoutingText, coerceStringArray } from "./routing-fields.ts";
 import type {
   ChapterIndexNode,
@@ -74,12 +78,43 @@ interface InternalBuild {
 }
 
 /**
+ * Read the evidence ledger for a volume. Returns an empty array if the
+ * ledger file doesn't exist yet (a freshly created volume with no events).
+ * Resilient to malformed lines: skips them rather than throwing.
+ */
+async function readLedgerFile(evidenceDir: string): Promise<LedgerEvent[]> {
+  const ledgerPath = join(evidenceDir, "ledger.ndjson");
+  const file = Bun.file(ledgerPath);
+  if (!(await file.exists())) {
+    return [];
+  }
+  const text = await file.text();
+  const events: LedgerEvent[] = [];
+  for (const line of text.split("\n")) {
+    const trimmed = line.trim();
+    if (trimmed.length === 0) continue;
+    try {
+      events.push(JSON.parse(trimmed) as LedgerEvent);
+    } catch {
+      // Malformed line — same resilience as FileMissLog and FileSystemEvidenceStore.
+    }
+  }
+  return events;
+}
+
+/**
  * Default `Indexer`: deterministic Markdown-heading structure + authored
  * frontmatter, no LLM. Rebuilds the whole corpus on every call (D11a) —
  * at our scale (~100 chapters) this runs in well under a second, so there
  * is no incremental/skip-work machinery to maintain.
  */
 export class StructuralIndexer implements Indexer {
+  private readonly rootDir: string;
+
+  constructor(options: { readonly rootDir: string }) {
+    this.rootDir = options.rootDir;
+  }
+
   async build(store: VolumeStore): Promise<BuildIndexResult> {
     return (await this.buildInternal(store)).result;
   }
@@ -92,6 +127,10 @@ export class StructuralIndexer implements Indexer {
     // wrote the whole corpus document into every volume's own index.json
     // as a workaround, so volume A's index listed volume B's chapters).
     await store.writeCorpusIndex(result.document);
+
+    // Per-volume ledger events collected for the root-level log.md.
+    const allVolumeEvents: LedgerEvent[][] = [];
+
     // Each volume's own index.json gets a *scoped* view — just its own
     // node, not the corpus. This is still worth writing (not dropped
     // entirely): it is what a consumer who only cares about one volume
@@ -111,7 +150,27 @@ export class StructuralIndexer implements Indexer {
         volume: volumeNode,
       };
       await store.writeIndex(slug, volumeView);
+
+      // OKF: write per-volume index.md and log.md alongside index.json.
+      const volumeDir = dirname(store.evidenceDir(slug));
+      const indexMd = generateVolumeIndexMd(volumeNode);
+      await Bun.write(join(volumeDir, "index.md"), indexMd);
+
+      const ledgerEvents = await readLedgerFile(store.evidenceDir(slug));
+      allVolumeEvents.push(ledgerEvents);
+      const logMd = generateVolumeLogMd(ledgerEvents);
+      await Bun.write(join(volumeDir, "log.md"), logMd);
     }
+
+    // OKF: write root-level index.md (bundle-level directory listing) and
+    // root-level log.md (cross-volume chronological history) — always,
+    // even for a corpus with zero volumes, so an empty corpus is still a
+    // conformant bundle (both generators handle an empty input).
+    const rootIndexMd = generateRootIndexMd(result.document.volumes);
+    await Bun.write(join(this.rootDir, "index.md"), rootIndexMd);
+    const rootLogMd = generateRootLogMd(allVolumeEvents);
+    await Bun.write(join(this.rootDir, "log.md"), rootLogMd);
+
     return result;
   }
 
@@ -137,6 +196,8 @@ export class StructuralIndexer implements Indexer {
               chapterTitle: ensured.chapter.title,
               body: ensured.chapter.body,
               frontmatter: ensured.chapter.frontmatter,
+              type: ensured.chapter.type,
+              status: ensured.chapter.status,
               file: store.chapterRelativePath(volume.slug, ensured.chapter.slug),
             }),
           );
@@ -149,6 +210,7 @@ export class StructuralIndexer implements Indexer {
         buildVolumeIndexNode({
           volumeSlug: volume.slug,
           volumeTitle: volume.title,
+          volumeType: volume.type,
           // @shadow/core's Volume now carries an open `frontmatter` record
           // (T1.4/f02692f), the volume-level counterpart of a chapter's
           // frontmatter — VOLUME.md round-trips `when_to_use`/`not_for`/

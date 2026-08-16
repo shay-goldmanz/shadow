@@ -44,11 +44,19 @@ const chapterFrontmatterSchema = z.object({
   confidence: confidenceSchema.optional(),
 });
 
+const okfStatusSchema = z.enum(["draft", "stable", "deprecated"]);
+
+const chapterOkfSchema = z.object({
+  type: z.string().min(1).optional(),
+  status: okfStatusSchema.optional(),
+});
+
 const chapterDirectiveSchema = z.object({
   slug: z.string().min(1),
   title: z.string().min(1),
   body: z.string().min(1),
   frontmatter: chapterFrontmatterSchema.optional(),
+  okf: chapterOkfSchema.optional(),
   claims: z.array(claimDirectiveSchema),
 });
 

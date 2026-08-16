@@ -75,6 +75,25 @@ export interface VolumeStore extends VolumePathResolver {
    * not fail on an existing chapter. `createdAt` is preserved across
    * overwrites; `updatedAt` always advances.
    *
+   * `title`, `body`, and `frontmatter` are always a full replace
+   * (`frontmatter` defaults to `{}` when omitted — callers that want to
+   * preserve existing keys must spread them in themselves, same as
+   * `updateVolume`'s `frontmatter`).
+   *
+   * The five OKF fields (`type`, `status`, `staleAfter`, `generated`,
+   * `verified`) follow upsert-not-clobber semantics, mirroring how
+   * `createdAt` is already preserved across overwrites:
+   * - On create (no chapter exists yet at this slug): an omitted field gets
+   *   its creation default (`type: "Concept"`, `status: "draft"`,
+   *   `staleAfter: null`, `generated: { by: "unknown", at: now }`,
+   *   `verified: []`).
+   * - On update (a chapter already exists): an omitted (`undefined`) field
+   *   keeps the value already on disk instead of being reset to the
+   *   creation default. `staleAfter` is the one field where `null` is a
+   *   meaningful, distinct input — `undefined` means "not provided, keep
+   *   what's there" and `null` means "explicitly clear it" — so it is
+   *   checked against `undefined` rather than defaulted with `??`.
+   *
    * @throws {VolumeNotFoundError} if `volume` has no volume on disk.
    */
   putChapter(volume: VolumeSlug, input: ChapterInput): Promise<Chapter>;
