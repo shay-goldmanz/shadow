@@ -240,6 +240,18 @@ separate file.
 | §10.2 | Attested Computation required fields | `core/src/types.ts`, `lint-okf.ts` | `okf-attested-missing-runtime`, `okf-attested-missing-parameters`, `okf-attested-bad-parameter`, `okf-attested-missing-executor`, `okf-attested-missing-executor-resource`, `okf-attested-missing-attester`, `okf-attested-missing-attester-resource`, `okf-attested-missing-fields` |
 | §12 | `okf_version` declaration | `index-md.ts`, `okf-input.ts`, `lint-okf.ts` | `okf-missing-root-index` (shared with §8) |
 
+**Reachability:** through the real `shadow lint --okf` CLI wiring, the
+store's parsers normalize or hard-fail before a record ever reaches
+`checkOkfConformance` — so the field-validation codes above
+(`okf-missing-type`, `okf-volume-missing-type`, `okf-missing-generated`,
+`okf-invalid-verified-by`, `okf-invalid-status`, `okf-invalid-stale-after`)
+are defense-in-depth against hand-edited or out-of-band records, not
+diagnostics an operator can actually trigger through the CLI; the findings
+reachable through `shadow lint --okf` are `okf-missing-root-index`,
+`okf-missing-log`, the `okf-attested-*` family, and `okf-stale-index` (an
+index chapter node with no matching store record — not tied to any spec
+section, since a stale index isn't an OKF violation).
+
 All checks above run zero LLM calls and zero network calls (`checkOkfConformance`
 in `packages/indexing/src/lint-okf.ts` is pure: input bag in, findings out) and
 are wired into the CLI via `shadow lint --okf` (`packages/cli/src/commands/lint.ts`).

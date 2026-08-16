@@ -46,6 +46,24 @@ describe("checkOkfConformance", () => {
     expect(result.findings).toHaveLength(0);
   });
 
+  test("an index chapter node with no matching store record is flagged as a stale index, not a missing type", () => {
+    const c = chapter({ node_id: "A", title: "Ghost", slug: "ghost" });
+    const doc = document([volume({ volume_id: "v", chapters: [c] })]);
+
+    const result = checkOkfConformance({
+      index: doc,
+      chapters: [], // the store has no record for "A" at all — deleted, stale index
+      volumes: [ov({ volume_id: "v" })],
+      artifacts,
+    });
+
+    expect(result.findings).toHaveLength(1);
+    expect(result.findings[0]!.code).toBe("okf-stale-index");
+    expect(result.findings[0]!.severity).toBe("error");
+    expect(result.findings[0]!.nodeIds).toEqual(["A"]);
+    expect(result.findings.map((f) => f.code)).not.toContain("okf-missing-type");
+  });
+
   test("a chapter missing type is flagged", () => {
     const c = chapter({ node_id: "A", title: "Untyped", slug: "untyped" });
     const doc = document([volume({ volume_id: "v", chapters: [c] })]);
@@ -61,6 +79,22 @@ describe("checkOkfConformance", () => {
     expect(result.findings[0]!.code).toBe("okf-missing-type");
     expect(result.findings[0]!.severity).toBe("error");
     expect(result.findings[0]!.nodeIds).toEqual(["A"]);
+  });
+
+  test("a store record with an empty type string is flagged as missing type, not a stale index (regression)", () => {
+    const c = chapter({ node_id: "A", title: "Empty type", slug: "empty-type" });
+    const doc = document([volume({ volume_id: "v", chapters: [c] })]);
+
+    const result = checkOkfConformance({
+      index: doc,
+      chapters: [oc({ slug: "empty-type", node_id: "A", type: "" })],
+      volumes: [ov({ volume_id: "v" })],
+      artifacts,
+    });
+
+    expect(result.findings).toHaveLength(1);
+    expect(result.findings[0]!.code).toBe("okf-missing-type");
+    expect(result.findings.map((f) => f.code)).not.toContain("okf-stale-index");
   });
 
   test("multiple chapters: only those missing type are flagged", () => {

@@ -2,6 +2,9 @@
  * OKF v0.2 conformance validation check (Phase 3).
  *
  * Validates that the index conforms to OKF v0.2 structural requirements:
+ * - Every index chapter node has a matching record in the store; a node
+ *   with none means the persisted index is stale (not an OKF spec
+ *   violation — see `okf-stale-index` below).
  * - Every chapter has a non-empty `type` (OKF §4.1).
  * - Every volume has a non-empty `type` (OKF §4.1) — a volume's VOLUME.md
  *   is itself an OKF concept, so the same requirement applies to it.
@@ -15,6 +18,20 @@
  * This is a pure check — zero LLM calls, zero network calls. It reads
  * frontmatter fields already present in the index and validates their
  * shape against the OKF spec.
+ *
+ * Reachability: through the real `shadow lint --okf` wiring (see
+ * `okf-input.ts`), the store's parsers normalize or hard-fail before a
+ * record ever reaches this check — `hasRequiredTypedFields` throws on a
+ * missing `type`, `parseOkfStatus` coerces an invalid status to `"draft"`,
+ * `parseOkfActor` always supplies a `generated` value, and `parseVerified`
+ * drops malformed entries. So the field-validation codes below
+ * (`okf-invalid-status`, `okf-missing-generated`, `okf-invalid-stale-after`,
+ * `okf-invalid-verified-by`, `okf-missing-type`, `okf-volume-missing-type`)
+ * are defense-in-depth against hand-edited or out-of-band records passed
+ * directly to `checkOkfConformance`, not diagnostics an operator can
+ * actually trigger through the CLI. The findings that are reachable through
+ * `shadow lint --okf` are the artifact pair (`okf-missing-root-index`,
+ * `okf-missing-log`), the `okf-attested-*` family, and `okf-stale-index`.
  */
 
 import type { LintCheck, LintCheckResult, LintFinding } from "./lint-types.ts";
@@ -254,29 +271,40 @@ function validateAttestedComputation(
  * records, volume records, and file artifacts.
  *
  * Checks performed:
- * 1. Every chapter has a non-empty `type` (OKF §4.1).
- * 2. Chapters carry valid standard OKF fields (status, generated, stale_after,
+ * 1. Every index chapter node has a matching record in `input.chapters`;
+ *    one with none means the persisted index is stale, not a spec
+ *    violation (`okf-stale-index`).
+ * 2. Every chapter with a record has a non-empty `type` (OKF §4.1).
+ * 3. Chapters carry valid standard OKF fields (status, generated, stale_after,
  *    verified — OKF §5.2, §5.4, §5.5).
- * 3. Attested Computation chapters carry required fields (OKF §10.2).
- * 4. Every volume has a non-empty `type` (OKF §4.1), then the same standard
+ * 4. Attested Computation chapters carry required fields (OKF §10.2).
+ * 5. Every volume has a non-empty `type` (OKF §4.1), then the same standard
  *    OKF field validation as chapters (OKF §5.2, §5.4, §5.5).
- * 5. Bundle artifacts: root index.md, per-volume index.md and log.md.
+ * 6. Bundle artifacts: root index.md, per-volume index.md and log.md.
  */
 export function checkOkfConformance(input: OkfConformanceInput): LintCheckResult {
   const findings: LintFinding[] = [];
-  const typeLookup = new Map(input.chapters.map((c) => [c.node_id, c.type]));
-  const acLookup = new Map(
-    input.chapters
-      .filter((c) => c.attestedComputation)
-      .map((c) => [c.node_id, c.attestedComputation!] as const),
-  );
+  const recordLookup = new Map(input.chapters.map((c) => [c.node_id, c] as const));
 
   for (const volume of input.index.volumes) {
     for (const chapter of volume.chapters) {
-      const type = typeLookup.get(chapter.node_id);
+      const record = recordLookup.get(chapter.node_id);
 
-      // Check 1: type must be present and non-empty
-      if (!type || type.length === 0) {
+      // Check 1: the index node must have a matching store record at all —
+      // absence means the persisted index is stale (a chapter was deleted
+      // or renamed in the store without a reindex), not an OKF violation.
+      if (!record) {
+        findings.push({
+          code: "okf-stale-index",
+          severity: "error",
+          message: `Chapter "${chapter.title}" is in the index but not in the store — the index is stale; run \`shadow index\``,
+          nodeIds: [chapter.node_id],
+        });
+        continue; // nothing further to validate without a record
+      }
+
+      // Check 2: type must be present and non-empty
+      if (!record.type || record.type.length === 0) {
         findings.push({
           code: "okf-missing-type",
           severity: "error",
@@ -286,17 +314,14 @@ export function checkOkfConformance(input: OkfConformanceInput): LintCheckResult
         continue; // can't validate further without type
       }
 
-      // Check 2: validate standard OKF fields
-      const record = input.chapters.find((r) => r.node_id === chapter.node_id);
-      if (record) {
-        findings.push(
-          ...validateOkfCommonFindings(`Chapter "${chapter.title}"`, [chapter.node_id], record),
-        );
-      }
+      // Check 3: validate standard OKF fields
+      findings.push(
+        ...validateOkfCommonFindings(`Chapter "${chapter.title}"`, [chapter.node_id], record),
+      );
 
-      // Check 3: Attested Computation validation
-      if (type === "Attested Computation") {
-        const ac = acLookup.get(chapter.node_id);
+      // Check 4: Attested Computation validation
+      if (record.type === "Attested Computation") {
+        const ac = record.attestedComputation;
         if (!ac) {
           findings.push({
             code: "okf-attested-missing-fields",
@@ -311,7 +336,7 @@ export function checkOkfConformance(input: OkfConformanceInput): LintCheckResult
     }
   }
 
-  // Check 4: volumes — type is required (OKF §4.1), then the same standard
+  // Check 5: volumes — type is required (OKF §4.1), then the same standard
   // OKF field validation chapters get.
   for (const volumeRecord of input.volumes) {
     if (!volumeRecord.type || volumeRecord.type.length === 0) {
@@ -333,7 +358,7 @@ export function checkOkfConformance(input: OkfConformanceInput): LintCheckResult
     );
   }
 
-  // Check 5: bundle artifacts
+  // Check 6: bundle artifacts
   if (!input.artifacts.rootIndexOkfVersion) {
     findings.push({
       code: "okf-missing-root-index",

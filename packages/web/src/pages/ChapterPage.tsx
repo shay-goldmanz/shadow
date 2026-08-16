@@ -129,6 +129,12 @@ export function ChapterPage({
     typeof data.chapter.staleAfter === "string" &&
     new Date(data.chapter.staleAfter) <= new Date();
   const statusLabel = statusLabels[data.chapter.status];
+  const statusBadgeClass =
+    data.chapter.status === "stable"
+      ? "badge badge--sage"
+      : data.chapter.status === "deprecated"
+        ? "badge badge--red"
+        : "badge badge--neutral";
 
   return (
     <div className="page chapter-page">
@@ -142,14 +148,11 @@ export function ChapterPage({
         </button>
         <h1>{data.chapter.title}</h1>
         <div className="chapter-page__meta">
-          <span
-            className={`chapter-page__status chapter-page__status--${data.chapter.status}`}
-            aria-label={`Status: ${statusLabel}`}
-          >
+          <span className={statusBadgeClass} aria-label={`Status: ${statusLabel}`}>
             {statusLabel}
           </span>
           {isStale && (
-            <span className="chapter-page__stale" role="alert">
+            <span className="badge badge--amber" role="alert">
               Stale since {data.chapter.staleAfter}
             </span>
           )}

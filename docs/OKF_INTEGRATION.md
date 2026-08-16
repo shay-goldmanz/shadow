@@ -39,8 +39,11 @@ is already 80% OKF. The work is schema alignment plus three new artifacts.
 ### 1.3 Add `stale_after`
 
 - Absolute date, optional
-- Consumer-visible: `shadow read` warns when stale
-- `shadow lint` flags stale chapters
+- Consumer-visible: `shadow read` warns when stale (the date-vs-now
+  comparison lives in `packages/cli/src/commands/read.ts`, not in lint)
+- `shadow lint` flags only the `stale_after` *format* (`okf-invalid-stale-after`
+  — must parse as `YYYY-MM-DD`); it does not compare the date to "now" and
+  does not flag chapters as stale on its own
 
 ### 1.4 Align `generated` / `verified` with OKF actor convention
 

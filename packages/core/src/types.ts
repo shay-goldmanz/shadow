@@ -111,20 +111,28 @@ export interface Chapter {
   readonly updatedAt: Date;
 }
 
-/** Input to `VolumeStore.putChapter`. */
+/**
+ * Input to `VolumeStore.putChapter`, an upsert — see that port's doc for the
+ * full preserve-on-update contract the five OKF fields below follow.
+ */
 export interface ChapterInput {
   readonly slug: ChapterSlug;
   readonly title: string;
   readonly body: string;
-  /** OKF type. Defaults to `"Concept"` if omitted. */
+  /** OKF type. Defaults to `"Concept"` on create; omitted on update preserves the stored value. */
   readonly type?: string;
-  /** OKF status. Defaults to `"draft"` if omitted. */
+  /** OKF status. Defaults to `"draft"` on create; omitted on update preserves the stored value. */
   readonly status?: OkfStatus;
-  /** OKF stale-after date. Defaults to `null` if omitted. */
+  /**
+   * OKF stale-after date. Defaults to `null` on create; omitted (`undefined`)
+   * on update preserves the stored value — `null` is a distinct, meaningful
+   * input on update, explicitly clearing staleness gating rather than
+   * leaving the existing date in place.
+   */
   readonly staleAfter?: Date | null;
-  /** OKF `generated`. Defaults to `{ by: "unknown", at: now }` if omitted. */
+  /** OKF `generated`. Defaults to `{ by: "unknown", at: now }` on create; omitted on update preserves the stored value. */
   readonly generated?: OkfActor;
-  /** OKF `verified`. Defaults to `[]` if omitted. */
+  /** OKF `verified`. Defaults to `[]` on create; omitted on update preserves the stored value. */
   readonly verified?: readonly OkfActor[];
   /** Defaults to `{}` if omitted. Merged verbatim into the chapter's frontmatter. */
   readonly frontmatter?: Readonly<Record<string, unknown>>;

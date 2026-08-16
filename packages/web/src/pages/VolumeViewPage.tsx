@@ -104,6 +104,12 @@ export function VolumeViewPage({
       : data.volume.status === "deprecated"
         ? "Deprecated"
         : "Draft";
+  const volumeStatusBadgeClass =
+    data.volume.status === "stable"
+      ? "badge badge--sage"
+      : data.volume.status === "deprecated"
+        ? "badge badge--red"
+        : "badge badge--neutral";
 
   return (
     <div className="page volume-view-page">
@@ -113,14 +119,11 @@ export function VolumeViewPage({
         </button>
         <h1>{data.volume.title}</h1>
         <div className="volume-view-page__meta">
-          <span
-            className={`volume-view-page__status volume-view-page__status--${data.volume.status}`}
-            aria-label={`Status: ${volumeStatusLabel}`}
-          >
+          <span className={volumeStatusBadgeClass} aria-label={`Status: ${volumeStatusLabel}`}>
             {volumeStatusLabel}
           </span>
           {data.volume.type && data.volume.type !== "Concept" && (
-            <span className="volume-view-page__type">{data.volume.type}</span>
+            <span className="badge badge--neutral">{data.volume.type}</span>
           )}
         </div>
         {data.volume.description && <p className="page__subtitle">{data.volume.description}</p>}

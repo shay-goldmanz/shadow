@@ -21,10 +21,18 @@ describe("StructuralIndexer — ULID minting and write-back (D13)", () => {
     await withStore(async (store, root) => {
       const volume = toVolumeSlug("ui-design");
       await store.createVolume({ slug: volume, title: "Interface Design" });
+      const staleAfter = new Date("2030-06-15T00:00:00.000Z");
+      const generated = { by: "human:alice", at: new Date("2025-01-01T00:00:00.000Z") };
+      const verified = [{ by: "process:audit", at: new Date("2025-02-01T00:00:00.000Z") }];
       await store.putChapter(volume, {
         slug: toChapterSlug("density"),
         title: "Density",
         body: "Some prose about density.\n",
+        type: "Reference",
+        status: "stable",
+        staleAfter,
+        generated,
+        verified,
       });
 
       const indexer = new StructuralIndexer({ rootDir: root });
@@ -40,6 +48,15 @@ describe("StructuralIndexer — ULID minting and write-back (D13)", () => {
       const onDisk = await store.getChapter(volume, toChapterSlug("density"));
       const mintedId: string | undefined = mintedIds[0]?.id;
       expect(onDisk.frontmatter.id).toBe(mintedId);
+
+      // The ULID-minting upsert must not clobber the non-default OKF fields
+      // already on the chapter — `ensureId`'s `putChapter` call omits them,
+      // which relies on putChapter's preserve-on-update semantics (F5).
+      expect(onDisk.type).toBe("Reference");
+      expect(onDisk.status).toBe("stable");
+      expect(onDisk.staleAfter).toEqual(staleAfter);
+      expect(onDisk.generated).toEqual(generated);
+      expect(onDisk.verified).toEqual(verified);
     });
   });
 
@@ -325,7 +342,13 @@ describe("StructuralIndexer.reindex — OKF root/volume index.md and log.md plac
       const rootLog = Bun.file(join(root, "log.md"));
       expect(await rootIndex.exists()).toBe(true);
       expect(await rootLog.exists()).toBe(true);
-      expect(await rootIndex.text()).toContain('okf_version: "0.2"');
+      const rootIndexText = await rootIndex.text();
+      expect(rootIndexText).toContain('okf_version: "0.2"');
+
+      // The root index.md links chapters root-relatively (`volumes/<v>/chapters/<c>.md`),
+      // not volume-relatively (`chapters/<c>.md`) — the latter only resolves
+      // correctly from inside that volume's own directory.
+      expect(rootIndexText).toContain("(volumes/ui-design/chapters/density.md)");
 
       // The old off-by-one landed these one level too shallow, at
       // <rootDir>/volumes/{index,log}.md — must not exist there.
