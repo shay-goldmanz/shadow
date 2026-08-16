@@ -19,7 +19,7 @@ import type { AmazonBedrockProviderSettings } from "@ai-sdk/amazon-bedrock";
 import { createAmazonBedrock } from "@ai-sdk/amazon-bedrock";
 import type { LanguageModelUsage } from "ai";
 import { generateObject, NoObjectGeneratedError, TypeValidationError } from "ai";
-import { type ZodType, ZodObject } from "zod";
+import { ZodObject, type ZodType } from "zod";
 import { StructuredGenerationError } from "../errors.ts";
 import type {
   StructuredGenerationPort,
@@ -139,7 +139,9 @@ function extractValidationIssues(cause: unknown): ValidationIssueSummary[] | und
   let current: unknown = cause;
   for (let depth = 0; depth < 5 && current != null; depth += 1) {
     if (Array.isArray(current)) {
-      const issues = current.map(summarizeIssue).filter((issue): issue is ValidationIssueSummary => issue !== undefined);
+      const issues = current
+        .map(summarizeIssue)
+        .filter((issue): issue is ValidationIssueSummary => issue !== undefined);
       return issues.length > 0 ? issues.slice(0, MAX_ISSUES) : undefined;
     }
     if (TypeValidationError.isInstance(current)) {
@@ -268,7 +270,10 @@ function unwrapDoubleEncodedStrings(value: unknown, depth = 0): unknown {
     }
     const unwrapped = unwrapDoubleEncodedStrings(nested, depth + 1);
     result[key] =
-      !Array.isArray(unwrapped) && typeof unwrapped === "object" && unwrapped !== null && key in unwrapped
+      !Array.isArray(unwrapped) &&
+      typeof unwrapped === "object" &&
+      unwrapped !== null &&
+      key in unwrapped
         ? (unwrapped as Record<string, unknown>)[key]
         : unwrapped;
   }
@@ -282,7 +287,10 @@ function unwrapDoubleEncodedStrings(value: unknown, depth = 0): unknown {
  * used when it does — an unwrap that doesn't fully validate is discarded,
  * never partially applied.
  */
-function attemptLocalRepair<Output>(schema: ZodType<Output>, text: string | undefined): Output | undefined {
+function attemptLocalRepair<Output>(
+  schema: ZodType<Output>,
+  text: string | undefined,
+): Output | undefined {
   if (text === undefined) return undefined;
   const parsed = tryParseJson(text);
   if (parsed === undefined) return undefined;
@@ -408,7 +416,9 @@ export function createBedrockStructuredGenerationPort(
       const requestedSchemaRetries = defaults.schemaRetries ?? DEFAULT_SCHEMA_RETRIES;
       const schemaRetries = Math.max(
         0,
-        Math.floor(Number.isFinite(requestedSchemaRetries) ? requestedSchemaRetries : DEFAULT_SCHEMA_RETRIES),
+        Math.floor(
+          Number.isFinite(requestedSchemaRetries) ? requestedSchemaRetries : DEFAULT_SCHEMA_RETRIES,
+        ),
       );
       const maxAttempts = 1 + schemaRetries;
 

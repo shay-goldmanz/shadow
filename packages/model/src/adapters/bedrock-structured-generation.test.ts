@@ -56,7 +56,8 @@ function makeFakeProvider(scenario?: {
 
   return {
     deps: {
-      createProvider: createProvider as unknown as BedrockStructuredGenerationPortDeps["createProvider"],
+      createProvider:
+        createProvider as unknown as BedrockStructuredGenerationPortDeps["createProvider"],
       generateObject: (scenario?.generateObject ??
         defaultGenerateObject) as unknown as BedrockStructuredGenerationPortDeps["generateObject"],
     },
@@ -239,7 +240,10 @@ describe("createBedrockStructuredGenerationPort", () => {
       // `parse-and-validate-object-result.ts`): a `TypeValidationError` whose
       // `.cause` is the standard-schema issues array zod's adapter attaches.
       const issues = [
-        { message: "Invalid string: must match pattern /^[a-z0-9]+(?:-[a-z0-9]+)*$/", path: ["groups", 0, "slug"] },
+        {
+          message: "Invalid string: must match pattern /^[a-z0-9]+(?:-[a-z0-9]+)*$/",
+          path: ["groups", 0, "slug"],
+        },
         { message: "Required", path: ["groups", 1, "keywords"] },
       ];
       const validationError = new TypeValidationError({ value: { groups: [] }, cause: issues });
@@ -378,7 +382,11 @@ describe("createBedrockStructuredGenerationPort", () => {
           inputTokens: usage.inputTokens,
           outputTokens: usage.outputTokens,
           totalTokens: usage.inputTokens + usage.outputTokens,
-          inputTokenDetails: { noCacheTokens: usage.inputTokens, cacheReadTokens: 0, cacheWriteTokens: 0 },
+          inputTokenDetails: {
+            noCacheTokens: usage.inputTokens,
+            cacheReadTokens: 0,
+            cacheWriteTokens: 0,
+          },
           outputTokenDetails: { textTokens: usage.outputTokens, reasoningTokens: 0 },
         },
         finishReason: "stop",
@@ -683,7 +691,10 @@ describe("createBedrockStructuredGenerationPort", () => {
     test("an object with some (but not all) required fields present is not treated as an empty-object miss — gets the generic hint", async () => {
       const partialMissError = new NoObjectGeneratedError({
         message: "No object generated: response did not match schema.",
-        cause: new TypeValidationError({ value: { groups: ["ok"] }, cause: [{ message: "Required", path: ["count"] }] }),
+        cause: new TypeValidationError({
+          value: { groups: ["ok"] },
+          cause: [{ message: "Required", path: ["count"] }],
+        }),
         text: JSON.stringify({ groups: ["ok"] }),
         response: { id: "resp-2", timestamp: new Date(0), modelId: "test-model" },
         usage: {

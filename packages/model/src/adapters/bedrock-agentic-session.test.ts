@@ -19,9 +19,9 @@ import {
  * touches the real filesystem, matching this file's "every test injects a
  * fake" convention above.
  */
-function fakeSkillFs(files: Record<string, string>): NonNullable<
-  BedrockAgenticSessionPortDeps["readSkillFile"]
-> {
+function fakeSkillFs(
+  files: Record<string, string>,
+): NonNullable<BedrockAgenticSessionPortDeps["readSkillFile"]> {
   return (path: string) => {
     const content = files[path];
     if (content === undefined) throw new Error(`ENOENT: no such file, open '${path}'`);
@@ -702,7 +702,11 @@ describe("createBedrockAgenticSessionPort — skills inlining", () => {
     // biome-ignore lint/style/noNonNullAssertion: asserted by earlier resume tests in this file
     const id = original.sessionId!;
 
-    const resumed = port.createSession({ cwd, resume: { sessionId: id }, skills: ["writing-volumes"] });
+    const resumed = port.createSession({
+      cwd,
+      resume: { sessionId: id },
+      skills: ["writing-volumes"],
+    });
     await drain(resumed, "second");
 
     expect(calls[0]?.system).toBeUndefined();
@@ -727,7 +731,11 @@ describe("createBedrockAgenticSessionPort — preset systemPrompt", () => {
     const port = makePort(fn);
 
     const session = port.createSession({
-      systemPrompt: { type: "preset", preset: "claude_code", append: "You are Shadow, specifically." },
+      systemPrompt: {
+        type: "preset",
+        preset: "claude_code",
+        append: "You are Shadow, specifically.",
+      },
     });
     await drain(session, "go");
 
@@ -758,7 +766,7 @@ describe("createBedrockAgenticSessionPort — preset systemPrompt", () => {
   });
 });
 
-describe("createBedrockAgenticSessionPort — allowedTools: [\"Skill\"] semantics", () => {
+describe('createBedrockAgenticSessionPort — allowedTools: ["Skill"] semantics', () => {
   test("allowedTools naming only the built-in Skill tool, with no toolServers, yields an empty tool set and a normal completed turn (not a crash)", async () => {
     const { fn, calls } = makeStreamTextFake(() => ({
       parts: [
@@ -800,8 +808,7 @@ describe("createBedrockAgenticSessionPort — conversation-harness proof", () =>
    */
   test("chat's exact createSession() options: skills inlined + real system prompt text reach streamText, turn streams and completes", async () => {
     const cwd = "/fake/shadow-home";
-    const shadowSystemPromptExcerpt =
-      "You are Shadow, the operator's shadow writer."; // representative excerpt of buildShadowSystemPrompt()'s real opening line (packages/agent/src/system-prompt.ts)
+    const shadowSystemPromptExcerpt = "You are Shadow, the operator's shadow writer."; // representative excerpt of buildShadowSystemPrompt()'s real opening line (packages/agent/src/system-prompt.ts)
     const readSkillFile = fakeSkillFs({
       [skillPath(cwd, "writing-volumes")]:
         "---\nname: writing-volumes\ndescription: writing volumes skill\n---\n\n" +

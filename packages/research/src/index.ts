@@ -157,7 +157,6 @@ export type { ResearchToolsDeps } from "./retrieval-tools.ts";
 export { buildResearchTools, MAX_TOOL_RESULT_CHARS } from "./retrieval-tools.ts";
 export type { RecordSessionTranscriptSourceOptions } from "./transcript-source.ts";
 export { recordSessionTranscriptSource } from "./transcript-source.ts";
-export { UnavailableSearchProvider } from "./unavailable-search-provider.ts";
 export type {
   FetchedPage,
   FetchLike,
@@ -172,6 +171,7 @@ export type {
   SearchResponse,
   TransportKind,
 } from "./types.ts";
+export { UnavailableSearchProvider } from "./unavailable-search-provider.ts";
 export type {
   ResearchSessionTuning,
   WebResearchToolAgentDeps,
