@@ -19,7 +19,8 @@ import { describe, expect, test } from "bun:test";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { toChapterSlug } from "@shadow/core";
+import { toChapterSlug, toVolumeSlug, type VolumeSlug } from "@shadow/core";
+import { type ClaimSidecar, FileSystemEvidenceStore } from "@shadow/evidence";
 import type { IndexDocument } from "@shadow/indexing";
 import type { AgenticSessionOptions, FakeAgenticTurnResponder } from "@shadow/model";
 import { FakeAgenticSessionPort } from "@shadow/model";
@@ -682,6 +683,297 @@ describe("ShadowConversation — maxAutoTurns budget is unchanged by parallel re
         // One prompt per turn, exactly `maxAutoTurns` of them, before the
         // loop gives up rather than continuing indefinitely.
         expect(sessions.sessions[0]?.prompts).toHaveLength(2);
+      });
+    });
+  });
+});
+
+// -----------------------------------------------------------------------
+// T0.6 — per-volume chapter publication is serialized across conversations
+// minted by the same `ShadowAgent`; different volumes are not.
+// -----------------------------------------------------------------------
+
+interface Deferred<T> {
+  readonly promise: Promise<T>;
+  resolve(value: T): void;
+}
+
+function deferred<T = void>(): Deferred<T> {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>((res) => {
+    resolve = res;
+  });
+  return { promise, resolve };
+}
+
+interface ProbeEvent {
+  readonly chapter: string;
+  readonly phase: "enter" | "exit";
+  readonly ts: number;
+}
+
+interface GateSpec {
+  readonly onEnter?: () => void;
+  readonly gate: Promise<void>;
+}
+
+/**
+ * Wraps a real `FileSystemEvidenceStore`'s `putClaims` — the sidecar
+ * read-modify-write + retirement-append hotspot both `chapter-draft.ts` and
+ * `publish.ts` write through (`@shadow/evidence`'s `store.ts`, roughly
+ * `:258-290`) — with an events log and an optional one-shot gate per chapter
+ * slug. This is the "instrumented fake store" T0.6's plan entry calls for,
+ * built by subclassing the real store so every recorded write is a genuine
+ * filesystem write, not a stand-in for one.
+ */
+class ProbeEvidenceStore extends FileSystemEvidenceStore {
+  readonly events: ProbeEvent[] = [];
+  private readonly gates = new Map<string, GateSpec>();
+
+  /**
+   * The next `putClaims` call for `chapter` fires `spec.onEnter` (if given)
+   * — proof this store has actually been reached — then awaits `spec.gate`
+   * before the real write happens. One-shot: consumed on first match.
+   */
+  gateNextPutClaims(chapter: string, spec: GateSpec): void {
+    this.gates.set(chapter, spec);
+  }
+
+  override async putClaims(volume: VolumeSlug, sidecar: ClaimSidecar): Promise<void> {
+    const chapter = sidecar.chapter;
+    this.events.push({ chapter, phase: "enter", ts: Date.now() });
+    const spec = this.gates.get(chapter);
+    if (spec) {
+      this.gates.delete(chapter);
+      spec.onEnter?.();
+      await spec.gate;
+    }
+    await super.putClaims(volume, sidecar);
+    this.events.push({ chapter, phase: "exit", ts: Date.now() });
+  }
+}
+
+interface ChapterMarkerSpec {
+  readonly marker: string;
+  readonly slug: string;
+  readonly operatorText: string;
+}
+
+/**
+ * Scripts a one-turn chapter-directive reply for whichever `spec` in
+ * `specs` has its `marker` in the prompt, citing the operator's own
+ * recorded turn (extracted from the prompt, same trick `buildResponder`
+ * above uses) as a single `operator`-kind claim. A prompt matching no spec
+ * — i.e. the follow-up turn after a chapter directive already ran — gets a
+ * plain no-directive reply, ending that conversation's auto-continuation.
+ */
+function chapterOnMarkerResponder(specs: readonly ChapterMarkerSpec[]): FakeAgenticTurnResponder {
+  return (prompt) => {
+    for (const spec of specs) {
+      if (!prompt.includes(spec.marker)) continue;
+      const match = /Operator \(sourceId: (\S+)\):/.exec(prompt);
+      const sourceId = match?.[1];
+      if (!sourceId) throw new Error(`operator sourceId missing from prompt for "${spec.slug}"`);
+      const chapter = {
+        slug: spec.slug,
+        title: `Chapter about ${spec.slug}`,
+        // `[^~label]` (not bare `[^label]`) is the operator-kind marker
+        // (`system-prompt.ts`) — a bare marker implies `kind: "sourced"` and
+        // fails C1a's marker/kind cross-check for an `"operator"` claim.
+        body: `This chapter is about ${spec.slug}.[^~belief]`,
+        claims: [
+          {
+            label: "belief",
+            kind: "operator",
+            text: `This chapter is about ${spec.slug}.`,
+            evidence: [{ sourceId, quote: spec.operatorText }],
+          },
+        ],
+      };
+      return {
+        text: ["Drafting.", "```shadow:chapter", JSON.stringify(chapter), "```"].join("\n"),
+      };
+    }
+    return { text: "Done." };
+  };
+}
+
+const LOCK_TEST_ALPHA: ChapterMarkerSpec = {
+  marker: "ALPHA-DIRECTIVE",
+  slug: "chapter-alpha",
+  operatorText: "ALPHA-DIRECTIVE: the operator's belief about alpha.",
+};
+const LOCK_TEST_BETA: ChapterMarkerSpec = {
+  marker: "BETA-DIRECTIVE",
+  slug: "chapter-beta",
+  operatorText: "BETA-DIRECTIVE: the operator's belief about beta.",
+};
+
+describe("ShadowConversation — same-volume chapter publication is serialized across conversations (T0.6)", () => {
+  test("two conversations from one ShadowAgent submit chapter directives on the same volume concurrently -> publications never overlap", async () => {
+    await withVolumeHarness(async ({ volumeStore, volume, root }) => {
+      await withSessionCwd(async (sessionCwd) => {
+        const probeStore = new ProbeEvidenceStore(volumeStore);
+        const research = new FakeResearchBriefPort(probeStore, () => {
+          throw new Error("no research directive expected in this test");
+        });
+        const sessions = new FakeAgenticSessionPort(
+          chapterOnMarkerResponder([LOCK_TEST_ALPHA, LOCK_TEST_BETA]),
+        );
+
+        const deps: ShadowAgentDeps = {
+          agenticSessionPort: sessions,
+          researchBriefPort: research,
+          volumeStore,
+          evidenceStore: probeStore,
+          indexer: freshIndexer(root),
+          checkWorthinessClassifier: alwaysNarrativeClassifier,
+          entailmentRelevanceJudge: scriptedEntailmentJudge(),
+          claimRestater: scriptedClaimRestater(() => {
+            throw new Error("no claim should need repair in this test");
+          }),
+          sessionCwd,
+        };
+
+        // ONE ShadowAgent, two conversations -- exactly the seam T0.6 fixes:
+        // both conversations share this agent's one VolumeLocks instance.
+        const agent = new ShadowAgent(deps);
+        const convA = agent.startConversation(volume);
+        const convB = agent.startConversation(volume);
+
+        const entered = deferred();
+        const release = deferred();
+        // Gate conv A's *draft-time* putClaims write -- the first call for
+        // its slug -- so conv A is provably still holding the volume lock
+        // (mid-publish) while we try to run conv B against the same volume.
+        probeStore.gateNextPutClaims(LOCK_TEST_ALPHA.slug, {
+          onEnter: () => entered.resolve(),
+          gate: release.promise,
+        });
+
+        const eventsA: ShadowEvent[] = [];
+        const drainedA = (async () => {
+          for await (const event of convA.sendMessage(LOCK_TEST_ALPHA.operatorText)) {
+            eventsA.push(event);
+          }
+        })();
+
+        await entered.promise; // conv A is now inside its gated write, lock held
+
+        const eventsB: ShadowEvent[] = [];
+        const drainedB = (async () => {
+          for await (const event of convB.sendMessage(LOCK_TEST_BETA.operatorText)) {
+            eventsB.push(event);
+          }
+        })();
+
+        // Give conv B every real opportunity to run if it weren't actually
+        // locked out -- these are small local filesystem writes, they
+        // settle in well under this window if nothing is blocking them.
+        await Bun.sleep(50);
+        expect(probeStore.events.some((e) => e.chapter === LOCK_TEST_BETA.slug)).toBe(false);
+
+        release.resolve();
+        await Promise.all([drainedA, drainedB]);
+
+        expect(eventsA.some((e) => e.type === "chapter-published")).toBe(true);
+        expect(eventsB.some((e) => e.type === "chapter-published")).toBe(true);
+        expect(eventsA.some((e) => e.type === "error" || e.type === "chapter-rejected")).toBe(
+          false,
+        );
+        expect(eventsB.some((e) => e.type === "error" || e.type === "chapter-rejected")).toBe(
+          false,
+        );
+
+        // Belt-and-suspenders on the recorded log itself: every one of conv
+        // A's putClaims calls (draft + publish) finished before conv B's
+        // first one started -- the two publications' critical sections
+        // never overlap.
+        const aExits = probeStore.events.filter(
+          (e) => e.chapter === LOCK_TEST_ALPHA.slug && e.phase === "exit",
+        );
+        const bEnters = probeStore.events.filter(
+          (e) => e.chapter === LOCK_TEST_BETA.slug && e.phase === "enter",
+        );
+        expect(aExits.length).toBeGreaterThan(0);
+        expect(bEnters.length).toBeGreaterThan(0);
+        const lastAExit = Math.max(...aExits.map((e) => e.ts));
+        const firstBEnter = Math.min(...bEnters.map((e) => e.ts));
+        expect(firstBEnter).toBeGreaterThanOrEqual(lastAExit);
+      });
+    });
+  });
+});
+
+describe("ShadowConversation — different volumes are not serialized against each other (T0.6)", () => {
+  test("a conversation on volume two publishes without waiting on volume one's in-flight publication", async () => {
+    await withVolumeHarness(async ({ volumeStore, volume: volumeOne, root }) => {
+      await withSessionCwd(async (sessionCwd) => {
+        const volumeTwo = toVolumeSlug("second-volume");
+        await volumeStore.createVolume({ slug: volumeTwo, title: "Second Volume" });
+
+        const probeStore = new ProbeEvidenceStore(volumeStore);
+        const research = new FakeResearchBriefPort(probeStore, () => {
+          throw new Error("no research directive expected in this test");
+        });
+        const sessions = new FakeAgenticSessionPort(
+          chapterOnMarkerResponder([LOCK_TEST_ALPHA, LOCK_TEST_BETA]),
+        );
+
+        const deps: ShadowAgentDeps = {
+          agenticSessionPort: sessions,
+          researchBriefPort: research,
+          volumeStore,
+          evidenceStore: probeStore,
+          indexer: freshIndexer(root),
+          checkWorthinessClassifier: alwaysNarrativeClassifier,
+          entailmentRelevanceJudge: scriptedEntailmentJudge(),
+          claimRestater: scriptedClaimRestater(() => {
+            throw new Error("no claim should need repair in this test");
+          }),
+          sessionCwd,
+        };
+
+        const agent = new ShadowAgent(deps);
+        const convOne = agent.startConversation(volumeOne);
+        const convTwo = agent.startConversation(volumeTwo);
+
+        const entered = deferred();
+        const release = deferred();
+        // Gate volume one's publication mid-flight and deliberately do NOT
+        // release it until after volume two's has already finished -- if
+        // the lock were global instead of per-volume, volume two's
+        // `sendMessage` below would never resolve and this test would time
+        // out rather than false-pass.
+        probeStore.gateNextPutClaims(LOCK_TEST_ALPHA.slug, {
+          onEnter: () => entered.resolve(),
+          gate: release.promise,
+        });
+
+        const eventsOne: ShadowEvent[] = [];
+        const drainedOne = (async () => {
+          for await (const event of convOne.sendMessage(LOCK_TEST_ALPHA.operatorText)) {
+            eventsOne.push(event);
+          }
+        })();
+
+        await entered.promise; // volume one's publication is now blocked mid-flight
+
+        const eventsTwo: ShadowEvent[] = [];
+        for await (const event of convTwo.sendMessage(LOCK_TEST_BETA.operatorText)) {
+          eventsTwo.push(event);
+        }
+
+        expect(eventsTwo.some((e) => e.type === "chapter-published")).toBe(true);
+        // Proof it's real, not incidental: volume two's write already
+        // happened while volume one is still parked on its unreleased gate.
+        expect(
+          probeStore.events.some((e) => e.chapter === LOCK_TEST_BETA.slug && e.phase === "exit"),
+        ).toBe(true);
+
+        release.resolve();
+        await drainedOne;
+        expect(eventsOne.some((e) => e.type === "chapter-published")).toBe(true);
       });
     });
   });

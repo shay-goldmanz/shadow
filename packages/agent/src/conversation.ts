@@ -38,6 +38,21 @@
  * three." `disallowedTools` names the risky built-ins anyway, as
  * belt-and-braces against a future change loosening `allowedTools`.
  *
+ * ## Same-volume chapter publication is serialized across conversations (T0.6)
+ *
+ * `runChapterDirective` below drafts a chapter and then publishes it
+ * (`chapter-draft.ts` + `publish.ts`), which read-modify-writes shared
+ * per-volume files (the claim sidecar, retirement-event appends) and
+ * reindexes the corpus. The auto-continuation loop above already runs
+ * chapter directives one at a time *within* one conversation, but nothing
+ * stopped two different conversations on the *same* volume from racing that
+ * shared state — an easy thing to hit once sessions can list and be resumed
+ * independently. `ShadowAgent` owns one `VolumeLocks` (`volume-locks.ts`)
+ * and hands it to every `ShadowConversation` it mints; `runChapterDirective`
+ * holds it for the volume slug across the whole draft-then-publish unit.
+ * Different volumes never contend with each other, and research directives
+ * are untouched — only chapter publication needs this.
+ *
  * ## Session persistence is required, not optional (see `getOrCreateSession`)
  *
  * "Reused across turns" above means what it says: this handle sends every
@@ -73,6 +88,7 @@ import { type AsyncEventProducer, mergeAsyncEvents } from "./merge-async-events.
 import { publishChapter } from "./publish.ts";
 import { ensureWritingVolumesSkillInstalled } from "./skills.ts";
 import { buildShadowSystemPrompt } from "./system-prompt.ts";
+import { VolumeLocks } from "./volume-locks.ts";
 
 export interface ShadowAgentDeps {
   readonly agenticSessionPort: AgenticSessionPort;
@@ -199,6 +215,8 @@ export class ShadowConversation {
   constructor(
     private readonly deps: ShadowAgentDeps,
     private readonly volume: VolumeSlug,
+    /** Shared with every other conversation `ShadowAgent` mints — see this module's T0.6 doc above. */
+    private readonly volumeLocks: VolumeLocks,
     options: StartConversationOptions = {},
   ) {
     this.conversationId = options.conversationId ?? randomUUID();
@@ -340,37 +358,60 @@ export class ShadowConversation {
     followUps.push(...followUpBySlot);
   }
 
+  /**
+   * Draft, then publish, one chapter directive — the whole read-modify-write
+   * unit held under `volumeLocks` for `this.volume` (T0.6, module doc
+   * above), so two conversations publishing to the same volume never
+   * interleave their sidecar writes/retirement appends/reindex. The lock is
+   * acquired before `draftChapter` and released once `publishChapter` (or a
+   * draft failure) is done; events are collected during the locked section
+   * and only yielded to the caller after it releases, so this generator's
+   * observable output is identical to running the same steps unlocked — the
+   * lock changes *when* two conversations' work can overlap, never *what*
+   * either one produces.
+   */
   private async *runChapterDirective(
     directive: ChapterDirective,
     followUps: string[],
   ): AsyncGenerator<ShadowEvent, void, undefined> {
-    let slug: ChapterSlug;
-    try {
-      const draft = await draftChapter(this.deps, this.volume, directive);
-      slug = draft.chapter.slug;
-      yield { type: "chapter-drafted", volume: this.volume, chapter: slug };
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      yield { type: "error", error: `Could not draft chapter "${directive.slug}": ${message}` };
-      followUps.push(formatChapterDraftFailure(directive.slug, message));
-      return;
-    }
+    const events: ShadowEvent[] = [];
+    let followUp: string | undefined;
 
-    const result = await publishChapter(this.deps, this.volume, slug);
-    const issues = result.outcomes.flatMap((outcome) => outcome.issues);
-    yield {
-      type: "chapter-audit",
-      volume: this.volume,
-      chapter: slug,
-      passed: result.verdict.passed,
-      repairs: result.repairs,
-    };
-    if (result.published) {
-      yield { type: "chapter-published", volume: this.volume, chapter: slug };
-    } else {
-      yield { type: "chapter-rejected", volume: this.volume, chapter: slug, issues };
-    }
-    followUps.push(formatChapterOutcome(slug, result.published, issues, result.repairs));
+    await this.volumeLocks.withLock(this.volume, async () => {
+      let slug: ChapterSlug;
+      try {
+        const draft = await draftChapter(this.deps, this.volume, directive);
+        slug = draft.chapter.slug;
+        events.push({ type: "chapter-drafted", volume: this.volume, chapter: slug });
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        events.push({
+          type: "error",
+          error: `Could not draft chapter "${directive.slug}": ${message}`,
+        });
+        followUp = formatChapterDraftFailure(directive.slug, message);
+        return;
+      }
+
+      const result = await publishChapter(this.deps, this.volume, slug);
+      const issues = result.outcomes.flatMap((outcome) => outcome.issues);
+      events.push({
+        type: "chapter-audit",
+        volume: this.volume,
+        chapter: slug,
+        passed: result.verdict.passed,
+        repairs: result.repairs,
+      });
+      if (result.published) {
+        events.push({ type: "chapter-published", volume: this.volume, chapter: slug });
+      } else {
+        events.push({ type: "chapter-rejected", volume: this.volume, chapter: slug, issues });
+      }
+      followUp = formatChapterOutcome(slug, result.published, issues, result.repairs);
+    });
+
+    for (const event of events) yield event;
+    if (followUp !== undefined) followUps.push(followUp);
   }
 
   private async getOrCreateSession(): Promise<AgenticSession> {
@@ -416,11 +457,19 @@ export class ShadowConversation {
   }
 }
 
-/** Top-level factory: holds Shadow's injected collaborators and mints a `ShadowConversation` per conversation. */
+/**
+ * Top-level factory: holds Shadow's injected collaborators and mints a
+ * `ShadowConversation` per conversation. Also owns the one `VolumeLocks`
+ * instance shared by every conversation it mints (T0.6, `conversation.ts`'s
+ * module doc) — this is what makes same-volume chapter publication
+ * serialized *across* conversations/sessions, not just within one.
+ */
 export class ShadowAgent {
+  private readonly volumeLocks = new VolumeLocks();
+
   constructor(private readonly deps: ShadowAgentDeps) {}
 
   startConversation(volume: VolumeSlug, options?: StartConversationOptions): ShadowConversation {
-    return new ShadowConversation(this.deps, volume, options);
+    return new ShadowConversation(this.deps, volume, this.volumeLocks, options);
   }
 }
