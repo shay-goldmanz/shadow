@@ -53,32 +53,6 @@ export function hasRequiredTypedFields(
   );
 }
 
-/**
- * Reject an open `frontmatter` record that sets a reserved document key
- * before it ever reaches serialization. `serializeChapterDocument` /
- * `serializeVolumeDocument` write the typed fields first and spread the
- * open record second, so a reserved key in the open record would otherwise
- * silently win — smuggling a fake `title` into the persisted document past
- * the caller's real `title`, or writing a non-string `createdAt`/`updatedAt`
- * that this package can no longer parse back on the next read. Called from
- * every `VolumeStore` write path that accepts caller-supplied frontmatter
- * (`putChapter`, `createVolume`, `updateVolume`) so the guard is uniform
- * across both document kinds and can never be bypassed by a new call site.
- *
- * @throws {ReservedFrontmatterKeyError} if `frontmatter` sets any of
- *   `RESERVED_DOCUMENT_KEYS`.
- */
-/** Convenience: check reserved string fields without `type` — used when `type` is tolerated as absent with a default. */
-export function hasReservedStringFields(
-  value: Record<string, unknown>,
-): value is Record<string, unknown> & { title: string; createdAt: string; updatedAt: string } {
-  return (
-    typeof value.title === "string" &&
-    typeof value.createdAt === "string" &&
-    typeof value.updatedAt === "string"
-  );
-}
-
 // ---- OKF v0.2 field parsers (shared between chapter and volume documents) -------
 
 /** Format a Date as YYYY-MM-DD for the `stale_after` field. */
@@ -125,6 +99,21 @@ export function parseVerified(raw: unknown): OkfActor[] {
   return [];
 }
 
+/**
+ * Reject an open `frontmatter` record that sets a reserved document key
+ * before it ever reaches serialization. `serializeChapterDocument` /
+ * `serializeVolumeDocument` write the typed fields first and spread the
+ * open record second, so a reserved key in the open record would otherwise
+ * silently win — smuggling a fake `title` into the persisted document past
+ * the caller's real `title`, or writing a non-string `createdAt`/`updatedAt`
+ * that this package can no longer parse back on the next read. Called from
+ * every `VolumeStore` write path that accepts caller-supplied frontmatter
+ * (`putChapter`, `createVolume`, `updateVolume`) so the guard is uniform
+ * across both document kinds and can never be bypassed by a new call site.
+ *
+ * @throws {ReservedFrontmatterKeyError} if `frontmatter` sets any of
+ *   `RESERVED_DOCUMENT_KEYS`.
+ */
 export function assertNoReservedFrontmatterKeys(
   frontmatter: Readonly<Record<string, unknown>>,
   kind: "chapter" | "volume",

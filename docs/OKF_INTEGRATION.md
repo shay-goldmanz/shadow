@@ -5,6 +5,15 @@ breaking changes to existing functionality.
 
 **Branch:** `feat/okf-integration`
 
+## Status
+
+This plan has shipped: the `type`/`status`/`stale_after`/`generated`/`verified`
+frontmatter fields, `index.md`/`log.md` generation, `shadow lint --okf`
+conformance checking, and Phase 4's `type: "Attested Computation"` chapters
+are all built and covered by tests (see `docs/OKF_SPEC_REFERENCES.md` for
+where each requirement is enforced). There is no `shadow migrate` command and
+none is planned — see [Migration](#migration) below for why.
+
 ## Gap summary
 
 Shadow's volume format (Markdown + YAML frontmatter chapters in a directory tree)
@@ -122,19 +131,24 @@ skills, and every test fixture.
 - **`VolumeStore` interface stays** — OKF is an on-disk format, not a new storage layer
 - **The CLI contract stays** — `shadow find`, `shadow read`, etc. keep their JSON shapes
 - **The evidence ledger stays** — `log.md` is a human-readable projection, not a replacement
-- **Test suite must keep passing** — 986 green before, 986 green after
+- **Test suite must keep passing** — every change lands with the full suite green
 
 ---
 
 ## Migration
 
-Existing volumes get a one-time migration:
+There is no `shadow migrate` command, and none is planned. This project is in
+active development with no legacy corpora to carry forward — every volume in
+this repo speaks OKF v0.2 already. `parseChapterDocument` and
+`parseVolumeDocument` hard-fail on a document missing `type` *by design*: a
+pre-OKF document is invalid, not a migration candidate. When the OKF
+frontmatter fields landed, the fixtures that predated them were rewritten in
+place as part of that change — the same way any other breaking fixture-schema
+change gets fixed, not via a standing migration tool.
 
-```
-shadow migrate --to-okf   # adds type, status, generated, index.md, log.md
-```
-
-The migration is idempotent and non-destructive — it adds fields, never removes.
+If a future integration needs to onboard a genuinely external, non-Shadow
+corpus, that calls for a new tool designed for that job then — not a
+resurrection of this section's original `shadow migrate --to-okf` plan.
 
 ---
 
@@ -144,5 +158,5 @@ The migration is idempotent and non-destructive — it adds fields, never remove
 2. Every volume has `index.md` and `log.md`
 3. `shadow lint --okf` passes on a conformant volume
 4. An external OKF reader can navigate a Shadow bundle
-5. All 986 existing tests pass
+5. The existing test suite keeps passing
 6. `bun run check` is green
