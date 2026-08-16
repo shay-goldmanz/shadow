@@ -5,8 +5,8 @@
  * package.
  */
 
-import type { OkfActor, OkfStatus } from "./types.ts";
 import { ReservedFrontmatterKeyError } from "./errors.ts";
+import type { OkfActor, OkfStatus } from "./types.ts";
 
 // Matches a leading `---\n...\n---` block; the rest of the file is the body.
 // Deliberately non-greedy so the *first* closing `---` line terminates the
@@ -36,9 +36,10 @@ export function isRecord(value: unknown): value is Record<string, unknown> {
 }
 
 /** Check that the required typed string fields in a parsed YAML frontmatter mapping are present and well-typed. */
-export function hasRequiredTypedFields(
-  value: Record<string, unknown>,
-): value is Record<string, unknown> & {
+export function hasRequiredTypedFields(value: Record<string, unknown>): value is Record<
+  string,
+  unknown
+> & {
   title: string;
   createdAt: string;
   updatedAt: string;

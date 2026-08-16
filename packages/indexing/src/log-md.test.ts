@@ -4,8 +4,7 @@
 
 import { describe, expect, test } from "bun:test";
 import type { LedgerEvent } from "@shadow/evidence";
-import { toDigest } from "@shadow/evidence";
-import { newClaimId, newSourceId } from "@shadow/evidence";
+import { newClaimId, newSourceId, toDigest } from "@shadow/evidence";
 import { generateRootLogMd, generateVolumeLogMd } from "./log-md.ts";
 
 function sourceRetrieved(ts: string, sourceId: string = newSourceId()): LedgerEvent {
