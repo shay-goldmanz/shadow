@@ -8,9 +8,11 @@
  *
  * Per T3.3's report, `ShadowAgent` needs: `FileSystemVolumeStore` +
  * `FileSystemEvidenceStore` (`@shadow/core`/`@shadow/evidence`),
- * `StructuralIndexer` (`@shadow/indexing`), `WebResearchToolAgent` as the
+ * `StructuralIndexer` (`@shadow/indexing`), `PerBriefResearchAgent` as the
  * `ResearchBriefPort` (`@shadow/research`, itself needing a
- * `RetrievalTransport` and the evidence store), the Tier 2
+ * `RetrievalTransport` and the evidence store — see that class's module
+ * doc for why a fresh-per-brief factory replaced the single shared
+ * `WebResearchToolAgent` this used to build directly, T0.1), the Tier 2
  * `Batched*` adapters (`@shadow/evidence`) over a `StructuredGenerationPort`,
  * and an `AgenticSessionPort` + `StructuredGenerationPort` from
  * `@shadow/model`. All of it lives here.
@@ -31,7 +33,7 @@ import { createModel } from "@shadow/model";
 import {
   AgenticSearchProvider,
   createRetrievalTransport,
-  WebResearchToolAgent,
+  PerBriefResearchAgent,
 } from "@shadow/research";
 import { ConversationRegistry } from "./conversation-registry.ts";
 import type { ApiDeps } from "./deps.ts";
@@ -71,7 +73,12 @@ export function buildRealApiDeps(options: BuildRealApiDepsOptions = {}): ApiDeps
   // D2's determinism) stays intact.
   const searchProvider = new AgenticSearchProvider({ sessions: agenticSession });
   const transport = createRetrievalTransport({ mode: "live", live: { search: searchProvider } });
-  const researchBriefPort = new WebResearchToolAgent({
+  // `PerBriefResearchAgent`, not a single shared `WebResearchToolAgent`
+  // (see this file's own module doc and `per-brief-research-agent.ts`'s):
+  // a fresh `WebResearchToolAgent` per `research()` call is what makes
+  // concurrent briefs — across conversations or within one — safe instead
+  // of serialized behind a `busy` flag (T0.1).
+  const researchBriefPort = new PerBriefResearchAgent({
     transport,
     evidenceStore,
     sessions: agenticSession,
