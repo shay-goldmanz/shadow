@@ -21,8 +21,8 @@
  * expects to consume it (as findings, not exceptions).
  */
 
-import type { Chapter, OkfActor, Volume } from "@shadow/core";
 import { join } from "node:path";
+import type { Chapter, OkfActor, Volume } from "@shadow/core";
 import type { OkfBundleArtifacts, OkfChapterRecord, OkfVolumeRecord } from "./lint-okf.ts";
 import type { IndexDocument } from "./types.ts";
 

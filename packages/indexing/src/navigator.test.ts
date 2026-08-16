@@ -16,9 +16,7 @@ import type { NavigateDecision } from "./round-loop.ts";
 import type { RetrievalVerdict } from "./trace.ts";
 import type { IndexDocument } from "./types.ts";
 
-async function withStore(
-  fn: (store: VolumeStore, root: string) => Promise<void>,
-): Promise<void> {
+async function withStore(fn: (store: VolumeStore, root: string) => Promise<void>): Promise<void> {
   const root = await mkdtemp(join(tmpdir(), "shadow-navigator-test-"));
   try {
     await fn(new FileSystemVolumeStore(root), root);

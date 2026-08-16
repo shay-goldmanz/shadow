@@ -45,17 +45,6 @@ export type { FlatHeading, HeadingNode } from "./heading-tree.ts";
 export { buildHeadingTree, extractHeadings, parseHeadingTree } from "./heading-tree.ts";
 // ---- OKF index.md / log.md generation (Phase 2) ----------------------------
 export { generateRootIndexMd, generateVolumeIndexMd } from "./index-md.ts";
-export { generateRootLogMd, generateVolumeLogMd } from "./log-md.ts";
-// ---- OKF conformance validation (Phase 3) -----------------------------------
-export type {
-  OkfBundleArtifacts,
-  OkfChapterRecord,
-  OkfConformanceInput,
-  OkfVolumeRecord,
-} from "./lint-okf.ts";
-export { checkOkfConformance, okfConformanceCheck } from "./lint-okf.ts";
-// ---- OKF conformance input construction (the I/O side of the check) -------
-export { loadOkfBundleArtifacts, okfChapterRecordsFrom, okfVolumeRecordsFrom } from "./okf-input.ts";
 // ---- the build port -------------------------------------------------------
 export type { BuildIndexResult, Indexer, MintedId } from "./indexer.ts";
 export { StructuralIndexer } from "./indexer.ts";
@@ -83,6 +72,14 @@ export {
 export type { MissLogEntry, MissLogStore } from "./lint-miss-log.ts";
 export { FileMissLog, InMemoryMissLog } from "./lint-miss-log.ts";
 export { ModelNavigationAgent } from "./lint-model-navigation-agent.ts";
+// ---- OKF conformance validation (Phase 3) -----------------------------------
+export type {
+  OkfBundleArtifacts,
+  OkfChapterRecord,
+  OkfConformanceInput,
+  OkfVolumeRecord,
+} from "./lint-okf.ts";
+export { checkOkfConformance, okfConformanceCheck } from "./lint-okf.ts";
 export type { OrphanFindingData } from "./lint-orphan.ts";
 export { checkOrphans } from "./lint-orphan.ts";
 export { pairs } from "./lint-pairs.ts";
@@ -100,6 +97,7 @@ export type {
   LintSeverity,
 } from "./lint-types.ts";
 export { runLintChecks } from "./lint-types.ts";
+export { generateRootLogMd, generateVolumeLogMd } from "./log-md.ts";
 // ---- the retrieval port and its default implementation (T2.3) -------------
 export type {
   ChapterIndexRow,
@@ -119,6 +117,12 @@ export type {
 } from "./navigator.ts";
 export { ReasoningNavigator } from "./navigator.ts";
 export { normalizeForHashing } from "./normalize.ts";
+// ---- OKF conformance input construction (the I/O side of the check) -------
+export {
+  loadOkfBundleArtifacts,
+  okfChapterRecordsFrom,
+  okfVolumeRecordsFrom,
+} from "./okf-input.ts";
 // ---- passage assembly, document order (not relevance order) ----------------
 export type { Passage, PassageSource } from "./passages.ts";
 export { assemblePassages } from "./passages.ts";

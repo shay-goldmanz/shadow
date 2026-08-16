@@ -9,9 +9,7 @@ import { InMemoryMissLog } from "./lint-miss-log.ts";
 import { checkSelfRetrieval } from "./lint-self-retrieval.ts";
 import type { IndexDocument } from "./types.ts";
 
-async function withStore(
-  fn: (store: VolumeStore, root: string) => Promise<void>,
-): Promise<void> {
+async function withStore(fn: (store: VolumeStore, root: string) => Promise<void>): Promise<void> {
   const root = await mkdtemp(join(tmpdir(), "shadow-lint-self-retrieval-test-"));
   try {
     await fn(new FileSystemVolumeStore(root), root);

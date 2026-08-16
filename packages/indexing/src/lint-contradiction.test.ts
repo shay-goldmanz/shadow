@@ -8,9 +8,7 @@ import { StructuralIndexer } from "./indexer.ts";
 import { checkContradiction } from "./lint-contradiction.ts";
 import type { IndexDocument } from "./types.ts";
 
-async function withStore(
-  fn: (store: VolumeStore, root: string) => Promise<void>,
-): Promise<void> {
+async function withStore(fn: (store: VolumeStore, root: string) => Promise<void>): Promise<void> {
   const root = await mkdtemp(join(tmpdir(), "shadow-lint-contradiction-test-"));
   try {
     await fn(new FileSystemVolumeStore(root), root);

@@ -1,5 +1,5 @@
-import { join } from "node:path";
 import { describe, expect, test } from "bun:test";
+import { join } from "node:path";
 import { FakeStructuredGenerationPort, type StructuredGenerationRequest } from "@shadow/model";
 import { IndexMissingError } from "../errors.ts";
 import { createMissLog, widenMisses } from "../miss-log.ts";

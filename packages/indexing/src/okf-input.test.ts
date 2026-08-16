@@ -1,11 +1,15 @@
+import { describe, expect, test } from "bun:test";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { Chapter, Volume } from "@shadow/core";
 import { toChapterSlug, toVolumeSlug } from "@shadow/core";
-import { describe, expect, test } from "bun:test";
 import { chapter, document, volume } from "./lint-fixtures.ts";
-import { loadOkfBundleArtifacts, okfChapterRecordsFrom, okfVolumeRecordsFrom } from "./okf-input.ts";
+import {
+  loadOkfBundleArtifacts,
+  okfChapterRecordsFrom,
+  okfVolumeRecordsFrom,
+} from "./okf-input.ts";
 
 function storeChapter(overrides: Partial<Omit<Chapter, "slug">> & { slug: string }): Chapter {
   return {
@@ -89,7 +93,10 @@ describe("okfChapterRecordsFrom", () => {
       attestedComputation: ac,
     });
     const doc = document([volume({ volume_id: "v", chapters: [node] })]);
-    const records = okfChapterRecordsFrom(doc, new Map([["v", [storeChapter({ slug: "revenue" })]]]));
+    const records = okfChapterRecordsFrom(
+      doc,
+      new Map([["v", [storeChapter({ slug: "revenue" })]]]),
+    );
 
     expect(records[0]!.attestedComputation).toEqual(ac);
   });
@@ -121,7 +128,9 @@ describe("okfChapterRecordsFrom", () => {
 
 describe("okfVolumeRecordsFrom", () => {
   test("pulls volume_id from the index node and title/type/typed OKF fields from the matching Volume", () => {
-    const doc = document([volume({ volume_id: "ui-design", title: "Interface Design", chapters: [] })]);
+    const doc = document([
+      volume({ volume_id: "ui-design", title: "Interface Design", chapters: [] }),
+    ]);
     const storeVol = storeVolume({
       slug: "ui-design",
       title: "Interface Design",
