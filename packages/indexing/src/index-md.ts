@@ -41,7 +41,11 @@ export function generateRootIndexMd(volumes: readonly VolumeIndexNode[]): string
 
     for (const chapter of volume.chapters) {
       const desc = chapterDescription(chapter);
-      md += `* [${chapter.title}](chapters/${chapter.slug}.md)${desc}\n`;
+      // Root-relative: `chapter.file` is already `volumes/<v>/chapters/<c>.md`
+      // (root-relative, unlike the volume-relative link `chapters/<slug>.md`
+      // that only resolves correctly from inside that volume's own
+      // directory — see `generateVolumeIndexMd` below).
+      md += `* [${chapter.title}](${chapter.file})${desc}\n`;
     }
     md += "\n";
   }

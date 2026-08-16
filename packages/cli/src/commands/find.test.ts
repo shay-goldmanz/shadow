@@ -12,7 +12,7 @@ async function readMisses(root: string) {
 describe("runFind — small corpus (route stage skipped, D11a)", () => {
   test("round 1 returns the navigate payload directly, no route stage", async () => {
     await withStore(async (store, root) => {
-      await buildSmallFixture(store);
+      await buildSmallFixture(store, root);
       const result = await runFind(store, root, "dense table row height", {});
 
       expect(result.stage).toBe("navigate");
@@ -26,7 +26,7 @@ describe("runFind — small corpus (route stage skipped, D11a)", () => {
 
   test("navigate payload never carries body text", async () => {
     await withStore(async (store, root) => {
-      await buildSmallFixture(store);
+      await buildSmallFixture(store, root);
       const result = await runFind(store, root, "dense table row height", {});
       const serialized = JSON.stringify(result);
       expect(serialized).not.toContain("truncates labels aggressively");
@@ -35,7 +35,7 @@ describe("runFind — small corpus (route stage skipped, D11a)", () => {
 
   test("next_steps names a real node_id from the payload", async () => {
     await withStore(async (store, root) => {
-      await buildSmallFixture(store);
+      await buildSmallFixture(store, root);
       const result = await runFind(store, root, "dense table row height", {});
       if (result.stage !== "navigate") throw new Error("unreachable");
       const firstId = result.chapters[0]?.node_id;
@@ -47,7 +47,7 @@ describe("runFind — small corpus (route stage skipped, D11a)", () => {
 describe("runFind — round state threading", () => {
   test("visited[] passed in round 2 excludes those node_ids and is echoed back", async () => {
     await withStore(async (store, root) => {
-      await buildSmallFixture(store);
+      await buildSmallFixture(store, root);
       const round1 = await runFind(store, root, "dense table row height", {});
       if (round1.stage !== "navigate") throw new Error("unreachable");
       const rejectedId = round1.chapters[0]?.node_id;
@@ -66,8 +66,8 @@ describe("runFind — round state threading", () => {
 
   test("visiting every chapter exhausts the round automatically -> not-in-corpus verdict", async () => {
     await withStore(async (store, root) => {
-      await buildSmallFixture(store);
-      const document = await new StructuralIndexer().build(store);
+      await buildSmallFixture(store, root);
+      const document = await new StructuralIndexer({ rootDir: root }).build(store);
       const allIds = document.document.volumes.flatMap((v) => v.chapters.map((c) => c.node_id));
 
       const result = await runFind(store, root, "dense table row height", {
@@ -82,7 +82,7 @@ describe("runFind — round state threading", () => {
 
   test("a round number beyond MAX_ROUNDS (3) yields not-in-corpus, never a 4th navigate", async () => {
     await withStore(async (store, root) => {
-      await buildSmallFixture(store);
+      await buildSmallFixture(store, root);
       const result = await runFind(store, root, "dense table row height", { round: 4 });
       expect(result.stage).toBe("verdict");
     });
@@ -92,7 +92,7 @@ describe("runFind — round state threading", () => {
 describe("runFind — route stage (large corpus, D11's STAGE 2)", () => {
   test("first call over threshold returns a route payload, not chapters", async () => {
     await withStore(async (store, root) => {
-      await buildLargeFixture(store);
+      await buildLargeFixture(store, root);
       const result = await runFind(store, root, "topic 2 subtopic 5", {});
 
       expect(result.stage).toBe("route");
@@ -104,7 +104,7 @@ describe("runFind — route stage (large corpus, D11's STAGE 2)", () => {
 
   test("second call with --volumes scopes the navigate payload to those volumes only", async () => {
     await withStore(async (store, root) => {
-      await buildLargeFixture(store);
+      await buildLargeFixture(store, root);
       const scoped = await runFind(store, root, "topic 2 subtopic 5", { volumes: ["volume-2"] });
 
       expect(scoped.stage).toBe("navigate");
@@ -118,7 +118,7 @@ describe("runFind — route stage (large corpus, D11's STAGE 2)", () => {
 describe("runFind — explicit not-in-corpus verdict (acceptance: 'if it exists')", () => {
   test("--none with a query matching nothing at all yields not-in-corpus and logs a miss", async () => {
     await withStore(async (store, root) => {
-      await buildSmallFixture(store);
+      await buildSmallFixture(store, root);
       const result = await runFind(store, root, "sourdough bread baking technique", { none: true });
 
       expect(result.stage).toBe("verdict");
@@ -134,7 +134,7 @@ describe("runFind — explicit not-in-corpus verdict (acceptance: 'if it exists'
 
   test("an empty corpus (no volumes) returns not-in-corpus immediately and logs a miss", async () => {
     await withStore(async (store, root) => {
-      await new StructuralIndexer().reindex(store); // zero volumes
+      await new StructuralIndexer({ rootDir: root }).reindex(store); // zero volumes
       const result = await runFind(store, root, "anything at all", {});
 
       expect(result.stage).toBe("verdict");
@@ -158,7 +158,7 @@ describe("runFind — BM25 fallback promotion (D11a)", () => {
         body: "# Glossary\n\nThe codename Zephyrfrost refers to the internal build pipeline.\n",
         frontmatter: { when_to_use: "Looking up internal terminology and glossary entries." },
       });
-      await new StructuralIndexer().reindex(store);
+      await new StructuralIndexer({ rootDir: root }).reindex(store);
 
       const result = await runFind(store, root, "what is Zephyrfrost", { none: true });
 

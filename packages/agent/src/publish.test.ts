@@ -59,7 +59,7 @@ async function draftSimpleChapter(
 
 describe("publishChapter — happy path", () => {
   test("a fully-supported chapter passes the audit, is published, and reindexes the corpus", async () => {
-    await withVolumeHarness(async ({ evidenceStore, volumeStore, volume }) => {
+    await withVolumeHarness(async ({ evidenceStore, volumeStore, volume, root }) => {
       const { chapter } = await draftSimpleChapter({ evidenceStore, volumeStore }, volume, {
         slug: "supported-chapter",
         claimText: "Linear uses a 4px spacing grid.",
@@ -70,7 +70,7 @@ describe("publishChapter — happy path", () => {
         {
           volumeStore,
           evidenceStore,
-          indexer: freshIndexer(),
+          indexer: freshIndexer(root),
           checkWorthinessClassifier: alwaysNarrativeClassifier,
           entailmentRelevanceJudge: scriptedEntailmentJudge(),
           claimRestater: scriptedClaimRestater(() => {
@@ -100,7 +100,7 @@ describe("publishChapter — happy path", () => {
 
 describe("publishChapter — unsupported claims fail the audit and are not published", () => {
   test("a claim the judge always reports unsupported fails the audit; the chapter is not published", async () => {
-    await withVolumeHarness(async ({ evidenceStore, volumeStore, volume }) => {
+    await withVolumeHarness(async ({ evidenceStore, volumeStore, volume, root }) => {
       const { chapter } = await draftSimpleChapter({ evidenceStore, volumeStore }, volume, {
         slug: "unsupported-chapter",
         claimText: "Linear invented the concept of a sidebar.",
@@ -111,7 +111,7 @@ describe("publishChapter — unsupported claims fail the audit and are not publi
         {
           volumeStore,
           evidenceStore,
-          indexer: freshIndexer(),
+          indexer: freshIndexer(root),
           checkWorthinessClassifier: alwaysNarrativeClassifier,
           entailmentRelevanceJudge: scriptedEntailmentJudge(() => ({
             entailment: { status: "unsupported", rationale: "the cited span never says this" },
@@ -141,7 +141,7 @@ describe("publishChapter — unsupported claims fail the audit and are not publi
 
 describe("publishChapter — conservative restatement (D9/D21)", () => {
   test("a partial claim is restated within the preservation bound, applied, and logged, and then passes", async () => {
-    await withVolumeHarness(async ({ evidenceStore, volumeStore, volume }) => {
+    await withVolumeHarness(async ({ evidenceStore, volumeStore, volume, root }) => {
       const original = "Linear never uses shadows.";
       const restated = "Linear's documentation emphasises borders over shadows.";
 
@@ -155,7 +155,7 @@ describe("publishChapter — conservative restatement (D9/D21)", () => {
         {
           volumeStore,
           evidenceStore,
-          indexer: freshIndexer(),
+          indexer: freshIndexer(root),
           checkWorthinessClassifier: alwaysNarrativeClassifier,
           entailmentRelevanceJudge: scriptedEntailmentJudge((input) => ({
             entailment: {
@@ -198,7 +198,7 @@ describe("publishChapter — conservative restatement (D9/D21)", () => {
   });
 
   test("a restatement exceeding the preservation bound is escalated, not applied, and logged", async () => {
-    await withVolumeHarness(async ({ evidenceStore, volumeStore, volume }) => {
+    await withVolumeHarness(async ({ evidenceStore, volumeStore, volume, root }) => {
       const original = "Linear never uses shadows.";
       // Wildly different and much longer than max(80, 0.5*|original|) —
       // RARR's adversarial-editor attack (D21) — must be rejected.
@@ -217,7 +217,7 @@ describe("publishChapter — conservative restatement (D9/D21)", () => {
         {
           volumeStore,
           evidenceStore,
-          indexer: freshIndexer(),
+          indexer: freshIndexer(root),
           checkWorthinessClassifier: alwaysNarrativeClassifier,
           // Always "unsupported" (blocking) — the point of this test is the
           // guardrail rejecting the restatement, so the claim must still be
@@ -259,7 +259,7 @@ describe("publishChapter — conservative restatement (D9/D21)", () => {
 
 describe("publishChapter — claim.restated is scoped to its chapter (T3.6)", () => {
   test("filtering a volume-wide ledger by chapter returns only that chapter's restatements", async () => {
-    await withVolumeHarness(async ({ evidenceStore, volumeStore, volume }) => {
+    await withVolumeHarness(async ({ evidenceStore, volumeStore, volume, root }) => {
       const restatedText = "Restated within the preservation bound for this fixture.";
 
       async function publishOnePartialClaimChapter(slug: string, claimText: string) {
@@ -272,7 +272,7 @@ describe("publishChapter — claim.restated is scoped to its chapter (T3.6)", ()
           {
             volumeStore,
             evidenceStore,
-            indexer: freshIndexer(),
+            indexer: freshIndexer(root),
             checkWorthinessClassifier: alwaysNarrativeClassifier,
             entailmentRelevanceJudge: scriptedEntailmentJudge((input) => ({
               entailment: {
@@ -315,7 +315,7 @@ describe("publishChapter — claim.restated is scoped to its chapter (T3.6)", ()
   });
 
   test("a restatement survives its claim's label being retired from the chapter", async () => {
-    await withVolumeHarness(async ({ evidenceStore, volumeStore, volume }) => {
+    await withVolumeHarness(async ({ evidenceStore, volumeStore, volume, root }) => {
       const original = "Linear never uses shadows.";
       const restated = "Linear's documentation emphasises borders over shadows.";
 
@@ -329,7 +329,7 @@ describe("publishChapter — claim.restated is scoped to its chapter (T3.6)", ()
         {
           volumeStore,
           evidenceStore,
-          indexer: freshIndexer(),
+          indexer: freshIndexer(root),
           checkWorthinessClassifier: alwaysNarrativeClassifier,
           entailmentRelevanceJudge: scriptedEntailmentJudge((input) => ({
             entailment: {

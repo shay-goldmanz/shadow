@@ -10,7 +10,7 @@ import { runMisses } from "./misses.ts";
 describe("runLintCommand --offline", () => {
   test("runs the zero-model checks and reports next_steps, without touching the miss log", async () => {
     await withStore(async (store, root) => {
-      await buildSmallFixture(store);
+      await buildSmallFixture(store, root);
       const result = await runLintCommand(store, root, { offline: true });
 
       expect(result.offline).toBe(true);
@@ -64,7 +64,7 @@ function alwaysMissPort(): FakeStructuredGenerationPort {
 describe("runLintCommand online — self-retrieval shares shadow find's miss log (T2.7)", () => {
   test("a self-retrieval not-in-corpus verdict is appended to the same misses.jsonl shadow find writes to", async () => {
     await withStore(async (store, root) => {
-      await buildSmallFixture(store);
+      await buildSmallFixture(store, root);
       const port = alwaysMissPort();
 
       const report = await runLintCommand(store, root, { offline: false }, { port });
@@ -85,7 +85,7 @@ describe("runLintCommand online — self-retrieval shares shadow find's miss log
 
   test("interleaves with shadow find's writes in one file, append-only, both formats intact", async () => {
     await withStore(async (store, root) => {
-      await buildSmallFixture(store);
+      await buildSmallFixture(store, root);
 
       // Writer 1: shadow find, a real not-in-corpus verdict.
       await runFind(store, root, "sourdough bread baking technique", { none: true });

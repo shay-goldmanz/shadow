@@ -40,20 +40,24 @@ export interface IndexCheckResult {
 
 export type IndexCommandResult = IndexBuildResult | IndexCheckResult;
 
-async function freshBuild(store: VolumeStore): Promise<{
+async function freshBuild(
+  store: VolumeStore,
+  root: string,
+): Promise<{
   document: IndexDocument;
   mintedIds: readonly MintedId[];
 }> {
-  const { document, mintedIds } = await new StructuralIndexer().build(store);
+  const { document, mintedIds } = await new StructuralIndexer({ rootDir: root }).build(store);
   return { document, mintedIds };
 }
 
 export async function runIndexCommand(
   store: VolumeStore,
+  root: string,
   options: IndexCommandOptions,
 ): Promise<IndexCommandResult> {
   if (options.check) {
-    const { document } = await freshBuild(store);
+    const { document } = await freshBuild(store, root);
     const stored = await store.readCorpusIndex<IndexDocument>();
     if (!stored || stored.corpus_hash !== document.corpus_hash) {
       throw new StaleIndexError(stored?.corpus_hash, document.corpus_hash);
@@ -65,7 +69,7 @@ export async function runIndexCommand(
     };
   }
 
-  const { document, mintedIds } = await new StructuralIndexer().reindex(store);
+  const { document, mintedIds } = await new StructuralIndexer({ rootDir: root }).reindex(store);
   return {
     stats: document.stats,
     corpus_hash: document.corpus_hash,

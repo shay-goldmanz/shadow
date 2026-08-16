@@ -109,6 +109,12 @@ async function readLedgerFile(evidenceDir: string): Promise<LedgerEvent[]> {
  * is no incremental/skip-work machinery to maintain.
  */
 export class StructuralIndexer implements Indexer {
+  private readonly rootDir: string;
+
+  constructor(options: { readonly rootDir: string }) {
+    this.rootDir = options.rootDir;
+  }
+
   async build(store: VolumeStore): Promise<BuildIndexResult> {
     return (await this.buildInternal(store)).result;
   }
@@ -124,17 +130,6 @@ export class StructuralIndexer implements Indexer {
 
     // Per-volume ledger events collected for the root-level log.md.
     const allVolumeEvents: LedgerEvent[][] = [];
-
-    // Compute the root path once from the first volume's evidence dir.
-    // Every volume shares the same storage root, so deriving from the
-    // first volume is sufficient.
-    let rootPath: string | undefined;
-    const firstSlug = volumeSlugs[0];
-    if (firstSlug) {
-      const evidenceDir = store.evidenceDir(firstSlug);
-      // evidence/ -> volume dir -> root (volumes/ parent)
-      rootPath = dirname(dirname(evidenceDir));
-    }
 
     // Each volume's own index.json gets a *scoped* view — just its own
     // node, not the corpus. This is still worth writing (not dropped
@@ -167,14 +162,14 @@ export class StructuralIndexer implements Indexer {
       await Bun.write(join(volumeDir, "log.md"), logMd);
     }
 
-    // OKF: write root-level index.md (bundle-level directory listing)
-    // and root-level log.md (cross-volume chronological history).
-    if (rootPath) {
-      const rootIndexMd = generateRootIndexMd(result.document.volumes);
-      await Bun.write(join(rootPath, "index.md"), rootIndexMd);
-      const rootLogMd = generateRootLogMd(allVolumeEvents);
-      await Bun.write(join(rootPath, "log.md"), rootLogMd);
-    }
+    // OKF: write root-level index.md (bundle-level directory listing) and
+    // root-level log.md (cross-volume chronological history) — always,
+    // even for a corpus with zero volumes, so an empty corpus is still a
+    // conformant bundle (both generators handle an empty input).
+    const rootIndexMd = generateRootIndexMd(result.document.volumes);
+    await Bun.write(join(this.rootDir, "index.md"), rootIndexMd);
+    const rootLogMd = generateRootLogMd(allVolumeEvents);
+    await Bun.write(join(this.rootDir, "log.md"), rootLogMd);
 
     return result;
   }

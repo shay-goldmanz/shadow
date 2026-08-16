@@ -9,17 +9,19 @@ import { InMemoryMissLog } from "./lint-miss-log.ts";
 import { checkSelfRetrieval } from "./lint-self-retrieval.ts";
 import type { IndexDocument } from "./types.ts";
 
-async function withStore(fn: (store: VolumeStore) => Promise<void>): Promise<void> {
+async function withStore(
+  fn: (store: VolumeStore, root: string) => Promise<void>,
+): Promise<void> {
   const root = await mkdtemp(join(tmpdir(), "shadow-lint-self-retrieval-test-"));
   try {
-    await fn(new FileSystemVolumeStore(root));
+    await fn(new FileSystemVolumeStore(root), root);
   } finally {
     await rm(root, { recursive: true, force: true });
   }
 }
 
 /** Two real, indexed chapters — the same fixture shape `navigator.test.ts` uses (T2.3's own precedent), reused because self-retrieval genuinely drives `ReasoningNavigator` end to end and needs real chapter bodies for its BM25-fallback/disagreement path. */
-async function buildTwoChapterFixture(store: VolumeStore): Promise<IndexDocument> {
+async function buildTwoChapterFixture(store: VolumeStore, root: string): Promise<IndexDocument> {
   const volume = toVolumeSlug("ui-design");
   await store.createVolume({ slug: volume, title: "Interface Design" });
 
@@ -45,12 +47,12 @@ async function buildTwoChapterFixture(store: VolumeStore): Promise<IndexDocument
     },
   });
 
-  const indexer = new StructuralIndexer();
+  const indexer = new StructuralIndexer({ rootDir: root });
   const { document } = await indexer.build(store);
   return document;
 }
 
-async function buildOneChapterFixture(store: VolumeStore): Promise<IndexDocument> {
+async function buildOneChapterFixture(store: VolumeStore, root: string): Promise<IndexDocument> {
   const volume = toVolumeSlug("ui-design");
   await store.createVolume({ slug: volume, title: "Interface Design" });
 
@@ -65,15 +67,15 @@ async function buildOneChapterFixture(store: VolumeStore): Promise<IndexDocument
     },
   });
 
-  const indexer = new StructuralIndexer();
+  const indexer = new StructuralIndexer({ rootDir: root });
   const { document } = await indexer.build(store);
   return document;
 }
 
 describe("checkSelfRetrieval", () => {
   test("a chapter with a good when_to_use retrieves itself", async () => {
-    await withStore(async (store) => {
-      const document = await buildTwoChapterFixture(store);
+    await withStore(async (store, root) => {
+      const document = await buildTwoChapterFixture(store, root);
       const density = document.volumes[0]?.chapters.find((c) => c.slug === "linear-density");
       const onboarding = document.volumes[0]?.chapters.find((c) => c.slug === "onboarding");
       if (!density || !onboarding) {
@@ -106,8 +108,8 @@ describe("checkSelfRetrieval", () => {
   });
 
   test("a chapter with a vague/wrong when_to_use does not retrieve itself, and is reported", async () => {
-    await withStore(async (store) => {
-      const document = await buildTwoChapterFixture(store);
+    await withStore(async (store, root) => {
+      const document = await buildTwoChapterFixture(store, root);
       const density = document.volumes[0]?.chapters.find((c) => c.slug === "linear-density");
       const onboarding = document.volumes[0]?.chapters.find((c) => c.slug === "onboarding");
       if (!density || !onboarding) {
@@ -149,8 +151,8 @@ describe("checkSelfRetrieval", () => {
   });
 
   test("a not-in-corpus verdict is appended to the miss log", async () => {
-    await withStore(async (store) => {
-      const document = await buildOneChapterFixture(store);
+    await withStore(async (store, root) => {
+      const document = await buildOneChapterFixture(store, root);
       const density = document.volumes[0]?.chapters[0];
       if (!density) {
         throw new Error("unreachable");
@@ -184,8 +186,8 @@ describe("checkSelfRetrieval", () => {
   });
 
   test("miss log append-only: two separate self-retrieval runs both land in the log", async () => {
-    await withStore(async (store) => {
-      const document = await buildOneChapterFixture(store);
+    await withStore(async (store, root) => {
+      const document = await buildOneChapterFixture(store, root);
       const missLog = new InMemoryMissLog();
       const missScript = [
         { task: "zzqqxx nonexistent gibberish term" },

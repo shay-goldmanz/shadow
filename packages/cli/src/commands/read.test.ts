@@ -7,8 +7,8 @@ import { runRead } from "./read.ts";
 
 describe("runRead", () => {
   test("returns body, heading path, and content_hash for a chapter node_id", async () => {
-    await withStore(async (store) => {
-      await buildSmallFixture(store);
+    await withStore(async (store, root) => {
+      await buildSmallFixture(store, root);
       const document = await loadCorpusIndex(store);
       const chapter = document.volumes[0]?.chapters.find((c) => c.slug === "linear-density");
       if (!chapter) throw new Error("unreachable");
@@ -24,8 +24,8 @@ describe("runRead", () => {
   });
 
   test("--with-parents adds parent when_to_use and sibling titles", async () => {
-    await withStore(async (store) => {
-      await buildSmallFixture(store);
+    await withStore(async (store, root) => {
+      await buildSmallFixture(store, root);
       const document = await loadCorpusIndex(store);
       const chapter = document.volumes[0]?.chapters.find((c) => c.slug === "linear-density");
       if (!chapter) throw new Error("unreachable");
@@ -38,8 +38,8 @@ describe("runRead", () => {
   });
 
   test("next_steps cites the node_id and content_hash for the caller to quote", async () => {
-    await withStore(async (store) => {
-      await buildSmallFixture(store);
+    await withStore(async (store, root) => {
+      await buildSmallFixture(store, root);
       const document = await loadCorpusIndex(store);
       const chapter = document.volumes[0]?.chapters[0];
       if (!chapter) throw new Error("unreachable");
@@ -51,8 +51,8 @@ describe("runRead", () => {
   });
 
   test("a bad node_id throws NodeLookupError with next_steps, wrapping NodeNotFoundError", async () => {
-    await withStore(async (store) => {
-      await buildSmallFixture(store);
+    await withStore(async (store, root) => {
+      await buildSmallFixture(store, root);
       const error = await runRead(store, "not-a-real-node-id", { withParents: false }).catch(
         (e) => e,
       );

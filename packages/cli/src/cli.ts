@@ -166,7 +166,7 @@ async function dispatch(argv: readonly string[], deps: RunDeps): Promise<unknown
         options: { check: { type: "boolean" }, json: { type: "boolean" } },
         strict: true,
       });
-      return runIndexCommand(deps.store, { check: values.check ?? false });
+      return runIndexCommand(deps.store, deps.root, { check: values.check ?? false });
     }
 
     case "lint": {

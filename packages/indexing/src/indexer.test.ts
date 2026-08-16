@@ -7,10 +7,12 @@ import { StructuralIndexer } from "./indexer.ts";
 import type { IndexDocument, VolumeIndexDocument } from "./types.ts";
 import { isValidUlid } from "./ulid.ts";
 
-async function withStore(fn: (store: VolumeStore) => Promise<void>): Promise<void> {
+async function withStore(
+  fn: (store: VolumeStore, root: string) => Promise<void>,
+): Promise<void> {
   const root = await mkdtemp(join(tmpdir(), "shadow-indexing-test-"));
   try {
-    await fn(new FileSystemVolumeStore(root));
+    await fn(new FileSystemVolumeStore(root), root);
   } finally {
     await rm(root, { recursive: true, force: true });
   }
@@ -18,7 +20,7 @@ async function withStore(fn: (store: VolumeStore) => Promise<void>): Promise<voi
 
 describe("StructuralIndexer — ULID minting and write-back (D13)", () => {
   test("mints a ULID for a chapter with no `id` and writes it back to frontmatter", async () => {
-    await withStore(async (store) => {
+    await withStore(async (store, root) => {
       const volume = toVolumeSlug("ui-design");
       await store.createVolume({ slug: volume, title: "Interface Design" });
       await store.putChapter(volume, {
@@ -27,7 +29,7 @@ describe("StructuralIndexer — ULID minting and write-back (D13)", () => {
         body: "Some prose about density.\n",
       });
 
-      const indexer = new StructuralIndexer();
+      const indexer = new StructuralIndexer({ rootDir: root });
       const { document, mintedIds } = await indexer.build(store);
 
       expect(mintedIds).toHaveLength(1);
@@ -44,7 +46,7 @@ describe("StructuralIndexer — ULID minting and write-back (D13)", () => {
   });
 
   test("a second build does not change a previously minted id, and mints nothing new", async () => {
-    await withStore(async (store) => {
+    await withStore(async (store, root) => {
       const volume = toVolumeSlug("ui-design");
       await store.createVolume({ slug: volume, title: "Interface Design" });
       await store.putChapter(volume, {
@@ -53,7 +55,7 @@ describe("StructuralIndexer — ULID minting and write-back (D13)", () => {
         body: "Some prose about density.\n",
       });
 
-      const indexer = new StructuralIndexer();
+      const indexer = new StructuralIndexer({ rootDir: root });
       const first = await indexer.build(store);
       const mintedId = first.mintedIds[0]?.id;
 
@@ -64,7 +66,7 @@ describe("StructuralIndexer — ULID minting and write-back (D13)", () => {
   });
 
   test("other frontmatter keys survive minting intact, including their order", async () => {
-    await withStore(async (store) => {
+    await withStore(async (store, root) => {
       const volume = toVolumeSlug("ui-design");
       await store.createVolume({ slug: volume, title: "Interface Design" });
       const frontmatter = {
@@ -81,7 +83,7 @@ describe("StructuralIndexer — ULID minting and write-back (D13)", () => {
         frontmatter,
       });
 
-      const indexer = new StructuralIndexer();
+      const indexer = new StructuralIndexer({ rootDir: root });
       await indexer.build(store);
 
       const onDisk = await store.getChapter(volume, toChapterSlug("density"));
@@ -95,7 +97,7 @@ describe("StructuralIndexer — ULID minting and write-back (D13)", () => {
   });
 
   test("a chapter that already has an id is left untouched (not re-minted)", async () => {
-    await withStore(async (store) => {
+    await withStore(async (store, root) => {
       const volume = toVolumeSlug("ui-design");
       await store.createVolume({ slug: volume, title: "Interface Design" });
       const existingId = "01J8X7QK3M2F5R7T9V0W1Y2Z3A";
@@ -106,7 +108,7 @@ describe("StructuralIndexer — ULID minting and write-back (D13)", () => {
         frontmatter: { id: existingId },
       });
 
-      const indexer = new StructuralIndexer();
+      const indexer = new StructuralIndexer({ rootDir: root });
       const { document, mintedIds } = await indexer.build(store);
 
       expect(mintedIds).toEqual([]);
@@ -117,7 +119,7 @@ describe("StructuralIndexer — ULID minting and write-back (D13)", () => {
 
 describe("StructuralIndexer — end to end via VolumeStore", () => {
   test("builds and persists the full index.json shape over a small fixture volume", async () => {
-    await withStore(async (store) => {
+    await withStore(async (store, root) => {
       const volume = toVolumeSlug("ui-design");
       await store.createVolume({
         slug: volume,
@@ -150,7 +152,7 @@ describe("StructuralIndexer — end to end via VolumeStore", () => {
         body: "## Just one small heading\nBrief content.\n",
       });
 
-      const indexer = new StructuralIndexer();
+      const indexer = new StructuralIndexer({ rootDir: root });
       const { document } = await indexer.reindex(store);
 
       // --- top-level shape ---
@@ -213,7 +215,7 @@ describe("StructuralIndexer — end to end via VolumeStore", () => {
   });
 
   test("reindex no longer duplicates the corpus into every volume's index.json (T2.2 follow-up)", async () => {
-    await withStore(async (store) => {
+    await withStore(async (store, root) => {
       const volA = toVolumeSlug("volume-a");
       const volB = toVolumeSlug("volume-b");
       await store.createVolume({ slug: volA, title: "Volume A" });
@@ -221,7 +223,7 @@ describe("StructuralIndexer — end to end via VolumeStore", () => {
       await store.putChapter(volA, { slug: toChapterSlug("a1"), title: "A1", body: "prose\n" });
       await store.putChapter(volB, { slug: toChapterSlug("b1"), title: "B1", body: "prose\n" });
 
-      const indexer = new StructuralIndexer();
+      const indexer = new StructuralIndexer({ rootDir: root });
       const { document } = await indexer.reindex(store);
 
       expect(document.volumes).toHaveLength(2);
@@ -246,12 +248,12 @@ describe("StructuralIndexer — end to end via VolumeStore", () => {
   });
 
   test("build() does not write index.json or the corpus index; only reindex() does", async () => {
-    await withStore(async (store) => {
+    await withStore(async (store, root) => {
       const volume = toVolumeSlug("v");
       await store.createVolume({ slug: volume, title: "V" });
       await store.putChapter(volume, { slug: toChapterSlug("c"), title: "C", body: "prose\n" });
 
-      const indexer = new StructuralIndexer();
+      const indexer = new StructuralIndexer({ rootDir: root });
       await indexer.build(store);
 
       expect(await store.readIndex(volume)).toBeUndefined();
@@ -260,7 +262,7 @@ describe("StructuralIndexer — end to end via VolumeStore", () => {
   });
 
   test("volume routing fields come from VOLUME.md frontmatter, with description as fallback when_to_use", async () => {
-    await withStore(async (store) => {
+    await withStore(async (store, root) => {
       const routed = toVolumeSlug("routed");
       await store.createVolume({
         slug: routed,
@@ -282,7 +284,7 @@ describe("StructuralIndexer — end to end via VolumeStore", () => {
       });
       await store.putChapter(fallback, { slug: toChapterSlug("c"), title: "C", body: "prose\n" });
 
-      const indexer = new StructuralIndexer();
+      const indexer = new StructuralIndexer({ rootDir: root });
       const { document } = await indexer.build(store);
 
       const routedNode = document.volumes.find((v) => v.volume_id === "routed");
@@ -298,12 +300,84 @@ describe("StructuralIndexer — end to end via VolumeStore", () => {
   });
 
   test("an empty corpus (no volumes) builds a valid, empty document without error", async () => {
-    await withStore(async (store) => {
-      const indexer = new StructuralIndexer();
+    await withStore(async (store, root) => {
+      const indexer = new StructuralIndexer({ rootDir: root });
       const { document, mintedIds } = await indexer.build(store);
       expect(document.volumes).toEqual([]);
       expect(document.stats).toEqual({ volumes: 0, chapters: 0, tokens: 0 });
       expect(mintedIds).toEqual([]);
+    });
+  });
+});
+
+describe("StructuralIndexer.reindex — OKF root/volume index.md and log.md placement (bug F1)", () => {
+  test("root index.md and log.md land at <rootDir>/{index,log}.md, not under volumes/", async () => {
+    await withStore(async (store, root) => {
+      const volume = toVolumeSlug("ui-design");
+      await store.createVolume({ slug: volume, title: "Interface Design" });
+      await store.putChapter(volume, {
+        slug: toChapterSlug("density"),
+        title: "Density",
+        body: "prose\n",
+      });
+
+      await new StructuralIndexer({ rootDir: root }).reindex(store);
+
+      const rootIndex = Bun.file(join(root, "index.md"));
+      const rootLog = Bun.file(join(root, "log.md"));
+      expect(await rootIndex.exists()).toBe(true);
+      expect(await rootLog.exists()).toBe(true);
+      expect(await rootIndex.text()).toContain('okf_version: "0.2"');
+
+      // The old off-by-one landed these one level too shallow, at
+      // <rootDir>/volumes/{index,log}.md — must not exist there.
+      expect(await Bun.file(join(root, "volumes", "index.md")).exists()).toBe(false);
+      expect(await Bun.file(join(root, "volumes", "log.md")).exists()).toBe(false);
+    });
+  });
+
+  test("an empty corpus (no volumes) still gets both root artifacts", async () => {
+    await withStore(async (store, root) => {
+      await new StructuralIndexer({ rootDir: root }).reindex(store);
+
+      const rootIndex = Bun.file(join(root, "index.md"));
+      const rootLog = Bun.file(join(root, "log.md"));
+      expect(await rootIndex.exists()).toBe(true);
+      expect(await rootLog.exists()).toBe(true);
+
+      const indexText = await rootIndex.text();
+      expect(indexText).toContain('okf_version: "0.2"');
+      expect(indexText).toContain("# Volumes");
+      expect(indexText).not.toContain("##"); // no volume sections
+
+      expect(await rootLog.text()).toContain("_No changes recorded yet._");
+    });
+  });
+
+  test("per-volume index.md and log.md still land unchanged inside each volume's own directory", async () => {
+    await withStore(async (store, root) => {
+      const volA = toVolumeSlug("volume-a");
+      const volB = toVolumeSlug("volume-b");
+      await store.createVolume({ slug: volA, title: "Volume A" });
+      await store.createVolume({ slug: volB, title: "Volume B" });
+      await store.putChapter(volA, { slug: toChapterSlug("a1"), title: "A1", body: "prose\n" });
+      await store.putChapter(volB, { slug: toChapterSlug("b1"), title: "B1", body: "prose\n" });
+
+      await new StructuralIndexer({ rootDir: root }).reindex(store);
+
+      const volADir = join(root, "volumes", "volume-a");
+      const volBDir = join(root, "volumes", "volume-b");
+
+      expect(await Bun.file(join(volADir, "index.md")).exists()).toBe(true);
+      expect(await Bun.file(join(volADir, "log.md")).exists()).toBe(true);
+      expect(await Bun.file(join(volBDir, "index.md")).exists()).toBe(true);
+      expect(await Bun.file(join(volBDir, "log.md")).exists()).toBe(true);
+
+      const volAIndexText = await Bun.file(join(volADir, "index.md")).text();
+      // Per-volume index.md keeps volume-relative chapter links and carries
+      // no okf_version frontmatter (only the root index.md does).
+      expect(volAIndexText).toContain("[A1](chapters/a1.md)");
+      expect(volAIndexText).not.toContain("okf_version");
     });
   });
 });

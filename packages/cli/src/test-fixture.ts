@@ -29,7 +29,7 @@ export async function withStore(
  * so `find` skips STAGE 2 routing by default) drawn from the acceptance
  * critical path: Linear/Notion UI design, and Epoch's one-pager expertise.
  */
-export async function buildSmallFixture(store: VolumeStore): Promise<void> {
+export async function buildSmallFixture(store: VolumeStore, root: string): Promise<void> {
   const uiDesign = toVolumeSlug("ui-design");
   await store.createVolume({
     slug: uiDesign,
@@ -93,7 +93,7 @@ export async function buildSmallFixture(store: VolumeStore): Promise<void> {
     },
   });
 
-  await new StructuralIndexer().reindex(store);
+  await new StructuralIndexer({ rootDir: root }).reindex(store);
 }
 
 /**
@@ -101,7 +101,7 @@ export async function buildSmallFixture(store: VolumeStore): Promise<void> {
  * multiple volumes, so `find` exercises STAGE 2 (ROUTE) instead of skipping
  * straight to the flat chapter index.
  */
-export async function buildLargeFixture(store: VolumeStore): Promise<void> {
+export async function buildLargeFixture(store: VolumeStore, root: string): Promise<void> {
   const volumeCount = 4;
   const chaptersPerVolume = 16; // 64 total, > CHAPTER_INDEX_THRESHOLD (60)
   for (let v = 0; v < volumeCount; v += 1) {
@@ -123,5 +123,5 @@ export async function buildLargeFixture(store: VolumeStore): Promise<void> {
       });
     }
   }
-  await new StructuralIndexer().reindex(store);
+  await new StructuralIndexer({ rootDir: root }).reindex(store);
 }

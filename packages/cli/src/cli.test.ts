@@ -40,7 +40,7 @@ describe("run — dispatch, exit codes, and the stdout/stderr split", () => {
 
   test("`volumes` succeeds: JSON on stdout, exit 0, nothing on stderr", async () => {
     await withStore(async (store, root) => {
-      await buildSmallFixture(store);
+      await buildSmallFixture(store, root);
       const cap = capture();
       const code = await run(["volumes"], {
         store,
@@ -73,7 +73,7 @@ describe("run — dispatch, exit codes, and the stdout/stderr split", () => {
 
   test("`chapters` with no volume argument is a usage error, exit 2", async () => {
     await withStore(async (store, root) => {
-      await buildSmallFixture(store);
+      await buildSmallFixture(store, root);
       const cap = capture();
       const code = await run(["chapters"], {
         store,
@@ -87,7 +87,7 @@ describe("run — dispatch, exit codes, and the stdout/stderr split", () => {
 
   test("`chapters <volume> --rank` ranks and returns exit 0", async () => {
     await withStore(async (store, root) => {
-      await buildSmallFixture(store);
+      await buildSmallFixture(store, root);
       const cap = capture();
       const code = await run(["chapters", "ui-design", "--rank", "dense table"], {
         store,
@@ -103,7 +103,7 @@ describe("run — dispatch, exit codes, and the stdout/stderr split", () => {
 
   test("`chapters` on an unknown volume is a not-found error, exit 3", async () => {
     await withStore(async (store, root) => {
-      await buildSmallFixture(store);
+      await buildSmallFixture(store, root);
       const cap = capture();
       const code = await run(["chapters", "nope"], {
         store,
@@ -117,7 +117,7 @@ describe("run — dispatch, exit codes, and the stdout/stderr split", () => {
 
   test("`find` with a quoted task string returns navigate JSON, exit 0", async () => {
     await withStore(async (store, root) => {
-      await buildSmallFixture(store);
+      await buildSmallFixture(store, root);
       const cap = capture();
       const code = await run(["find", "dense table row height"], {
         store,
@@ -133,7 +133,7 @@ describe("run — dispatch, exit codes, and the stdout/stderr split", () => {
 
   test("`find` round-trips --visited/--round flags", async () => {
     await withStore(async (store, root) => {
-      await buildSmallFixture(store);
+      await buildSmallFixture(store, root);
       const cap1 = capture();
       await run(["find", "dense table row height"], {
         store,
@@ -158,7 +158,7 @@ describe("run — dispatch, exit codes, and the stdout/stderr split", () => {
 
   test("`read <node_id>` returns body JSON, exit 0", async () => {
     await withStore(async (store, root) => {
-      await buildSmallFixture(store);
+      await buildSmallFixture(store, root);
       const findCap = capture();
       await run(["find", "dense table"], {
         store,
@@ -184,7 +184,7 @@ describe("run — dispatch, exit codes, and the stdout/stderr split", () => {
 
   test("`read <node_id> --with-parents` includes parent_when_to_use", async () => {
     await withStore(async (store, root) => {
-      await buildSmallFixture(store);
+      await buildSmallFixture(store, root);
       const findCap = capture();
       await run(["find", "dense table"], {
         store,
@@ -208,7 +208,7 @@ describe("run — dispatch, exit codes, and the stdout/stderr split", () => {
 
   test("`read` on a bad node_id is a not-found error, exit 3", async () => {
     await withStore(async (store, root) => {
-      await buildSmallFixture(store);
+      await buildSmallFixture(store, root);
       const cap = capture();
       const code = await run(["read", "bogus-node-id"], {
         store,
@@ -222,7 +222,7 @@ describe("run — dispatch, exit codes, and the stdout/stderr split", () => {
 
   test("`grep <terms>` returns hits JSON, exit 0", async () => {
     await withStore(async (store, root) => {
-      await buildSmallFixture(store);
+      await buildSmallFixture(store, root);
       const cap = capture();
       const code = await run(["grep", "pull quote editorial"], {
         store,
@@ -344,7 +344,7 @@ describe("run — dispatch, exit codes, and the stdout/stderr split", () => {
 
   test("--json produces pretty-printed (multi-line) output", async () => {
     await withStore(async (store, root) => {
-      await buildSmallFixture(store);
+      await buildSmallFixture(store, root);
       const cap = capture();
       await run(["volumes", "--json"], { store, root, write: cap.write, writeErr: cap.writeErr });
       expect(cap.stdout.join("")).toContain("\n  ");

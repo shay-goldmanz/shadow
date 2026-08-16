@@ -123,23 +123,39 @@ describe("generateRootIndexMd", () => {
     expect(md).toContain("---"); // has frontmatter fences
   });
 
-  test("lists multiple volumes", () => {
+  test("lists multiple volumes, linking each chapter via its root-relative `file` path", () => {
     const v1 = volume({
       volume_id: "ui",
       title: "Interface Design",
-      chapters: [chapter({ title: "Density", slug: "density" })],
+      chapters: [
+        chapter({
+          title: "Density",
+          slug: "density",
+          file: "volumes/ui/chapters/density.md",
+        }),
+      ],
     });
     const v2 = volume({
       volume_id: "writing",
       title: "Writing",
-      chapters: [chapter({ title: "One-Pager", slug: "one-pager" })],
+      chapters: [
+        chapter({
+          title: "One-Pager",
+          slug: "one-pager",
+          file: "volumes/writing/chapters/one-pager.md",
+        }),
+      ],
     });
     const md = generateRootIndexMd([v1, v2]);
 
     expect(md).toContain("## Interface Design");
     expect(md).toContain("## Writing");
-    expect(md).toContain("[Density](chapters/density.md)");
-    expect(md).toContain("[One-Pager](chapters/one-pager.md)");
+    // Root-relative `file` links, not the volume-relative `chapters/<slug>.md`
+    // shape (Bug F2) — those only resolve correctly from inside a volume dir.
+    expect(md).toContain("[Density](volumes/ui/chapters/density.md)");
+    expect(md).toContain("[One-Pager](volumes/writing/chapters/one-pager.md)");
+    expect(md).not.toContain("[Density](chapters/density.md)");
+    expect(md).not.toContain("[One-Pager](chapters/one-pager.md)");
   });
 
   test("empty volumes render the empty state", () => {

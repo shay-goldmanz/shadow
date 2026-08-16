@@ -93,7 +93,7 @@ describe("shadow misses via the CLI dispatcher — survives a malformed line", (
 describe("shadow find and shadow misses agree on where the log lives", () => {
   test("a miss `runFind` writes is immediately visible to `runMisses`", async () => {
     await withStore(async (store, root) => {
-      await buildSmallFixture(store);
+      await buildSmallFixture(store, root);
       await runFind(store, root, "sourdough bread baking technique", { none: true });
 
       const result = await runMisses(root);

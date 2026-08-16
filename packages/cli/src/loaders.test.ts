@@ -7,10 +7,12 @@ import { StructuralIndexer } from "@shadow/indexing";
 import { IndexMissingError } from "./errors.ts";
 import { loadCorpusIndex } from "./loaders.ts";
 
-async function withStore(fn: (store: FileSystemVolumeStore) => Promise<void>): Promise<void> {
+async function withStore(
+  fn: (store: FileSystemVolumeStore, root: string) => Promise<void>,
+): Promise<void> {
   const root = await mkdtemp(join(tmpdir(), "shadow-loaders-test-"));
   try {
-    await fn(new FileSystemVolumeStore(root));
+    await fn(new FileSystemVolumeStore(root), root);
   } finally {
     await rm(root, { recursive: true, force: true });
   }
@@ -29,11 +31,11 @@ describe("loadCorpusIndex", () => {
   });
 
   test("returns the persisted corpus document once one has been built", async () => {
-    await withStore(async (store) => {
+    await withStore(async (store, root) => {
       const volume = toVolumeSlug("v");
       await store.createVolume({ slug: volume, title: "V" });
       await store.putChapter(volume, { slug: toChapterSlug("c"), title: "C", body: "body text" });
-      await new StructuralIndexer().reindex(store);
+      await new StructuralIndexer({ rootDir: root }).reindex(store);
 
       const document = await loadCorpusIndex(store);
       expect(document.stats.chapters).toBe(1);

@@ -8,16 +8,18 @@ import { StructuralIndexer } from "./indexer.ts";
 import { checkContradiction } from "./lint-contradiction.ts";
 import type { IndexDocument } from "./types.ts";
 
-async function withStore(fn: (store: VolumeStore) => Promise<void>): Promise<void> {
+async function withStore(
+  fn: (store: VolumeStore, root: string) => Promise<void>,
+): Promise<void> {
   const root = await mkdtemp(join(tmpdir(), "shadow-lint-contradiction-test-"));
   try {
-    await fn(new FileSystemVolumeStore(root));
+    await fn(new FileSystemVolumeStore(root), root);
   } finally {
     await rm(root, { recursive: true, force: true });
   }
 }
 
-async function buildFixture(store: VolumeStore): Promise<IndexDocument> {
+async function buildFixture(store: VolumeStore, root: string): Promise<IndexDocument> {
   const volume = toVolumeSlug("state-management");
   await store.createVolume({ slug: volume, title: "State management" });
 
@@ -54,15 +56,15 @@ async function buildFixture(store: VolumeStore): Promise<IndexDocument> {
     },
   });
 
-  const indexer = new StructuralIndexer();
+  const indexer = new StructuralIndexer({ rootDir: root });
   const { document } = await indexer.build(store);
   return document;
 }
 
 describe("checkContradiction", () => {
   test("overlapping when_to_use + conflicting guidance is flagged, driven by a scripted fake", async () => {
-    await withStore(async (store) => {
-      const document = await buildFixture(store);
+    await withStore(async (store, root) => {
+      const document = await buildFixture(store, root);
       const chapters = document.volumes[0]?.chapters ?? [];
       const useRedux = chapters.find((c) => c.slug === "use-redux");
       const avoidRedux = chapters.find((c) => c.slug === "avoid-redux");
@@ -89,8 +91,8 @@ describe("checkContradiction", () => {
   });
 
   test("overlapping when_to_use judged as non-conflicting is not flagged", async () => {
-    await withStore(async (store) => {
-      const document = await buildFixture(store);
+    await withStore(async (store, root) => {
+      const document = await buildFixture(store, root);
 
       const port = new FakeStructuredGenerationPort([
         { conflicting: false, reason: "both address the same situation but are complementary" },
@@ -104,8 +106,8 @@ describe("checkContradiction", () => {
   });
 
   test("a pair already reconciled via supersedes is skipped without a judge call", async () => {
-    await withStore(async (store) => {
-      const document = await buildFixture(store);
+    await withStore(async (store, root) => {
+      const document = await buildFixture(store, root);
       const useRedux = document.volumes[0]?.chapters.find((c) => c.slug === "use-redux");
       if (!useRedux) {
         throw new Error("unreachable");
@@ -124,7 +126,7 @@ describe("checkContradiction", () => {
           supersedes: [useRedux.node_id],
         },
       });
-      const indexer = new StructuralIndexer();
+      const indexer = new StructuralIndexer({ rootDir: root });
       const { document: reindexed } = await indexer.build(store);
 
       const port = new FakeStructuredGenerationPort([]);
@@ -136,8 +138,8 @@ describe("checkContradiction", () => {
   });
 
   test("overlap threshold is configurable", async () => {
-    await withStore(async (store) => {
-      const document = await buildFixture(store);
+    await withStore(async (store, root) => {
+      const document = await buildFixture(store, root);
 
       // Threshold of 1.1 is unreachable (jaccard maxes at 1) -> no pair
       // ever clears it, so no judge call happens at all.

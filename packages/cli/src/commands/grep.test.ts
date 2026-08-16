@@ -4,8 +4,8 @@ import { runGrep } from "./grep.ts";
 
 describe("runGrep", () => {
   test("ranks hits across the whole corpus by BM25, no body text in the payload", async () => {
-    await withStore(async (store) => {
-      await buildSmallFixture(store);
+    await withStore(async (store, root) => {
+      await buildSmallFixture(store, root);
       const result = await runGrep(store, "pull quote editorial");
 
       expect(result.hits.length).toBeGreaterThan(0);
@@ -18,8 +18,8 @@ describe("runGrep", () => {
   });
 
   test("hits are sorted descending by score", async () => {
-    await withStore(async (store) => {
-      await buildSmallFixture(store);
+    await withStore(async (store, root) => {
+      await buildSmallFixture(store, root);
       const result = await runGrep(store, "density row height table");
       for (let i = 1; i < result.hits.length; i += 1) {
         expect(result.hits[i - 1]?.score).toBeGreaterThanOrEqual(
@@ -30,8 +30,8 @@ describe("runGrep", () => {
   });
 
   test("an unrelated query still returns a result shape (possibly zero hits), never throws", async () => {
-    await withStore(async (store) => {
-      await buildSmallFixture(store);
+    await withStore(async (store, root) => {
+      await buildSmallFixture(store, root);
       const result = await runGrep(store, "zzqx wobblefrog blorptastic");
       expect(Array.isArray(result.hits)).toBe(true);
       expect(result.next_steps.length).toBeGreaterThan(0);
@@ -39,8 +39,8 @@ describe("runGrep", () => {
   });
 
   test("next_steps names `shadow read` on the top hit when there is one", async () => {
-    await withStore(async (store) => {
-      await buildSmallFixture(store);
+    await withStore(async (store, root) => {
+      await buildSmallFixture(store, root);
       const result = await runGrep(store, "pull quote editorial");
       const topId = result.hits[0]?.node_id;
       expect(result.next_steps.some((s) => topId && s.includes(topId))).toBe(true);

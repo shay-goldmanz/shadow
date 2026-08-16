@@ -97,7 +97,7 @@ export async function withApi<T>(fn: (harness: TestHarness) => Promise<T>): Prom
   try {
     const volumeStore = new FileSystemVolumeStore(root);
     const evidenceStore = new FileSystemEvidenceStore(volumeStore);
-    const indexer = new StructuralIndexer();
+    const indexer = new StructuralIndexer({ rootDir: root });
     const sessions = new FakeAgenticSessionPort();
 
     const shadowAgent = new ShadowAgent({
@@ -155,7 +155,7 @@ export async function withScriptedApi<T>(
   try {
     const volumeStore = new FileSystemVolumeStore(root);
     const evidenceStore = new FileSystemEvidenceStore(volumeStore);
-    const indexer = new StructuralIndexer();
+    const indexer = new StructuralIndexer({ rootDir: root });
     const sessions = new FakeAgenticSessionPort(options.respond);
 
     const checkWorthinessClassifier =

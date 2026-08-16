@@ -223,7 +223,7 @@ async function withSessionCwd<T>(fn: (sessionCwd: string) => Promise<T>): Promis
 
 describe("ShadowConversation — critical path", () => {
   test("operator states a two-topic belief -> Shadow researches, drafts two chapters, both pass audit, volume is indexed", async () => {
-    await withVolumeHarness(async ({ evidenceStore, volumeStore, volume }) => {
+    await withVolumeHarness(async ({ evidenceStore, volumeStore, volume, root }) => {
       await withSessionCwd(async (sessionCwd) => {
         const research = new FakeResearchBriefPort(evidenceStore, (brief) =>
           fakeFindingsFor(brief),
@@ -236,7 +236,7 @@ describe("ShadowConversation — critical path", () => {
           researchBriefPort: research,
           volumeStore,
           evidenceStore,
-          indexer: freshIndexer(),
+          indexer: freshIndexer(root),
           checkWorthinessClassifier: alwaysNarrativeClassifier,
           entailmentRelevanceJudge: scriptedEntailmentJudge(),
           claimRestater: scriptedClaimRestater(() => {
@@ -336,7 +336,7 @@ describe("ShadowConversation — critical path", () => {
 
 describe("ShadowConversation — a conversational reply with no directives ends the exchange", () => {
   test("no research/chapter directives -> a single turn, no auto-continuation", async () => {
-    await withVolumeHarness(async ({ evidenceStore, volumeStore, volume }) => {
+    await withVolumeHarness(async ({ evidenceStore, volumeStore, volume, root }) => {
       await withSessionCwd(async (sessionCwd) => {
         const research = new FakeResearchBriefPort(evidenceStore, () => {
           throw new Error("should not be called");
@@ -348,7 +348,7 @@ describe("ShadowConversation — a conversational reply with no directives ends 
           researchBriefPort: research,
           volumeStore,
           evidenceStore,
-          indexer: freshIndexer(),
+          indexer: freshIndexer(root),
           checkWorthinessClassifier: alwaysNarrativeClassifier,
           entailmentRelevanceJudge: scriptedEntailmentJudge(),
           claimRestater: scriptedClaimRestater(() => {
@@ -376,7 +376,7 @@ describe("ShadowConversation — a conversational reply with no directives ends 
 
 describe("ShadowConversation — a second sendMessage reuses the same session (D6)", () => {
   test("two operator turns share one AgenticSession handle", async () => {
-    await withVolumeHarness(async ({ evidenceStore, volumeStore, volume }) => {
+    await withVolumeHarness(async ({ evidenceStore, volumeStore, volume, root }) => {
       await withSessionCwd(async (sessionCwd) => {
         const research = new FakeResearchBriefPort(evidenceStore, () => []);
         const sessions = new FakeAgenticSessionPort(() => ({ text: "Got it." }));
@@ -386,7 +386,7 @@ describe("ShadowConversation — a second sendMessage reuses the same session (D
           researchBriefPort: research,
           volumeStore,
           evidenceStore,
-          indexer: freshIndexer(),
+          indexer: freshIndexer(root),
           checkWorthinessClassifier: alwaysNarrativeClassifier,
           entailmentRelevanceJudge: scriptedEntailmentJudge(),
           claimRestater: scriptedClaimRestater(() => {
