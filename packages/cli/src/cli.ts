@@ -39,7 +39,7 @@ const USAGE = {
     read: "shadow read <node_id> [--with-parents]      # body + heading path + hash",
     grep: 'shadow grep "<terms>"                        # raw BM25 escape hatch',
     index: "shadow index [--check]                       # rebuild; --check fails if stale",
-    lint: "shadow lint [--offline]                      # index self-critique (D14); --offline skips model-backed checks",
+    lint: "shadow lint [--offline] [--okf]              # index self-critique (D14); --offline skips model-backed checks, --okf adds OKF v0.2 conformance",
     misses: "shadow misses                                # the operator's authoring backlog (D14)",
     install:
       "shadow install [--target dir] [--force]     # install the shadow-find skill into a repo",
@@ -172,10 +172,17 @@ async function dispatch(argv: readonly string[], deps: RunDeps): Promise<unknown
     case "lint": {
       const { values } = parseArgs({
         args: [...rest],
-        options: { offline: { type: "boolean" }, json: { type: "boolean" } },
+        options: {
+          offline: { type: "boolean" },
+          okf: { type: "boolean" },
+          json: { type: "boolean" },
+        },
         strict: true,
       });
-      return runLintCommand(deps.store, deps.root, { offline: values.offline ?? false });
+      return runLintCommand(deps.store, deps.root, {
+        offline: values.offline ?? false,
+        okf: values.okf ?? false,
+      });
     }
 
     case "misses": {

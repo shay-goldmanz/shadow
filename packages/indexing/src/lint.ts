@@ -69,7 +69,7 @@ export interface LintOptions {
 
 export interface LintReport {
   readonly offline: boolean;
-  /** One result per check that ran — 3 entries offline, 5 online. */
+  /** One result per check that ran. */
   readonly checks: readonly LintCheckResult[];
   /** Every self-retrieval probe run this pass. Empty when `offline`. `@shadow/evaluation` (T4.1) consumes this as a metric. */
   readonly probes: readonly SelfRetrievalProbe[];

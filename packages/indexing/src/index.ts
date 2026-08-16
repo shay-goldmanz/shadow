@@ -54,6 +54,8 @@ export type {
   OkfVolumeRecord,
 } from "./lint-okf.ts";
 export { checkOkfConformance, okfConformanceCheck } from "./lint-okf.ts";
+// ---- OKF conformance input construction (the I/O side of the check) -------
+export { loadOkfBundleArtifacts, okfChapterRecordsFrom, okfVolumeRecordsFrom } from "./okf-input.ts";
 // ---- the build port -------------------------------------------------------
 export type { BuildIndexResult, Indexer, MintedId } from "./indexer.ts";
 export { StructuralIndexer } from "./indexer.ts";

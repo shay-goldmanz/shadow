@@ -1,3 +1,4 @@
+import { join } from "node:path";
 import { describe, expect, test } from "bun:test";
 import { FakeStructuredGenerationPort, type StructuredGenerationRequest } from "@shadow/model";
 import { IndexMissingError } from "../errors.ts";
@@ -11,7 +12,7 @@ describe("runLintCommand --offline", () => {
   test("runs the zero-model checks and reports next_steps, without touching the miss log", async () => {
     await withStore(async (store, root) => {
       await buildSmallFixture(store, root);
-      const result = await runLintCommand(store, root, { offline: true });
+      const result = await runLintCommand(store, root, { offline: true, okf: false });
 
       expect(result.offline).toBe(true);
       expect(result.checks.map((c) => c.checkId).toSorted()).toEqual([
@@ -26,8 +27,51 @@ describe("runLintCommand --offline", () => {
 
   test("before `shadow index` has ever run, throws IndexMissingError like every other read-side command", async () => {
     await withStore(async (store, root) => {
-      const error = await runLintCommand(store, root, { offline: true }).catch((e: unknown) => e);
+      const error = await runLintCommand(store, root, { offline: true, okf: false }).catch(
+        (e: unknown) => e,
+      );
       expect(error).toBeInstanceOf(IndexMissingError);
+    });
+  });
+});
+
+describe("runLintCommand --okf", () => {
+  test("composes with --offline: runs the offline checks plus okf-conformance, zero-LLM", async () => {
+    await withStore(async (store, root) => {
+      await buildSmallFixture(store, root);
+      const result = await runLintCommand(store, root, { offline: true, okf: true });
+
+      expect(result.offline).toBe(true);
+      expect(result.checks.map((c) => c.checkId).toSorted()).toEqual([
+        "cost-model",
+        "discriminability",
+        "okf-conformance",
+        "orphan",
+      ]);
+    });
+  });
+
+  test("a freshly reindexed fixture corpus (OKF-migrated, root index.md/log.md present) is okf-conformant", async () => {
+    await withStore(async (store, root) => {
+      await buildSmallFixture(store, root);
+      const result = await runLintCommand(store, root, { offline: true, okf: true });
+
+      const okf = result.checks.find((c) => c.checkId === "okf-conformance");
+      expect(okf).toBeDefined();
+      expect(okf!.findings).toHaveLength(0);
+    });
+  });
+
+  test("a root index.md missing okf_version is flagged as okf-missing-root-index", async () => {
+    await withStore(async (store, root) => {
+      await buildSmallFixture(store, root);
+      // Overwrite the root index.md StructuralIndexer just wrote, dropping okf_version.
+      await Bun.write(join(root, "index.md"), "# Volumes\n\nNo okf_version here.\n");
+
+      const result = await runLintCommand(store, root, { offline: true, okf: true });
+      const okf = result.checks.find((c) => c.checkId === "okf-conformance");
+
+      expect(okf?.findings.some((f) => f.code === "okf-missing-root-index")).toBe(true);
     });
   });
 });
@@ -67,7 +111,7 @@ describe("runLintCommand online — self-retrieval shares shadow find's miss log
       await buildSmallFixture(store, root);
       const port = alwaysMissPort();
 
-      const report = await runLintCommand(store, root, { offline: false }, { port });
+      const report = await runLintCommand(store, root, { offline: false, okf: false }, { port });
 
       expect(report.offline).toBe(false);
       const selfRetrieval = report.checks.find((c) => c.checkId === "self-retrieval");
@@ -92,7 +136,7 @@ describe("runLintCommand online — self-retrieval shares shadow find's miss log
 
       // Writer 2: shadow lint's self-retrieval, via the real production
       // command with a deterministic fake port.
-      await runLintCommand(store, root, { offline: false }, { port: alwaysMissPort() });
+      await runLintCommand(store, root, { offline: false, okf: false }, { port: alwaysMissPort() });
 
       // Writer 1 again — proves append-only survives a second run and
       // does not clobber what writer 2 just added.
