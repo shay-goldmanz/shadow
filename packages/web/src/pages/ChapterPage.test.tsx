@@ -173,6 +173,71 @@ describe("ChapterPage", () => {
     expect(citation.getAttribute("aria-label")).not.toContain("audit failed");
   });
 
+  test("clicking an anchored citation shows the highlighted excerpt and expand toggle", async () => {
+    const client = new FakeApiClient();
+    const { findByLabelText, findByText } = render(
+      <ChapterPage
+        client={client}
+        slug="design-inspiration"
+        chapterSlug="linear-and-notion-ui"
+        navigate={() => {}}
+      />,
+    );
+
+    fireEvent.click(await findByLabelText(/Citation lin-4px/));
+
+    // The exact quoted text appears highlighted in the excerpt.
+    expect(await findByText(/We use a 4px spacing scale throughout/)).toBeTruthy();
+    // The expand toggle is present, collapsed by default.
+    expect(await findByText("▾ Show full source")).toBeTruthy();
+  });
+
+  test("an anchored-fuzzy citation shows the approximate badge and excerpt", async () => {
+    const client = new FakeApiClient();
+    const { findByLabelText, findByText } = render(
+      <ChapterPage
+        client={client}
+        slug="design-inspiration"
+        chapterSlug="epoch-one-pagers"
+        navigate={() => {}}
+      />,
+    );
+
+    fireEvent.click(await findByLabelText(/Citation epoch-fuzzy/));
+
+    // The excerpt uses refinedBy offsets — the exact text at start=0..end=42.
+    expect(await findByText(/The editorial tone is measured/)).toBeTruthy();
+    // Fuzzy badge appears next to the source meta line.
+    expect(await findByText("≈ approximate")).toBeTruthy();
+    // Expand toggle is present.
+    expect(await findByText("▾ Show full source")).toBeTruthy();
+  });
+
+  test("an orphaned citation shows the not-found badge, plain selector text, and a fallback toggle", async () => {
+    const client = new FakeApiClient();
+    const { findByLabelText, findByText } = render(
+      <ChapterPage
+        client={client}
+        slug="design-inspiration"
+        chapterSlug="epoch-one-pagers"
+        navigate={() => {}}
+      />,
+    );
+
+    fireEvent.click(await findByLabelText(/Citation epoch-grid/));
+
+    // Selector exact rendered as plain text (not highlighted).
+    expect(
+      await findByText(
+        "The grid nods to classical print proportions without copying them outright.",
+      ),
+    ).toBeTruthy();
+    // Danger badge.
+    expect(await findByText("⚠ not found")).toBeTruthy();
+    // Toggle frames it as a fallback, not a confirmation.
+    expect(await findByText("View full source anyway")).toBeTruthy();
+  });
+
   test("surfaces what Shadow softened via the ledger, not swallowed", async () => {
     const client = new FakeApiClient();
     const { findByText } = render(

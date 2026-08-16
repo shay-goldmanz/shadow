@@ -231,6 +231,7 @@ const linearAudit: AuditRecord = {
 const epochChapterBody = `Epoch's one-pagers use a single dominant image and one clear point of entry for the eye.[^epoch-entry]
 Every one-pager Epoch has ever published uses exactly three colours.[^epoch-three-colours]
 The layout grid is derived from classical print proportions.[^epoch-grid]
+The editorial voice is measured and deliberate.[^epoch-fuzzy]
 `;
 
 const epochClaims: Claim[] = [
@@ -269,6 +270,31 @@ const epochClaims: Claim[] = [
     exact: "The grid nods to classical print proportions without copying them outright.",
     anchorStatus: "orphaned",
   }),
+  // anchored-fuzzy: the selector matched approximately (fuzzy), with refinedBy
+  // offsets pointing into the snapshot text at the best-match position.
+  {
+    id: "clm_epoch_fuzzy",
+    label: "epoch-fuzzy",
+    kind: "sourced" as const,
+    text: "The editorial voice is measured and deliberate.",
+    decontextualized: "The editorial voice is measured and deliberate.",
+    checkRequired: true,
+    evidence: [
+      {
+        sourceId: epochSource.id,
+        snapshotHash: "snap_epoch_fuzzy",
+        selector: {
+          type: "TextQuoteSelector" as const,
+          exact: "The editorial tone is measured, deliberate.",
+          refinedBy: { type: "TextPositionSelector" as const, start: 0, end: 42 },
+        },
+        relation: "supports" as const,
+        anchorStatus: "anchored-fuzzy" as const,
+      },
+    ],
+    supports: [],
+    verification: { status: "supported" as const, inputHash: "sha256:clm_epoch_fuzzy-input" },
+  },
 ];
 
 const epochAudit: AuditRecord = {
@@ -406,6 +432,8 @@ export function seedVolume(): SeedVolume {
         "This issue restrains itself to three colours: ink, paper, and a single accent. Restraint is the house style.",
       snap_epoch_grid_stale:
         "The grid nods to classical print proportions without copying them outright.",
+      snap_epoch_fuzzy:
+        "The editorial tone is measured, deliberate. Epoch favours restraint over ornamentation.",
     },
     ledger: [
       {
