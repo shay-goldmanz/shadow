@@ -5,6 +5,7 @@
  * package.
  */
 
+import type { OkfActor, OkfStatus } from "./types.ts";
 import { ReservedFrontmatterKeyError } from "./errors.ts";
 
 // Matches a leading `---\n...\n---` block; the rest of the file is the body.
@@ -19,19 +20,36 @@ import { ReservedFrontmatterKeyError } from "./errors.ts";
 export const FRONTMATTER_PATTERN = /^---\r?\n((?:[\s\S]*?\r?\n)?)---\r?\n?([\s\S]*)$/;
 
 /** Frontmatter keys both document kinds reserve as typed fields; everything else is an open record. */
-export const RESERVED_DOCUMENT_KEYS = ["title", "createdAt", "updatedAt"] as const;
+export const RESERVED_DOCUMENT_KEYS = [
+  "title",
+  "createdAt",
+  "updatedAt",
+  "type",
+  "status",
+  "stale_after",
+  "generated",
+  "verified",
+] as const;
 
 export function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
-export function hasReservedStringFields(
+/** Check that the required typed string fields in a parsed YAML frontmatter mapping are present and well-typed. */
+export function hasRequiredTypedFields(
   value: Record<string, unknown>,
-): value is Record<string, unknown> & { title: string; createdAt: string; updatedAt: string } {
+): value is Record<string, unknown> & {
+  title: string;
+  createdAt: string;
+  updatedAt: string;
+  type: string;
+} {
   return (
     typeof value.title === "string" &&
     typeof value.createdAt === "string" &&
-    typeof value.updatedAt === "string"
+    typeof value.updatedAt === "string" &&
+    typeof value.type === "string" &&
+    value.type.length > 0
   );
 }
 
@@ -50,6 +68,63 @@ export function hasReservedStringFields(
  * @throws {ReservedFrontmatterKeyError} if `frontmatter` sets any of
  *   `RESERVED_DOCUMENT_KEYS`.
  */
+/** Convenience: check reserved string fields without `type` — used when `type` is tolerated as absent with a default. */
+export function hasReservedStringFields(
+  value: Record<string, unknown>,
+): value is Record<string, unknown> & { title: string; createdAt: string; updatedAt: string } {
+  return (
+    typeof value.title === "string" &&
+    typeof value.createdAt === "string" &&
+    typeof value.updatedAt === "string"
+  );
+}
+
+// ---- OKF v0.2 field parsers (shared between chapter and volume documents) -------
+
+/** Format a Date as YYYY-MM-DD for the `stale_after` field. */
+export function toDateString(d: Date): string {
+  return d.toISOString().slice(0, 10);
+}
+
+/** Parse a `stale_after` YYYY-MM-DD value into a Date, or return null. */
+export function parseStaleAfter(raw: unknown): Date | null {
+  if (typeof raw !== "string") return null;
+  const d = new Date(raw);
+  return isNaN(d.getTime()) ? null : d;
+}
+
+/** Parse an OKF `status` value, defaulting to "draft". */
+export function parseOkfStatus(raw: unknown): OkfStatus {
+  if (raw === "stable" || raw === "deprecated") return raw;
+  return "draft";
+}
+
+/** Parse a parsed-YAML `generated` field into an OkfActor, or return null. */
+export function parseOkfActor(raw: unknown): OkfActor | null {
+  if (!isRecord(raw)) return null;
+  if (typeof raw.by !== "string" || typeof raw.at !== "string") return null;
+  const at = new Date(raw.at);
+  if (isNaN(at.getTime())) return null;
+  return { by: raw.by, at };
+}
+
+/** Parse a parsed-YAML `verified` field. Accepts a single mapping or an array (OKF §5.2). */
+export function parseVerified(raw: unknown): OkfActor[] {
+  if (isRecord(raw) && typeof raw.by === "string" && typeof raw.at === "string") {
+    const at = new Date(raw.at);
+    if (!isNaN(at.getTime())) return [{ by: raw.by, at }];
+  }
+  if (Array.isArray(raw)) {
+    const out: OkfActor[] = [];
+    for (const item of raw) {
+      const actor = parseOkfActor(item);
+      if (actor) out.push(actor);
+    }
+    return out;
+  }
+  return [];
+}
+
 export function assertNoReservedFrontmatterKeys(
   frontmatter: Readonly<Record<string, unknown>>,
   kind: "chapter" | "volume",

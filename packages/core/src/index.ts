@@ -27,5 +27,13 @@ export {
   toChapterSlug,
   toVolumeSlug,
 } from "./slug.ts";
-export type { Chapter, ChapterInput, Volume, VolumeInput, VolumeUpdate } from "./types.ts";
+export type {
+  Chapter,
+  ChapterInput,
+  OkfActor,
+  OkfStatus,
+  Volume,
+  VolumeInput,
+  VolumeUpdate,
+} from "./types.ts";
 export type { VolumePathResolver, VolumeStore } from "./volume-store.ts";

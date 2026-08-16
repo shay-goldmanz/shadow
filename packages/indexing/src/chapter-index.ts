@@ -27,6 +27,10 @@ export interface BuildChapterIndexNodeInput {
   readonly chapterTitle: string;
   readonly body: string;
   readonly frontmatter: Readonly<Record<string, unknown>>;
+  /** OKF v0.2 concept type from the chapter's typed fields (OKF §4.1). */
+  readonly type?: string;
+  /** OKF v0.2 lifecycle status from the chapter's typed fields (OKF §5.4). */
+  readonly status?: string;
   /** Volume-relative location, e.g. `volumes/<slug>/chapters/<slug>.md`. */
   readonly file: string;
 }
@@ -102,6 +106,40 @@ export function buildChapterIndexNode(input: BuildChapterIndexNodeInput): Chapte
     sections ? sections.map((section) => section.subtree_hash) : [],
   );
 
+  // Extract Attested Computation fields from frontmatter (OKF §10.2)
+  let attestedComputation: ChapterIndexNode["attestedComputation"];
+  if (input.type === "Attested Computation" && input.frontmatter.runtime) {
+    const fm = input.frontmatter;
+    const parameters = Array.isArray(fm.parameters)
+      ? (fm.parameters as Array<Record<string, unknown>>).filter(
+          (p): p is { name: string; type: string; required: boolean } =>
+            typeof p?.name === "string" &&
+            typeof p?.type === "string" &&
+            typeof p?.required === "boolean",
+        )
+      : [];
+    attestedComputation = {
+      runtime: String(fm.runtime),
+      parameters,
+      computation: typeof fm.computation === "string" ? fm.computation : undefined,
+      executor: {
+        resource:
+          typeof (fm.executor as Record<string, unknown> | null)?.resource === "string"
+            ? String((fm.executor as Record<string, unknown>).resource)
+            : "",
+        receipt: Array.isArray((fm.executor as Record<string, unknown> | null)?.receipt)
+          ? ((fm.executor as Record<string, unknown>).receipt as string[])
+          : [],
+      },
+      attester: {
+        resource:
+          typeof (fm.attester as Record<string, unknown> | null)?.resource === "string"
+            ? String((fm.attester as Record<string, unknown>).resource)
+            : "",
+      },
+    };
+  }
+
   return {
     node_id: input.ulid,
     kind: "chapter",
@@ -115,6 +153,9 @@ export function buildChapterIndexNode(input: BuildChapterIndexNodeInput): Chapte
     confidence: coerceConfidence(input.frontmatter.confidence),
     supersedes: coerceStringArray(input.frontmatter.supersedes),
     aliases: coerceStringArray(input.frontmatter.aliases),
+    type: input.type,
+    status: input.status,
+    attestedComputation,
     updated: coerceDateLike(input.frontmatter.updated),
     tokens,
     span,

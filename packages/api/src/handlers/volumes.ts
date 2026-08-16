@@ -19,6 +19,11 @@ function toChapterSummary(chapter: Chapter) {
   return {
     slug: chapter.slug,
     title: chapter.title,
+    type: chapter.type,
+    status: chapter.status,
+    staleAfter: chapter.staleAfter?.toISOString() ?? null,
+    generated: { by: chapter.generated.by, at: chapter.generated.at.toISOString() },
+    verified: chapter.verified.map((v) => ({ by: v.by, at: v.at.toISOString() })),
     frontmatter: chapter.frontmatter,
     createdAt: chapter.createdAt,
     updatedAt: chapter.updatedAt,
