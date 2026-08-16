@@ -9,7 +9,7 @@
 
 // ---- public seam -------------------------------------------------------------
 
-export type { RulebookBrief, RulebookEvent, RulebookResult, RuleBookPort } from "./port.ts";
+export type { RuleBookPort, RulebookBrief, RulebookEvent, RulebookResult } from "./port.ts";
 
 // ---- chunking (raw text — see chunker.ts's module doc for why) ---------------
 

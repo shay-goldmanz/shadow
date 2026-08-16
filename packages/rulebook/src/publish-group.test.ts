@@ -173,7 +173,11 @@ describe("publishGroup — conservative restatement (D9/D21)", () => {
       const ledger = await evidenceStore.readLedger(rulebookSlug);
       const restatedEvents = ledger.filter((e) => e.event === "claim.restated");
       expect(restatedEvents).toHaveLength(1);
-      expect(restatedEvents[0]).toMatchObject({ outcome: "applied", to: restated, chapter: "layout" });
+      expect(restatedEvents[0]).toMatchObject({
+        outcome: "applied",
+        to: restated,
+        chapter: "layout",
+      });
     });
   });
 });

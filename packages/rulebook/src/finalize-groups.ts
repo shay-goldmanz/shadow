@@ -47,11 +47,16 @@
  */
 
 import type { RulebookStore, VolumeSlug } from "@shadow/core";
-import { addUsage, type StructuredGenerationPort, type TokenUsage, ZERO_USAGE } from "@shadow/model";
-import { GENERAL_GROUP_SLUG } from "./taxonomy.ts";
+import {
+  addUsage,
+  type StructuredGenerationPort,
+  type TokenUsage,
+  ZERO_USAGE,
+} from "@shadow/model";
 import type { ConsolidatedRule } from "./merge.ts";
 import { type GroupAssignment, groupFinalizationSchema, type TaxonomyGroup } from "./schemas.ts";
 import { streamWithConcurrency } from "./stream-concurrency.ts";
+import { GENERAL_GROUP_SLUG } from "./taxonomy.ts";
 
 /** Bump on a meaningful prompt/instruction change — invalidates every cached batch's assignments. */
 export const FINALIZE_PROMPT_VERSION = "v1";
@@ -199,7 +204,13 @@ export async function finalizeGroups(
   args: FinalizeGroupsArgs,
 ): Promise<FinalizeGroupsResult> {
   if (args.rules.length === 0) {
-    return { assignments: new Map(), groups: [], usage: ZERO_USAGE, cachedBatches: 0, totalBatches: 0 };
+    return {
+      assignments: new Map(),
+      groups: [],
+      usage: ZERO_USAGE,
+      cachedBatches: 0,
+      totalBatches: 0,
+    };
   }
 
   // Sort by label before batching. `args.rules`' incoming order follows
@@ -229,7 +240,13 @@ export async function finalizeGroups(
   const responseByLabel = new Map<string, string>();
 
   for await (const outcome of streamWithConcurrency(batches, concurrency, (batch) =>
-    finalizeBatch(deps, { rulebookSlug: args.rulebookSlug, batch, menuText, menuHash, model: args.model }),
+    finalizeBatch(deps, {
+      rulebookSlug: args.rulebookSlug,
+      batch,
+      menuText,
+      menuHash,
+      model: args.model,
+    }),
   )) {
     usage = addUsage(usage, outcome.usage);
     if (outcome.cached) cachedBatches += 1;

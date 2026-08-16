@@ -2,7 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { FileSystemRulebookStore, type VolumeSlug, toVolumeSlug } from "@shadow/core";
+import { FileSystemRulebookStore, toVolumeSlug, type VolumeSlug } from "@shadow/core";
 import {
   addUsage,
   FakeStructuredGenerationPort,
@@ -73,7 +73,9 @@ class UsageReportingPort implements StructuredGenerationPort {
 class AlwaysFailsPort implements StructuredGenerationPort {
   calls = 0;
 
-  async generate<Output>(_request: StructuredGenerationRequest<Output>): Promise<StructuredGenerationResult<Output>> {
+  async generate<Output>(
+    _request: StructuredGenerationRequest<Output>,
+  ): Promise<StructuredGenerationResult<Output>> {
     this.calls += 1;
     throw new Error("simulated generation failure");
   }
@@ -187,11 +189,19 @@ describe("extractChunk", () => {
 
       const first = await extractChunk(
         { structuredGeneration: new UsageReportingPort(FIXTURE_EXTRACTION, usageA), rulebookStore },
-        { rulebookSlug: slug, chunk: makeChunk({ index: 0, contentHash: "1".repeat(64) }), groups: GROUPS },
+        {
+          rulebookSlug: slug,
+          chunk: makeChunk({ index: 0, contentHash: "1".repeat(64) }),
+          groups: GROUPS,
+        },
       );
       const second = await extractChunk(
         { structuredGeneration: new UsageReportingPort(FIXTURE_EXTRACTION, usageB), rulebookStore },
-        { rulebookSlug: slug, chunk: makeChunk({ index: 1, contentHash: "2".repeat(64) }), groups: GROUPS },
+        {
+          rulebookSlug: slug,
+          chunk: makeChunk({ index: 1, contentHash: "2".repeat(64) }),
+          groups: GROUPS,
+        },
       );
 
       expect(first.usage).toEqual(usageA);
@@ -206,7 +216,11 @@ describe("extractChunk", () => {
       // Re-running the first chunk now hits the cache: zero usage, no new call.
       const cachedAgain = await extractChunk(
         { structuredGeneration: new UsageReportingPort(FIXTURE_EXTRACTION, usageA), rulebookStore },
-        { rulebookSlug: slug, chunk: makeChunk({ index: 0, contentHash: "1".repeat(64) }), groups: GROUPS },
+        {
+          rulebookSlug: slug,
+          chunk: makeChunk({ index: 0, contentHash: "1".repeat(64) }),
+          groups: GROUPS,
+        },
       );
       expect(cachedAgain.cached).toBe(true);
       expect(cachedAgain.usage).toEqual(ZERO_USAGE);
@@ -221,7 +235,12 @@ describe("extractChunk", () => {
       const withModel = new FakeStructuredGenerationPort([FIXTURE_EXTRACTION]);
       await extractChunk(
         { structuredGeneration: withModel, rulebookStore },
-        { rulebookSlug: slug, chunk: makeChunk({ contentHash: "3".repeat(64) }), groups: GROUPS, model: "opus" },
+        {
+          rulebookSlug: slug,
+          chunk: makeChunk({ contentHash: "3".repeat(64) }),
+          groups: GROUPS,
+          model: "opus",
+        },
       );
       expect(withModel.calls[0]?.model).toBe("opus");
 
@@ -239,7 +258,10 @@ describe("extractChunk", () => {
   test("a changed model invalidates the cache even for the same chunk and menu", async () => {
     const { root, rulebookStore, slug } = await makeRulebookStore("extraction-model-change");
     try {
-      const structuredGeneration = new FakeStructuredGenerationPort([FIXTURE_EXTRACTION, FIXTURE_EXTRACTION]);
+      const structuredGeneration = new FakeStructuredGenerationPort([
+        FIXTURE_EXTRACTION,
+        FIXTURE_EXTRACTION,
+      ]);
       const chunk = makeChunk({ contentHash: "5".repeat(64) });
 
       const first = await extractChunk(

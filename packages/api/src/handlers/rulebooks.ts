@@ -16,8 +16,8 @@
  * components rather than building a parallel set for rule books.
  */
 
-import { toChapterSlug, toVolumeSlug } from "@shadow/core";
 import type { Chapter, Rulebook } from "@shadow/core";
+import { toChapterSlug, toVolumeSlug } from "@shadow/core";
 import type { BunRequest } from "bun";
 import type { ApiDeps } from "../deps.ts";
 import { jsonResponse } from "../http.ts";

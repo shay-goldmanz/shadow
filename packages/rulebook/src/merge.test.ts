@@ -23,7 +23,10 @@ describe("consolidateRules", () => {
   });
 
   test("merges on identical normalized quote sets even when statements differ", () => {
-    const a = rule({ statement: "Borrowers must repay monthly.", normalizedQuotes: ["shared quote"] });
+    const a = rule({
+      statement: "Borrowers must repay monthly.",
+      normalizedQuotes: ["shared quote"],
+    });
     const b = rule({
       statement: "A different phrasing of the same rule.",
       normalizedQuotes: ["shared quote"],

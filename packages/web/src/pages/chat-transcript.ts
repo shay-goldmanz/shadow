@@ -90,7 +90,12 @@ export type TranscriptItem =
       readonly message: string;
       readonly code: string;
     }
-  | { readonly id: string; readonly type: "rulebook.started"; readonly slug: string; readonly docPath: string }
+  | {
+      readonly id: string;
+      readonly type: "rulebook.started";
+      readonly slug: string;
+      readonly docPath: string;
+    }
   | {
       readonly id: string;
       readonly type: "rulebook.planned";
@@ -278,10 +283,7 @@ export function applyStreamEvent(state: ChatState, event: ChatStreamEvent): Chat
           failedCount: event.data.failed ? 1 : 0,
         });
       }
-      const existing = state.items[index] as Extract<
-        TranscriptItem,
-        { type: "rulebook.progress" }
-      >;
+      const existing = state.items[index] as Extract<TranscriptItem, { type: "rulebook.progress" }>;
       const updated: TranscriptItem = {
         ...existing,
         completed: event.data.completed,

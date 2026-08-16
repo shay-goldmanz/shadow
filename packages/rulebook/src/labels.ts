@@ -25,9 +25,7 @@ export function ruleLabel(statement: string): string {
  * case), a collision after consolidation gets a `-2`, `-3`, ... suffix in
  * first-seen order. The first occurrence of a label is left untouched.
  */
-export function disambiguateLabels<T extends { readonly label: string }>(
-  rules: readonly T[],
-): T[] {
+export function disambiguateLabels<T extends { readonly label: string }>(rules: readonly T[]): T[] {
   const seenCount = new Map<string, number>();
   return rules.map((rule) => {
     const count = seenCount.get(rule.label) ?? 0;

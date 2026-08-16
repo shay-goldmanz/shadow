@@ -2,7 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { FileSystemRulebookStore, type VolumeSlug, toVolumeSlug } from "@shadow/core";
+import { FileSystemRulebookStore, toVolumeSlug, type VolumeSlug } from "@shadow/core";
 import { FakeStructuredGenerationPort } from "@shadow/model";
 import type { DocumentChunk } from "./chunker.ts";
 import { GENERAL_GROUP_SLUG, planTaxonomy } from "./taxonomy.ts";
@@ -11,7 +11,9 @@ async function makeTempRoot(): Promise<string> {
   return mkdtemp(join(tmpdir(), "shadow-rulebook-taxonomy-test-"));
 }
 
-async function makeRulebookStore(slugName: string): Promise<{ root: string; rulebookStore: FileSystemRulebookStore; slug: VolumeSlug }> {
+async function makeRulebookStore(
+  slugName: string,
+): Promise<{ root: string; rulebookStore: FileSystemRulebookStore; slug: VolumeSlug }> {
   const root = await makeTempRoot();
   const rulebookStore = new FileSystemRulebookStore(root);
   const slug = toVolumeSlug(slugName);
@@ -111,7 +113,10 @@ describe("planTaxonomy", () => {
   test("a different scope for the same snapshot hash is a cache miss, not a stale hit", async () => {
     const { root, rulebookStore, slug } = await makeRulebookStore("taxonomy-scope-miss");
     try {
-      const structuredGeneration = new FakeStructuredGenerationPort([FIXTURE_TAXONOMY, FIXTURE_TAXONOMY]);
+      const structuredGeneration = new FakeStructuredGenerationPort([
+        FIXTURE_TAXONOMY,
+        FIXTURE_TAXONOMY,
+      ]);
       const snapshotSha256 = "f".repeat(64);
 
       const first = await planTaxonomy(
@@ -134,7 +139,10 @@ describe("planTaxonomy", () => {
   test("a different maxGroups for the same snapshot hash is a cache miss, not a stale hit", async () => {
     const { root, rulebookStore, slug } = await makeRulebookStore("taxonomy-maxgroups-miss");
     try {
-      const structuredGeneration = new FakeStructuredGenerationPort([FIXTURE_TAXONOMY, FIXTURE_TAXONOMY]);
+      const structuredGeneration = new FakeStructuredGenerationPort([
+        FIXTURE_TAXONOMY,
+        FIXTURE_TAXONOMY,
+      ]);
       const snapshotSha256 = "1".repeat(64);
 
       const first = await planTaxonomy(

@@ -45,7 +45,8 @@ export function consolidateRules(rules: readonly ValidatedRule[]): ConsolidatedR
     const statementKey = foldStatement(rule.statement);
     const quoteKey = quoteSetKey(rule.normalizedQuotes);
     const existing = buckets.find(
-      (bucket) => foldStatement(bucket.statement) === statementKey || quoteSetKey(bucket.quotes) === quoteKey,
+      (bucket) =>
+        foldStatement(bucket.statement) === statementKey || quoteSetKey(bucket.quotes) === quoteKey,
     );
     if (existing) {
       for (const quote of rule.normalizedQuotes) {

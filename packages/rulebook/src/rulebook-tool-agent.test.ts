@@ -2,7 +2,12 @@ import { describe, expect, test } from "bun:test";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { FileSystemRulebookStore, toChapterSlug, toVolumeSlug, type VolumeSlug } from "@shadow/core";
+import {
+  FileSystemRulebookStore,
+  toChapterSlug,
+  toVolumeSlug,
+  type VolumeSlug,
+} from "@shadow/core";
 import {
   type EntailmentRelevanceInput,
   FileSystemEvidenceStore,
@@ -312,11 +317,16 @@ describe("RulebookToolAgent", () => {
       expect(result.status).toBe("draft");
 
       const groupAuditedEvents = events.filter((e) => e.type === "group-audited");
-      const collateralEvent = groupAuditedEvents.find((e) => e.type === "group-audited" && e.group === "collateral");
+      const collateralEvent = groupAuditedEvents.find(
+        (e) => e.type === "group-audited" && e.group === "collateral",
+      );
       expect(collateralEvent?.type === "group-audited" && collateralEvent.passed).toBe(false);
 
       const rulebookSlug = toVolumeSlug("loan-rules");
-      const collateralGroup = await rulebookStore.getGroup(rulebookSlug, toChapterSlug("collateral"));
+      const collateralGroup = await rulebookStore.getGroup(
+        rulebookSlug,
+        toChapterSlug("collateral"),
+      );
       expect(collateralGroup.status).toBe("draft");
       const paymentsGroup = await rulebookStore.getGroup(rulebookSlug, toChapterSlug("payments"));
       expect(paymentsGroup.status).toBe("stable");
@@ -643,9 +653,7 @@ describe("RulebookToolAgent", () => {
       const groupAuditedEvents = events.filter((e) => e.type === "group-audited");
       expect(groupAuditedEvents).toHaveLength(4);
       expect(
-        groupAuditedEvents
-          .map((e) => (e.type === "group-audited" ? e.group : ""))
-          .sort(),
+        groupAuditedEvents.map((e) => (e.type === "group-audited" ? e.group : "")).sort(),
       ).toEqual([...FOUR_GROUP_SLUGS]);
       expect(groupAuditedEvents.every((e) => e.type === "group-audited" && e.passed)).toBe(true);
 
@@ -656,9 +664,9 @@ describe("RulebookToolAgent", () => {
       const ledger = await evidenceStore.readLedger(rulebookSlug);
       const auditCompletedEvents = ledger.filter((e) => e.event === "audit.completed");
       expect(auditCompletedEvents).toHaveLength(4);
-      expect(auditCompletedEvents.every((e) => e.event === "audit.completed" && e.result === "pass")).toBe(
-        true,
-      );
+      expect(
+        auditCompletedEvents.every((e) => e.event === "audit.completed" && e.result === "pass"),
+      ).toBe(true);
       expect(ledger.filter((e) => e.event === "claim.restated")).toEqual([]);
 
       // Result counts match what's actually on disk.
@@ -741,9 +749,7 @@ describe("RulebookToolAgent", () => {
       const groupAuditedEvents = events.filter((e) => e.type === "group-audited");
       expect(groupAuditedEvents).toHaveLength(3);
       expect(
-        groupAuditedEvents
-          .map((e) => (e.type === "group-audited" ? e.group : ""))
-          .sort(),
+        groupAuditedEvents.map((e) => (e.type === "group-audited" ? e.group : "")).sort(),
       ).toEqual(["collateral", "insurance", "payments"]);
 
       const rulebookSlug = toVolumeSlug("loan-rules");

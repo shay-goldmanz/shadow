@@ -51,9 +51,10 @@
  * fixable from this module.
  */
 
+import { resolve } from "node:path";
 import {
-  type RulebookStore,
   RulebookNotFoundError,
+  type RulebookStore,
   toChapterSlug,
   toVolumeSlug,
 } from "@shadow/core";
@@ -65,20 +66,24 @@ import type {
   EvidenceStore,
   LedgerEvent,
 } from "@shadow/evidence";
-import { addUsage, type StructuredGenerationPort, type TokenUsage, ZERO_USAGE } from "@shadow/model";
-import { resolve } from "node:path";
+import {
+  addUsage,
+  type StructuredGenerationPort,
+  type TokenUsage,
+  ZERO_USAGE,
+} from "@shadow/model";
 import { assembleGroup } from "./assembly.ts";
 import { chunkDocument, type DocumentChunk } from "./chunker.ts";
 import { extractChunk } from "./extraction.ts";
 import { finalizeGroups } from "./finalize-groups.ts";
 import { ingestDocument } from "./ingest.ts";
 import { consolidateRules } from "./merge.ts";
-import type { RulebookBrief, RulebookEvent, RulebookResult, RuleBookPort } from "./port.ts";
+import type { RuleBookPort, RulebookBrief, RulebookEvent, RulebookResult } from "./port.ts";
 import { publishGroup } from "./publish-group.ts";
 import type { TaxonomyGroup } from "./schemas.ts";
 import { streamWithConcurrency } from "./stream-concurrency.ts";
 import { planTaxonomy } from "./taxonomy.ts";
-import { validateChunkRules, type ValidatedRule } from "./validate.ts";
+import { type ValidatedRule, validateChunkRules } from "./validate.ts";
 
 const DEFAULT_CONCURRENCY = 8;
 const DEFAULT_AUDIT_CONCURRENCY = 4;
@@ -198,7 +203,12 @@ export class RulebookToolAgent implements RuleBookPort {
 
     let ingested: Awaited<ReturnType<typeof ingestDocument>>;
     try {
-      ingested = await ingestDocument(this.deps.evidenceStore, rulebookSlug, brief.docPath, brief.title);
+      ingested = await ingestDocument(
+        this.deps.evidenceStore,
+        rulebookSlug,
+        brief.docPath,
+        brief.title,
+      );
     } catch (error) {
       yield { type: "failed", error: errorMessage(error) };
       return;
@@ -209,7 +219,10 @@ export class RulebookToolAgent implements RuleBookPort {
     const chunks = chunkDocument(ingested.rawText);
 
     const taxonomy = await planTaxonomy(
-      { structuredGeneration: this.deps.structuredGeneration, rulebookStore: this.deps.rulebookStore },
+      {
+        structuredGeneration: this.deps.structuredGeneration,
+        rulebookStore: this.deps.rulebookStore,
+      },
       {
         rulebookSlug,
         chunks,
@@ -227,7 +240,10 @@ export class RulebookToolAgent implements RuleBookPort {
       groups: taxonomy.groups.map((group) => group.slug),
     };
 
-    const menu = taxonomy.groups.map((group) => ({ slug: group.slug, when_to_use: group.when_to_use }));
+    const menu = taxonomy.groups.map((group) => ({
+      slug: group.slug,
+      when_to_use: group.when_to_use,
+    }));
 
     // Brief-level override wins; falls back to the process-wide option set
     // at construction time (see `RulebookToolAgentOptions`'s doc). Both
@@ -242,7 +258,10 @@ export class RulebookToolAgent implements RuleBookPort {
 
     const extractOneChunk = async (chunk: DocumentChunk): Promise<ChunkOutcome> => {
       const extraction = await extractChunk(
-        { structuredGeneration: this.deps.structuredGeneration, rulebookStore: this.deps.rulebookStore },
+        {
+          structuredGeneration: this.deps.structuredGeneration,
+          rulebookStore: this.deps.rulebookStore,
+        },
         { rulebookSlug, chunk, groups: menu, model: extractionModel },
       );
       if (extraction.failed) {
@@ -250,7 +269,12 @@ export class RulebookToolAgent implements RuleBookPort {
       }
       const validation = validateChunkRules(extraction.rules, ingested.normalizedText);
       droppedQuotesFromValidation += validation.droppedQuotes;
-      return { rules: validation.kept, cached: extraction.cached, failed: false, usage: extraction.usage };
+      return {
+        rules: validation.kept,
+        cached: extraction.cached,
+        failed: false,
+        usage: extraction.usage,
+      };
     };
 
     for await (const outcome of streamWithConcurrency(
@@ -275,7 +299,10 @@ export class RulebookToolAgent implements RuleBookPort {
     const consolidated = consolidateRules(validatedRules);
 
     const finalized = await finalizeGroups(
-      { structuredGeneration: this.deps.structuredGeneration, rulebookStore: this.deps.rulebookStore },
+      {
+        structuredGeneration: this.deps.structuredGeneration,
+        rulebookStore: this.deps.rulebookStore,
+      },
       {
         rulebookSlug,
         rules: consolidated,
@@ -300,10 +327,14 @@ export class RulebookToolAgent implements RuleBookPort {
 
     // One whole-ledger read for the entire run (see module doc) instead of
     // one per group inside `publishGroup`.
-    const retiredByChapter = retiredLabelsByChapter(await this.deps.evidenceStore.readLedger(rulebookSlug));
+    const retiredByChapter = retiredLabelsByChapter(
+      await this.deps.evidenceStore.readLedger(rulebookSlug),
+    );
 
     const auditOneGroup = async (group: TaxonomyGroup): Promise<GroupOutcome> => {
-      const rulesForGroup = consolidated.filter((rule) => finalized.assignments.get(rule.label) === group.slug);
+      const rulesForGroup = consolidated.filter(
+        (rule) => finalized.assignments.get(rule.label) === group.slug,
+      );
       const groupSlug = toChapterSlug(group.slug);
 
       const assembled = await assembleGroup(
@@ -364,7 +395,8 @@ export class RulebookToolAgent implements RuleBookPort {
     // chunks — a book with silently-missing rules (a chunk whose extraction
     // never even ran) must not read as fully verified just because every
     // group that *did* get assembled happened to pass.
-    const isStable = finalized.groups.length > 0 && rejectedGroups.length === 0 && failedChunks === 0;
+    const isStable =
+      finalized.groups.length > 0 && rejectedGroups.length === 0 && failedChunks === 0;
 
     await this.deps.rulebookStore.updateRulebook({
       slug: rulebookSlug,

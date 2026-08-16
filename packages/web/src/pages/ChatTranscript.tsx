@@ -243,8 +243,8 @@ function TranscriptItemView({ item }: { readonly item: TranscriptItem }) {
         <div className="research-event">
           <Badge tone="clay">Planned</Badge>{" "}
           <span>
-            {item.chunkCount} section{item.chunkCount === 1 ? "" : "s"} across{" "}
-            {item.groups.length} group{item.groups.length === 1 ? "" : "s"}
+            {item.chunkCount} section{item.chunkCount === 1 ? "" : "s"} across {item.groups.length}{" "}
+            group{item.groups.length === 1 ? "" : "s"}
             {item.groups.length > 0 && <>: {item.groups.join(", ")}</>}
           </span>
         </div>

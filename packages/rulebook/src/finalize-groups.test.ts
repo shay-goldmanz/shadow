@@ -2,7 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { FileSystemRulebookStore, type VolumeSlug, toVolumeSlug } from "@shadow/core";
+import { FileSystemRulebookStore, toVolumeSlug, type VolumeSlug } from "@shadow/core";
 import {
   FakeStructuredGenerationPort,
   type FakeStructuredGenerationResponder,
@@ -12,7 +12,7 @@ import {
   type TokenUsage,
   ZERO_USAGE,
 } from "@shadow/model";
-import { finalizeGroups, FINALIZE_BATCH_SIZE } from "./finalize-groups.ts";
+import { FINALIZE_BATCH_SIZE, finalizeGroups } from "./finalize-groups.ts";
 import type { ConsolidatedRule } from "./merge.ts";
 import type { TaxonomyGroup } from "./schemas.ts";
 
@@ -130,10 +130,19 @@ describe("finalizeGroups", () => {
     const { root, rulebookStore, slug } = await makeRulebookStore("basic-assign");
     try {
       const rules = [rule({ label: "r-a" }), rule({ label: "r-b", proposedGroup: "collateral" })];
-      const groups = [group({ slug: "payments" }), group({ slug: "collateral" }), group({ slug: "general" })];
+      const groups = [
+        group({ slug: "payments" }),
+        group({ slug: "collateral" }),
+        group({ slug: "general" }),
+      ];
 
       const structuredGeneration = new FakeStructuredGenerationPort([
-        { assignments: [{ label: "r-a", group: "payments" }, { label: "r-b", group: "payments" }] },
+        {
+          assignments: [
+            { label: "r-a", group: "payments" },
+            { label: "r-b", group: "payments" },
+          ],
+        },
       ]);
 
       const result = await finalizeGroups(
@@ -203,7 +212,10 @@ describe("finalizeGroups", () => {
       const groups = [group({ slug: "payments", title: "Payments" })];
 
       const result = await finalizeGroups(
-        { structuredGeneration: new FakeStructuredGenerationPort(respondAssigningAllTo("payments")), rulebookStore },
+        {
+          structuredGeneration: new FakeStructuredGenerationPort(respondAssigningAllTo("payments")),
+          rulebookStore,
+        },
         { rulebookSlug: slug, rules, groups, batchSize: 60 },
       );
 
@@ -226,7 +238,10 @@ describe("finalizeGroups", () => {
       const groups = [group({ slug: "payments" })];
 
       const batchedResult = await finalizeGroups(
-        { structuredGeneration: new FakeStructuredGenerationPort(respondAssigningAllTo("payments")), rulebookStore },
+        {
+          structuredGeneration: new FakeStructuredGenerationPort(respondAssigningAllTo("payments")),
+          rulebookStore,
+        },
         { rulebookSlug: slug, rules, groups, batchSize: 5 },
       );
 
@@ -240,7 +255,8 @@ describe("finalizeGroups", () => {
 
       expect(batchedResult.totalBatches).toBe(8); // ceil(37 / 5)
       expect(singleBatchResult.totalBatches).toBe(1);
-      const byLabel = (a: readonly [string, string], b: readonly [string, string]) => a[0].localeCompare(b[0]);
+      const byLabel = (a: readonly [string, string], b: readonly [string, string]) =>
+        a[0].localeCompare(b[0]);
       expect([...batchedResult.assignments.entries()].sort(byLabel)).toEqual(
         [...singleBatchResult.assignments.entries()].sort(byLabel),
       );
@@ -262,7 +278,10 @@ describe("finalizeGroups", () => {
       const groups = [group({ slug: "payments" }), group({ slug: "collateral" })];
 
       const result = await finalizeGroups(
-        { structuredGeneration: new FakeStructuredGenerationPort(() => ({ assignments: [] })), rulebookStore },
+        {
+          structuredGeneration: new FakeStructuredGenerationPort(() => ({ assignments: [] })),
+          rulebookStore,
+        },
         { rulebookSlug: slug, rules, groups, batchSize: 4 },
       );
 
@@ -283,14 +302,20 @@ describe("finalizeGroups", () => {
       const args = { rulebookSlug: slug, rules, groups };
 
       const first = await finalizeGroups(
-        { structuredGeneration: new FakeStructuredGenerationPort(respondAssigningAllTo("payments")), rulebookStore },
+        {
+          structuredGeneration: new FakeStructuredGenerationPort(respondAssigningAllTo("payments")),
+          rulebookStore,
+        },
         args,
       );
       expect(first.cachedBatches).toBe(0);
       expect(first.totalBatches).toBe(1);
 
       const secondPort = new FakeStructuredGenerationPort([]); // no fixtures queued — a call would throw
-      const second = await finalizeGroups({ structuredGeneration: secondPort, rulebookStore }, args);
+      const second = await finalizeGroups(
+        { structuredGeneration: secondPort, rulebookStore },
+        args,
+      );
 
       expect(second.cachedBatches).toBe(1);
       expect(secondPort.calls).toHaveLength(0);
@@ -308,11 +333,17 @@ describe("finalizeGroups", () => {
       const groups = [group({ slug: "payments" })];
 
       await finalizeGroups(
-        { structuredGeneration: new FakeStructuredGenerationPort(respondAssigningAllTo("payments")), rulebookStore },
+        {
+          structuredGeneration: new FakeStructuredGenerationPort(respondAssigningAllTo("payments")),
+          rulebookStore,
+        },
         { rulebookSlug: slug, rules, groups },
       );
 
-      const differentGroups = [group({ slug: "payments" }), group({ slug: "general", title: "General" })];
+      const differentGroups = [
+        group({ slug: "payments" }),
+        group({ slug: "general", title: "General" }),
+      ];
       const secondPort = new FakeStructuredGenerationPort(respondAssigningAllTo("payments"));
       const second = await finalizeGroups(
         { structuredGeneration: secondPort, rulebookStore },
@@ -335,8 +366,13 @@ describe("finalizeGroups", () => {
       // Prime the cache with garbage under whatever key this exact input
       // would hash to — easiest way to do that deterministically is to run
       // once for real, then corrupt what was written.
-      const structuredGeneration = new FakeStructuredGenerationPort(respondAssigningAllTo("payments"));
-      await finalizeGroups({ structuredGeneration, rulebookStore }, { rulebookSlug: slug, rules, groups });
+      const structuredGeneration = new FakeStructuredGenerationPort(
+        respondAssigningAllTo("payments"),
+      );
+      await finalizeGroups(
+        { structuredGeneration, rulebookStore },
+        { rulebookSlug: slug, rules, groups },
+      );
 
       // Corrupt every cache file under this rulebook's cache dir.
       const cacheDir = join(root, "rulebooks", slug, "cache", "extraction");
@@ -364,7 +400,12 @@ describe("finalizeGroups", () => {
     try {
       const rules = manyRules(9);
       const groups = [group({})];
-      const usage: TokenUsage = { inputTokens: 40, outputTokens: 10, cacheReadTokens: 0, cacheWriteTokens: 0 };
+      const usage: TokenUsage = {
+        inputTokens: 40,
+        outputTokens: 10,
+        cacheReadTokens: 0,
+        cacheWriteTokens: 0,
+      };
 
       const first = await finalizeGroups(
         {
@@ -425,7 +466,10 @@ describe("finalizeGroups", () => {
       const groups = [group({})];
 
       const result = await finalizeGroups(
-        { structuredGeneration: new FakeStructuredGenerationPort(respondAssigningAllTo("payments")), rulebookStore },
+        {
+          structuredGeneration: new FakeStructuredGenerationPort(respondAssigningAllTo("payments")),
+          rulebookStore,
+        },
         { rulebookSlug: slug, rules, groups },
       );
 
@@ -452,7 +496,11 @@ describe("finalizeGroups", () => {
       const withoutModel = new FakeStructuredGenerationPort(respondAssigningAllTo("payments"));
       await finalizeGroups(
         { structuredGeneration: withoutModel, rulebookStore },
-        { rulebookSlug: slug, rules: manyRules(2, "collateral"), groups: [group({ slug: "collateral" })] },
+        {
+          rulebookSlug: slug,
+          rules: manyRules(2, "collateral"),
+          groups: [group({ slug: "collateral" })],
+        },
       );
       expect(withoutModel.calls[0]?.model).toBeUndefined();
     } finally {
@@ -489,7 +537,8 @@ describe("finalizeGroups", () => {
         { rulebookSlug: shuffled.slug, rules: reversedRules, groups, batchSize: 37 },
       );
 
-      const byLabel = (a: readonly [string, string], b: readonly [string, string]) => a[0].localeCompare(b[0]);
+      const byLabel = (a: readonly [string, string], b: readonly [string, string]) =>
+        a[0].localeCompare(b[0]);
       expect([...shuffledResult.assignments.entries()].sort(byLabel)).toEqual(
         [...forwardResult.assignments.entries()].sort(byLabel),
       );
@@ -502,7 +551,12 @@ describe("finalizeGroups", () => {
       const primed = await makeRulebookStore("determinism-primed");
       try {
         await finalizeGroups(
-          { structuredGeneration: new FakeStructuredGenerationPort(respondAssigningAllTo("payments")), rulebookStore: primed.rulebookStore },
+          {
+            structuredGeneration: new FakeStructuredGenerationPort(
+              respondAssigningAllTo("payments"),
+            ),
+            rulebookStore: primed.rulebookStore,
+          },
           { rulebookSlug: primed.slug, rules, groups, batchSize: 60 },
         );
 
@@ -531,7 +585,10 @@ describe("finalizeGroups", () => {
       const args = { rulebookSlug: slug, rules, groups };
 
       const first = await finalizeGroups(
-        { structuredGeneration: new FakeStructuredGenerationPort(respondAssigningAllTo("payments")), rulebookStore },
+        {
+          structuredGeneration: new FakeStructuredGenerationPort(respondAssigningAllTo("payments")),
+          rulebookStore,
+        },
         args,
       );
       expect(first.cachedBatches).toBe(0);

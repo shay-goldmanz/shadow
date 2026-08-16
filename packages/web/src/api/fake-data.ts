@@ -575,7 +575,8 @@ const interestFeesClaims: Claim[] = [
     status: "supported",
     sourceId: loanSource.id,
     snapshotHash: "snap_int_rate",
-    exact: "the Borrower shall pay interest at a fixed rate of six and one-half percent (6.5%) per annum",
+    exact:
+      "the Borrower shall pay interest at a fixed rate of six and one-half percent (6.5%) per annum",
     anchorStatus: "anchored",
   }),
   claim({
@@ -610,7 +611,8 @@ const defaultRemediesClaims: Claim[] = [
     status: "supported",
     sourceId: loanSource.id,
     snapshotHash: "snap_default_30",
-    exact: "any payment outstanding for more than thirty (30) days shall constitute an event of default",
+    exact:
+      "any payment outstanding for more than thirty (30) days shall constitute an event of default",
     anchorStatus: "anchored",
   }),
   claim({
@@ -623,7 +625,8 @@ const defaultRemediesClaims: Claim[] = [
       "The cited clause describes the lender's remedy on the single default under discussion, not a universal forfeiture across every default this agreement could ever have. The absolute claim overreaches its evidence.",
     sourceId: loanSource.id,
     snapshotHash: "snap_default_forfeit",
-    exact: "upon such an event of default, the Lender may suspend the Borrower's refinancing option",
+    exact:
+      "upon such an event of default, the Lender may suspend the Borrower's refinancing option",
     anchorStatus: "anchored",
   }),
 ];

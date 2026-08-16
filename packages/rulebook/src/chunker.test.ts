@@ -9,7 +9,12 @@ function words(count: number, prefix = "word"): string {
 
 describe("chunkDocument", () => {
   test("no headings: packs paragraphs toward targetTokens without exceeding maxTokens", () => {
-    const paragraphs = [words(15, "alpha"), words(15, "beta"), words(15, "gamma"), words(15, "delta")];
+    const paragraphs = [
+      words(15, "alpha"),
+      words(15, "beta"),
+      words(15, "gamma"),
+      words(15, "delta"),
+    ];
     const rawText = paragraphs.join("\n\n");
 
     const chunks = chunkDocument(rawText, TINY_OPTS);
@@ -96,7 +101,11 @@ describe("chunkDocument", () => {
     expect(byLeaf.get("Deep")).toEqual(["Top", "Middle", "Deep"]);
     expect(byLeaf.get("Second Top")).toEqual(["Second Top"]);
     // Level jumped from 1 straight to 3: level 2 is padded empty, not omitted.
-    expect(byLeaf.get("Skipped To Level Three")).toEqual(["Second Top", "", "Skipped To Level Three"]);
+    expect(byLeaf.get("Skipped To Level Three")).toEqual([
+      "Second Top",
+      "",
+      "Skipped To Level Three",
+    ]);
   });
 
   test("is deterministic: identical input and options produce identical output", () => {
@@ -120,9 +129,12 @@ describe("chunkDocument", () => {
   });
 
   test("fewer than 3 headings is treated as unstructured — paragraph packing, no heading path", () => {
-    const rawText = ["# Only One Heading", words(10), "", "a trailing paragraph with no heading"].join(
-      "\n\n",
-    );
+    const rawText = [
+      "# Only One Heading",
+      words(10),
+      "",
+      "a trailing paragraph with no heading",
+    ].join("\n\n");
 
     const chunks = chunkDocument(rawText, TINY_OPTS);
 

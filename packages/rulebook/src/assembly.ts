@@ -110,7 +110,10 @@ async function buildClaimForRule(
 
   const inputHash = computeInputHash({
     decontextualized: rule.statement,
-    evidence: evidence.map((span) => ({ exact: span.selector.exact, snapshotHash: span.snapshotHash })),
+    evidence: evidence.map((span) => ({
+      exact: span.selector.exact,
+      snapshotHash: span.snapshotHash,
+    })),
     supports: [],
   });
 
@@ -130,7 +133,10 @@ async function buildClaimForRule(
 }
 
 /** Copy a previous run's verification wholesale when the claim's inputHash is unchanged — see module doc's "Carry-over". */
-function withCarriedOverVerification(claim: Claim, existingByLabel: ReadonlyMap<string, Claim>): Claim {
+function withCarriedOverVerification(
+  claim: Claim,
+  existingByLabel: ReadonlyMap<string, Claim>,
+): Claim {
   const existing = existingByLabel.get(claim.label);
   if (existing && existing.verification.inputHash === claim.verification.inputHash) {
     return { ...claim, verification: existing.verification };
@@ -162,7 +168,9 @@ export async function assembleGroup(
   const groupSlug = toChapterSlug(args.group.slug);
 
   const existingSidecar = await deps.evidenceStore.getClaims(args.rulebookSlug, groupSlug);
-  const existingByLabel = new Map(existingSidecar?.claims.map((claim) => [claim.label, claim] as const) ?? []);
+  const existingByLabel = new Map(
+    existingSidecar?.claims.map((claim) => [claim.label, claim] as const) ?? [],
+  );
 
   const bodyLines: string[] = [];
   const claims: Claim[] = [];
@@ -170,7 +178,12 @@ export async function assembleGroup(
   let droppedRules = 0;
 
   for (const rule of args.rules) {
-    const built = await buildClaimForRule(deps.evidenceStore, args.rulebookSlug, args.sourceId, rule);
+    const built = await buildClaimForRule(
+      deps.evidenceStore,
+      args.rulebookSlug,
+      args.sourceId,
+      rule,
+    );
     droppedQuotes += built.droppedQuotes;
     if (!built.claim) {
       droppedRules += 1;

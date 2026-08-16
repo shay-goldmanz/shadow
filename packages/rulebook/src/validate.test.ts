@@ -1,5 +1,5 @@
-import { normalizeNfcWs } from "@shadow/evidence";
 import { describe, expect, test } from "bun:test";
+import { normalizeNfcWs } from "@shadow/evidence";
 import type { ExtractedRule } from "./schemas.ts";
 import { validateChunkRules } from "./validate.ts";
 
@@ -58,7 +58,9 @@ describe("validateChunkRules", () => {
   });
 
   test("warns but keeps the rule when a numeral in the statement appears in no kept quote", () => {
-    const snapshot = normalizeNfcWs("The borrower shall repay the principal in full within 30 days.");
+    const snapshot = normalizeNfcWs(
+      "The borrower shall repay the principal in full within 30 days.",
+    );
     const rule = rawRule({
       statement: "Borrowers must repay the principal within 45 days.",
       quotes: ["repay the principal in full within 30 days"],
@@ -71,9 +73,14 @@ describe("validateChunkRules", () => {
   });
 
   test("drops the rule only when ALL of its quotes fail — one surviving quote keeps it", () => {
-    const snapshot = normalizeNfcWs("The borrower shall repay the principal in full within 30 days.");
+    const snapshot = normalizeNfcWs(
+      "The borrower shall repay the principal in full within 30 days.",
+    );
     const rule = rawRule({
-      quotes: ["a completely fabricated quote that never appears", "repay the principal in full within 30 days"],
+      quotes: [
+        "a completely fabricated quote that never appears",
+        "repay the principal in full within 30 days",
+      ],
     });
 
     const result = validateChunkRules([rule], snapshot);

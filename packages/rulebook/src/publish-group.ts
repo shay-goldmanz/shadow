@@ -161,14 +161,24 @@ export async function publishGroup(
   const groupSubject = groupDoc.title;
   const whenToUse = coerceWhenToUse(groupDoc.frontmatter);
 
-  let result = await runAudit(deps, rulebookSlug, groupDoc, sidecar, groupSubject, whenToUse, retiredLabels);
+  let result = await runAudit(
+    deps,
+    rulebookSlug,
+    groupDoc,
+    sidecar,
+    groupSubject,
+    whenToUse,
+    retiredLabels,
+  );
   const repairs: RepairDecision[] = [];
   let currentGroup = groupDoc;
 
   // Repair triggers on *any* repairable claim, not `!verdict.passed` — see
   // `publishChapter`'s identical comment: partial/conflicted don't block
   // the verdict, but D9's repair table still restates them.
-  const repairable = result.sidecar.claims.filter((claim) => isRepairable(claim.verification.status));
+  const repairable = result.sidecar.claims.filter((claim) =>
+    isRepairable(claim.verification.status),
+  );
   if (repairable.length > 0) {
     const decisions = await runRepairLoop(
       result.sidecar.claims,

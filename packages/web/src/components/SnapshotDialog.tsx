@@ -141,7 +141,10 @@ export function SnapshotDialog({
             client.getRulebookSource(slug, request.sourceId),
             client.getRulebookSnapshot(slug, request.snapshotHash),
           ]
-        : [client.getSource(slug, request.sourceId), client.getSnapshot(slug, request.snapshotHash)],
+        : [
+            client.getSource(slug, request.sourceId),
+            client.getSnapshot(slug, request.snapshotHash),
+          ],
     )
       .then(([source, text]) => {
         if (!cancelled) setState({ loading: false, source, text });

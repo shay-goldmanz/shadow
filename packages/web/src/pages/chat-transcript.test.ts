@@ -190,7 +190,13 @@ describe("chat transcript reducer", () => {
     let state = INITIAL_CHAT_STATE;
     state = applyStreamEvent(state, {
       event: "rulebook.group.audited",
-      data: { slug: "loan-rules", group: "interest-and-fees", passed: true, repairs: 0, issues: [] },
+      data: {
+        slug: "loan-rules",
+        group: "interest-and-fees",
+        passed: true,
+        repairs: 0,
+        issues: [],
+      },
     });
     state = applyStreamEvent(state, {
       event: "rulebook.group.audited",
@@ -216,11 +222,25 @@ describe("chat transcript reducer", () => {
     let state = INITIAL_CHAT_STATE;
     state = applyStreamEvent(state, {
       event: "rulebook.chunk",
-      data: { slug: "loan-rules", completed: 1, total: 4, rulesSoFar: 2, cached: false, failed: false },
+      data: {
+        slug: "loan-rules",
+        completed: 1,
+        total: 4,
+        rulesSoFar: 2,
+        cached: false,
+        failed: false,
+      },
     });
     state = applyStreamEvent(state, {
       event: "rulebook.chunk",
-      data: { slug: "loan-rules", completed: 2, total: 4, rulesSoFar: 5, cached: true, failed: false },
+      data: {
+        slug: "loan-rules",
+        completed: 2,
+        total: 4,
+        rulesSoFar: 5,
+        cached: true,
+        failed: false,
+      },
     });
 
     expect(state.items).toHaveLength(1);
@@ -263,15 +283,36 @@ describe("chat transcript reducer", () => {
     let state = INITIAL_CHAT_STATE;
     state = applyStreamEvent(state, {
       event: "rulebook.chunk",
-      data: { slug: "rules-a", completed: 1, total: 2, rulesSoFar: 1, cached: false, failed: false },
+      data: {
+        slug: "rules-a",
+        completed: 1,
+        total: 2,
+        rulesSoFar: 1,
+        cached: false,
+        failed: false,
+      },
     });
     state = applyStreamEvent(state, {
       event: "rulebook.chunk",
-      data: { slug: "rules-b", completed: 1, total: 2, rulesSoFar: 1, cached: false, failed: false },
+      data: {
+        slug: "rules-b",
+        completed: 1,
+        total: 2,
+        rulesSoFar: 1,
+        cached: false,
+        failed: false,
+      },
     });
     state = applyStreamEvent(state, {
       event: "rulebook.chunk",
-      data: { slug: "rules-a", completed: 2, total: 2, rulesSoFar: 3, cached: false, failed: false },
+      data: {
+        slug: "rules-a",
+        completed: 2,
+        total: 2,
+        rulesSoFar: 3,
+        cached: false,
+        failed: false,
+      },
     });
 
     expect(state.items).toHaveLength(2);

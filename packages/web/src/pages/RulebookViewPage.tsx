@@ -61,9 +61,7 @@ export function RulebookViewPage({
             {statusLabel}
           </span>
         </div>
-        {data.rulebook.whenToUse && (
-          <p className="page__subtitle">{data.rulebook.whenToUse}</p>
-        )}
+        {data.rulebook.whenToUse && <p className="page__subtitle">{data.rulebook.whenToUse}</p>}
         {data.rulebook.sourceDoc && (
           <p className="rulebook-view-page__source">
             Extracted from <code>{data.rulebook.sourceDoc.url}</code>
@@ -82,9 +80,7 @@ export function RulebookViewPage({
                 <button
                   type="button"
                   className="chapter-list__item"
-                  onClick={() =>
-                    navigate({ name: "rulebook-group", slug, group: group.slug })
-                  }
+                  onClick={() => navigate({ name: "rulebook-group", slug, group: group.slug })}
                 >
                   <span className="chapter-list__title">{group.title}</span>
                   <span className="volume-card__meta">

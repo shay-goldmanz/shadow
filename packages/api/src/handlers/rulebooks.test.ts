@@ -65,7 +65,9 @@ describe("Rule books", () => {
         groups: { slug: string; title: string; status: string; ruleCount: number }[];
       };
       expect(body.rulebook.slug).toBe("rnb-loan-agreement");
-      expect(body.rulebook.whenToUse).toBe("Answering questions about this loan agreement's terms.");
+      expect(body.rulebook.whenToUse).toBe(
+        "Answering questions about this loan agreement's terms.",
+      );
       expect(body.groups).toHaveLength(1);
       expect(body.groups[0]).toMatchObject({
         slug: "borrower-obligations",
@@ -96,7 +98,9 @@ describe("Rule books", () => {
         body: "- Borrowers must repay monthly.[^rule-1]",
       });
 
-      const res = await fetch(`${baseUrl}/api/rulebooks/rnb-loan-agreement/groups/borrower-obligations`);
+      const res = await fetch(
+        `${baseUrl}/api/rulebooks/rnb-loan-agreement/groups/borrower-obligations`,
+      );
       expect(res.status).toBe(200);
       const body = (await res.json()) as {
         group: { slug: string; title: string; body: string };
@@ -129,7 +133,9 @@ describe("Rule books", () => {
       };
       await deps.rulebookEvidenceStore.putClaims(slug, sidecar);
 
-      const res = await fetch(`${baseUrl}/api/rulebooks/rnb-loan-agreement/groups/borrower-obligations`);
+      const res = await fetch(
+        `${baseUrl}/api/rulebooks/rnb-loan-agreement/groups/borrower-obligations`,
+      );
       expect(res.status).toBe(200);
       const body = (await res.json()) as { claims: { claims: unknown[] } | undefined };
       expect(body.claims).toBeDefined();

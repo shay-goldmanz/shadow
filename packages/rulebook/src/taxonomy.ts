@@ -21,7 +21,12 @@ import type { StructuredGenerationPort, TokenUsage } from "@shadow/model";
 import { ZERO_USAGE } from "@shadow/model";
 import { z } from "zod";
 import type { DocumentChunk } from "./chunker.ts";
-import { DEFAULT_MAX_GROUPS, taxonomyGroupSchema, taxonomySchema, type TaxonomyGroup } from "./schemas.ts";
+import {
+  DEFAULT_MAX_GROUPS,
+  type TaxonomyGroup,
+  taxonomyGroupSchema,
+  taxonomySchema,
+} from "./schemas.ts";
 
 /** Bump on a meaningful prompt/instruction change — invalidates every cached taxonomy plan. */
 export const TAXONOMY_PROMPT_VERSION = "v1";

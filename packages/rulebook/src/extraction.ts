@@ -21,7 +21,12 @@ import type { RulebookStore, VolumeSlug } from "@shadow/core";
 import type { StructuredGenerationPort, TokenUsage } from "@shadow/model";
 import { ZERO_USAGE } from "@shadow/model";
 import type { DocumentChunk } from "./chunker.ts";
-import { type ExtractedRule, extractionSchema, type ExtractionResult, type TaxonomyGroup } from "./schemas.ts";
+import {
+  type ExtractedRule,
+  type ExtractionResult,
+  extractionSchema,
+  type TaxonomyGroup,
+} from "./schemas.ts";
 
 /** Bump on a meaningful prompt/instruction change — invalidates every chunk's extraction cache. */
 export const PROMPT_VERSION = "v1";
@@ -39,7 +44,12 @@ function groupMenuText(groups: readonly GroupMenuEntry[]): string {
   return groups.map((group) => `- ${group.slug}: ${group.when_to_use}`).join("\n");
 }
 
-function extractionCacheKey(promptVersion: string, contentHash: string, menuHash: string, modelKey: string): string {
+function extractionCacheKey(
+  promptVersion: string,
+  contentHash: string,
+  menuHash: string,
+  modelKey: string,
+): string {
   return `chunk-${sha256Hex(`${promptVersion}${contentHash}${menuHash}${modelKey}`).slice(0, 24)}`;
 }
 

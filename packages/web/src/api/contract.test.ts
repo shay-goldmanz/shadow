@@ -25,9 +25,9 @@
  */
 
 import { describe, expect, test } from "bun:test";
-import { toChapterSlug, toVolumeSlug } from "../../../core/src/index.ts";
 import type { WithApiOptions } from "../../../api/src/test-helpers.ts";
 import { withApi, withScriptedApi } from "../../../api/src/test-helpers.ts";
+import { toChapterSlug, toVolumeSlug } from "../../../core/src/index.ts";
 import { parseChapterBody } from "../components/chapter-body.ts";
 import {
   appendUserMessage,

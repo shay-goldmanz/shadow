@@ -138,9 +138,7 @@ export class HttpApiClient implements ShadowApiClient {
   }
 
   async getRulebookSource(slug: string, id: string): Promise<SourceRecord> {
-    return this.getJson(
-      `/rulebooks/${encodeURIComponent(slug)}/sources/${encodeURIComponent(id)}`,
-    );
+    return this.getJson(`/rulebooks/${encodeURIComponent(slug)}/sources/${encodeURIComponent(id)}`);
   }
 
   async getRulebookSnapshot(slug: string, hash: string): Promise<string> {

@@ -63,9 +63,7 @@ describe("Rule book evidence", () => {
       await deps.rulebookStore.createRulebook({ slug, title: "RNB Loan Agreement" });
 
       const fakeHash = `sha256:${"0".repeat(64)}`;
-      const res = await fetch(
-        `${baseUrl}/api/rulebooks/rnb-loan-agreement/snapshot/${fakeHash}`,
-      );
+      const res = await fetch(`${baseUrl}/api/rulebooks/rnb-loan-agreement/snapshot/${fakeHash}`);
       expect(res.status).toBe(404);
       const body = (await res.json()) as { error: { code: string } };
       expect(body.error.code).toBe("snapshot_not_found");
@@ -74,9 +72,7 @@ describe("Rule book evidence", () => {
 
   test("a source lookup against an unknown rule book slug is 404 source_not_found (no separate rule-book-existence check)", async () => {
     await withApi(async ({ baseUrl }) => {
-      const res = await fetch(
-        `${baseUrl}/api/rulebooks/does-not-exist/sources/${newSourceId()}`,
-      );
+      const res = await fetch(`${baseUrl}/api/rulebooks/does-not-exist/sources/${newSourceId()}`);
       expect(res.status).toBe(404);
       const body = (await res.json()) as { error: { code: string } };
       expect(body.error.code).toBe("source_not_found");
