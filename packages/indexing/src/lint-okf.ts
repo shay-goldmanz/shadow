@@ -3,6 +3,10 @@
  *
  * Validates that the index conforms to OKF v0.2 structural requirements:
  * - Every chapter has a non-empty `type` (OKF §4.1).
+ * - Every volume has a non-empty `type` (OKF §4.1) — a volume's VOLUME.md
+ *   is itself an OKF concept, so the same requirement applies to it.
+ * - Chapters and volumes carry valid `status`, `generated`, `stale_after`,
+ *   and `verified` fields where present (OKF §5.2, §5.4, §5.5).
  * - Attested Computation chapters (`type: "Attested Computation"`) carry
  *   the required computation fields: `runtime`, `parameters`, `executor`,
  *   and `attester` (OKF §10.2).
@@ -18,21 +22,29 @@ import type { ChapterIndexNode, IndexDocument } from "./types.ts";
 
 // ---- Types consumed by lint.ts's LintOptions.okf ----------------------------
 
-/** One chapter's OKF-relevant fields pulled from the index for conformance validation. */
-export interface OkfChapterRecord {
-  readonly slug: string;
-  readonly node_id: string;
-  readonly title: string;
-  readonly type?: string;
+/**
+ * OKF fields shared by chapters and volumes — the ones `validateOkfCommonFindings`
+ * checks. Both record types are OKF "concepts" (OKF §4.1) and carry the same
+ * lifecycle metadata shape.
+ */
+interface OkfCommonFields {
   readonly status?: string;
   readonly generated?: { by: string; at: string };
   readonly verified?: unknown;
   readonly stale_after?: string;
+}
+
+/** One chapter's OKF-relevant fields pulled from the index for conformance validation. */
+export interface OkfChapterRecord extends OkfCommonFields {
+  readonly slug: string;
+  readonly node_id: string;
+  readonly title: string;
+  readonly type?: string;
   readonly attestedComputation?: ChapterIndexNode["attestedComputation"];
 }
 
 /** One volume's OKF-relevant fields pulled from the index for conformance validation. */
-export interface OkfVolumeRecord {
+export interface OkfVolumeRecord extends OkfCommonFields {
   readonly volume_id: string;
   readonly title: string;
   readonly type?: string;
@@ -56,9 +68,18 @@ export interface OkfConformanceInput {
 
 // ---- Standard OKF field validation -----------------------------------------
 
-function validateOkfChapterRecord(
-  chapter: { title: string; node_id: string },
-  record: OkfChapterRecord,
+/**
+ * Validate the OKF fields shared by chapters and volumes — `status` (OKF
+ * §5.4), `generated` (OKF §5.2), `stale_after` (OKF §5.5), and `verified`
+ * (OKF §5.2) — against a single subject (one chapter or one volume).
+ * `subjectLabel` (e.g. `Chapter "Foo"` / `Volume "Bar"`) is interpolated
+ * verbatim into every finding message so callers control the noun; the
+ * finding codes and severities are identical for both subject kinds.
+ */
+function validateOkfCommonFindings(
+  subjectLabel: string,
+  nodeIds: readonly string[],
+  record: OkfCommonFields,
 ): LintFinding[] {
   const findings: LintFinding[] = [];
 
@@ -72,8 +93,8 @@ function validateOkfChapterRecord(
     findings.push({
       code: "okf-invalid-status",
       severity: "error",
-      message: `Chapter "${chapter.title}" has invalid status "${record.status}" — must be draft, stable, or deprecated (OKF §5.4)`,
-      nodeIds: [chapter.node_id],
+      message: `${subjectLabel} has invalid status "${record.status}" — must be draft, stable, or deprecated (OKF §5.4)`,
+      nodeIds,
     });
   }
 
@@ -86,8 +107,8 @@ function validateOkfChapterRecord(
     findings.push({
       code: "okf-missing-generated",
       severity: "error",
-      message: `Chapter "${chapter.title}" is missing required "generated" field with by+at (OKF §5.2)`,
-      nodeIds: [chapter.node_id],
+      message: `${subjectLabel} is missing required "generated" field with by+at (OKF §5.2)`,
+      nodeIds,
     });
   }
 
@@ -98,8 +119,8 @@ function validateOkfChapterRecord(
       findings.push({
         code: "okf-invalid-stale-after",
         severity: "warning",
-        message: `Chapter "${chapter.title}" has invalid stale_after "${record.stale_after}" — must be YYYY-MM-DD (OKF §5.5)`,
-        nodeIds: [chapter.node_id],
+        message: `${subjectLabel} has invalid stale_after "${record.stale_after}" — must be YYYY-MM-DD (OKF §5.5)`,
+        nodeIds,
       });
     }
   }
@@ -116,8 +137,8 @@ function validateOkfChapterRecord(
         findings.push({
           code: "okf-invalid-verified-by",
           severity: "error",
-          message: `Chapter "${chapter.title}" has a verified entry missing "by" field (OKF §5.2)`,
-          nodeIds: [chapter.node_id],
+          message: `${subjectLabel} has a verified entry missing "by" field (OKF §5.2)`,
+          nodeIds,
         });
         break;
       }
@@ -234,8 +255,12 @@ function validateAttestedComputation(
  *
  * Checks performed:
  * 1. Every chapter has a non-empty `type` (OKF §4.1).
- * 2. Attested Computation chapters carry required fields (OKF §10.2).
- * 3. Bundle artifacts: root index.md, per-volume index.md and log.md.
+ * 2. Chapters carry valid standard OKF fields (status, generated, stale_after,
+ *    verified — OKF §5.2, §5.4, §5.5).
+ * 3. Attested Computation chapters carry required fields (OKF §10.2).
+ * 4. Every volume has a non-empty `type` (OKF §4.1), then the same standard
+ *    OKF field validation as chapters (OKF §5.2, §5.4, §5.5).
+ * 5. Bundle artifacts: root index.md, per-volume index.md and log.md.
  */
 export function checkOkfConformance(input: OkfConformanceInput): LintCheckResult {
   const findings: LintFinding[] = [];
@@ -264,7 +289,9 @@ export function checkOkfConformance(input: OkfConformanceInput): LintCheckResult
       // Check 2: validate standard OKF fields
       const record = input.chapters.find((r) => r.node_id === chapter.node_id);
       if (record) {
-        findings.push(...validateOkfChapterRecord(chapter, record));
+        findings.push(
+          ...validateOkfCommonFindings(`Chapter "${chapter.title}"`, [chapter.node_id], record),
+        );
       }
 
       // Check 3: Attested Computation validation
@@ -284,7 +311,29 @@ export function checkOkfConformance(input: OkfConformanceInput): LintCheckResult
     }
   }
 
-  // Check 3: bundle artifacts
+  // Check 4: volumes — type is required (OKF §4.1), then the same standard
+  // OKF field validation chapters get.
+  for (const volumeRecord of input.volumes) {
+    if (!volumeRecord.type || volumeRecord.type.length === 0) {
+      findings.push({
+        code: "okf-volume-missing-type",
+        severity: "error",
+        message: `Volume "${volumeRecord.title}" is missing required OKF "type" field — a volume's VOLUME.md is a concept, and type is the only OKF-required field on every concept (OKF §4.1)`,
+        nodeIds: [volumeRecord.volume_id],
+      });
+      continue; // can't validate further without type
+    }
+
+    findings.push(
+      ...validateOkfCommonFindings(
+        `Volume "${volumeRecord.title}"`,
+        [volumeRecord.volume_id],
+        volumeRecord,
+      ),
+    );
+  }
+
+  // Check 5: bundle artifacts
   if (!input.artifacts.rootIndexOkfVersion) {
     findings.push({
       code: "okf-missing-root-index",

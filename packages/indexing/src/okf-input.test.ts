@@ -120,13 +120,40 @@ describe("okfChapterRecordsFrom", () => {
 });
 
 describe("okfVolumeRecordsFrom", () => {
-  test("pulls volume_id from the index node and title/type from the matching Volume", () => {
+  test("pulls volume_id from the index node and title/type/typed OKF fields from the matching Volume", () => {
     const doc = document([volume({ volume_id: "ui-design", title: "Interface Design", chapters: [] })]);
-    const storeVol = storeVolume({ slug: "ui-design", title: "Interface Design", type: "Guidance" });
+    const storeVol = storeVolume({
+      slug: "ui-design",
+      title: "Interface Design",
+      type: "Guidance",
+      status: "stable",
+      staleAfter: new Date("2026-06-15T12:00:00.000Z"),
+      generated: { by: "operator", at: new Date("2026-01-02T03:04:05.000Z") },
+      verified: [{ by: "reviewer", at: new Date("2026-01-03T00:00:00.000Z") }],
+    });
 
     const records = okfVolumeRecordsFrom(doc, [storeVol]);
 
-    expect(records).toEqual([{ volume_id: "ui-design", title: "Interface Design", type: "Guidance" }]);
+    expect(records).toEqual([
+      {
+        volume_id: "ui-design",
+        title: "Interface Design",
+        type: "Guidance",
+        status: "stable",
+        generated: { by: "operator", at: "2026-01-02T03:04:05.000Z" },
+        verified: [{ by: "reviewer", at: "2026-01-03T00:00:00.000Z" }],
+        stale_after: "2026-06-15",
+      },
+    ]);
+  });
+
+  test("a volume with no staleAfter omits stale_after", () => {
+    const doc = document([volume({ volume_id: "ui-design", chapters: [] })]);
+    const storeVol = storeVolume({ slug: "ui-design", staleAfter: null });
+
+    const records = okfVolumeRecordsFrom(doc, [storeVol]);
+
+    expect(records[0]!.stale_after).toBeUndefined();
   });
 
   test("a volume node with no matching Volume domain object is skipped", () => {

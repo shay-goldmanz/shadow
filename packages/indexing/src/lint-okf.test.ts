@@ -19,7 +19,12 @@ function oc(
 }
 
 function ov(overrides: Partial<OkfVolumeRecord> & { volume_id: string }): OkfVolumeRecord {
-  return { title: overrides.volume_id, type: "Volume", ...overrides };
+  return {
+    title: overrides.volume_id,
+    type: "Volume",
+    generated: { by: "shadow/1.0", at: "2026-01-01T00:00:00.000Z" },
+    ...overrides,
+  };
 }
 
 const artifacts: OkfBundleArtifacts = { rootIndexOkfVersion: true, logExists: true };
@@ -245,5 +250,99 @@ describe("checkOkfConformance", () => {
     const logFinding = result.findings.find((f) => f.code === "okf-missing-log");
     expect(logFinding).toBeDefined();
     expect(logFinding!.severity).toBe("warning");
+  });
+
+  describe("volumes", () => {
+    test("a conformant volume passes with no problems", () => {
+      const c = chapter({ node_id: "A", title: "Valid", type: "Design Guidance", slug: "valid" });
+      const doc = document([volume({ volume_id: "v", chapters: [c] })]);
+
+      const result = checkOkfConformance({
+        index: doc,
+        chapters: [oc({ slug: "valid", node_id: "A" })],
+        volumes: [ov({ volume_id: "v", title: "My Volume" })],
+        artifacts,
+      });
+
+      expect(result.findings).toHaveLength(0);
+    });
+
+    test("a volume missing type is flagged, and its remaining field checks are skipped", () => {
+      const c = chapter({ node_id: "A", title: "Valid", type: "Design Guidance", slug: "valid" });
+      const doc = document([volume({ volume_id: "v", chapters: [c] })]);
+
+      const result = checkOkfConformance({
+        index: doc,
+        chapters: [oc({ slug: "valid", node_id: "A" })],
+        volumes: [
+          ov({
+            volume_id: "v",
+            title: "Untyped Volume",
+            type: undefined,
+            generated: undefined, // would also fail okf-missing-generated if not skipped
+            status: "not-a-real-status", // would also fail okf-invalid-status if not skipped
+          }),
+        ],
+        artifacts,
+      });
+
+      expect(result.findings).toHaveLength(1);
+      expect(result.findings[0]!.code).toBe("okf-volume-missing-type");
+      expect(result.findings[0]!.severity).toBe("error");
+      expect(result.findings[0]!.message).toContain('Volume "Untyped Volume"');
+      expect(result.findings[0]!.nodeIds).toEqual(["v"]);
+    });
+
+    test("a volume with invalid status is flagged, naming the volume by title", () => {
+      const c = chapter({ node_id: "A", title: "Valid", type: "Design Guidance", slug: "valid" });
+      const doc = document([volume({ volume_id: "v", chapters: [c] })]);
+
+      const result = checkOkfConformance({
+        index: doc,
+        chapters: [oc({ slug: "valid", node_id: "A" })],
+        volumes: [ov({ volume_id: "v", title: "Interface Design", status: "not-a-real-status" })],
+        artifacts,
+      });
+
+      const finding = result.findings.find((f) => f.code === "okf-invalid-status");
+      expect(finding).toBeDefined();
+      expect(finding!.severity).toBe("error");
+      expect(finding!.message).toContain('Volume "Interface Design"');
+      expect(finding!.nodeIds).toEqual(["v"]);
+    });
+
+    test("a volume with missing generated is flagged", () => {
+      const c = chapter({ node_id: "A", title: "Valid", type: "Design Guidance", slug: "valid" });
+      const doc = document([volume({ volume_id: "v", chapters: [c] })]);
+
+      const result = checkOkfConformance({
+        index: doc,
+        chapters: [oc({ slug: "valid", node_id: "A" })],
+        volumes: [ov({ volume_id: "v", title: "Interface Design", generated: undefined })],
+        artifacts,
+      });
+
+      const finding = result.findings.find((f) => f.code === "okf-missing-generated");
+      expect(finding).toBeDefined();
+      expect(finding!.severity).toBe("error");
+      expect(finding!.message).toContain('Volume "Interface Design"');
+    });
+
+    test("multiple conformant volumes yield no volume findings", () => {
+      const c = chapter({ node_id: "A", title: "Valid", type: "Design Guidance", slug: "valid" });
+      const doc = document([volume({ volume_id: "v", chapters: [c] })]);
+
+      const result = checkOkfConformance({
+        index: doc,
+        chapters: [oc({ slug: "valid", node_id: "A" })],
+        volumes: [
+          ov({ volume_id: "v", title: "One" }),
+          ov({ volume_id: "w", title: "Two", status: "stable" }),
+        ],
+        artifacts,
+      });
+
+      expect(result.findings).toHaveLength(0);
+    });
   });
 });

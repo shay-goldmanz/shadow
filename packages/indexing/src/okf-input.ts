@@ -21,10 +21,30 @@
  * expects to consume it (as findings, not exceptions).
  */
 
-import type { Chapter, Volume } from "@shadow/core";
+import type { Chapter, OkfActor, Volume } from "@shadow/core";
 import { join } from "node:path";
 import type { OkfBundleArtifacts, OkfChapterRecord, OkfVolumeRecord } from "./lint-okf.ts";
 import type { IndexDocument } from "./types.ts";
+
+/**
+ * Serialize the OKF fields `Chapter` and `Volume` share the same shape for
+ * (`status`, `generated`, `verified`, `staleAfter`) into the wire shape
+ * `OkfChapterRecord`/`OkfVolumeRecord` carry — `Date`s become ISO strings
+ * (`staleAfter` truncated to `YYYY-MM-DD`, matching OKF §5.5).
+ */
+function serializeOkfCommonFields(subject: {
+  readonly status: Chapter["status"];
+  readonly staleAfter: Date | null;
+  readonly generated: OkfActor;
+  readonly verified: readonly OkfActor[];
+}): Pick<OkfChapterRecord, "status" | "generated" | "verified" | "stale_after"> {
+  return {
+    status: subject.status,
+    generated: { by: subject.generated.by, at: subject.generated.at.toISOString() },
+    verified: subject.verified.map((v) => ({ by: v.by, at: v.at.toISOString() })),
+    stale_after: subject.staleAfter ? subject.staleAfter.toISOString().slice(0, 10) : undefined,
+  };
+}
 
 // Matches a leading `---\n...\n---` block; the rest of the file is ignored.
 // Mirrors `@shadow/core`'s `FRONTMATTER_PATTERN` (not exported publicly,
@@ -64,10 +84,7 @@ export function okfChapterRecordsFrom(
         node_id: node.node_id,
         title: node.title,
         type: node.type,
-        status: chapter.status,
-        generated: { by: chapter.generated.by, at: chapter.generated.at.toISOString() },
-        verified: chapter.verified.map((v) => ({ by: v.by, at: v.at.toISOString() })),
-        stale_after: chapter.staleAfter ? chapter.staleAfter.toISOString().slice(0, 10) : undefined,
+        ...serializeOkfCommonFields(chapter),
         attestedComputation: node.attestedComputation,
       });
     }
@@ -78,8 +95,10 @@ export function okfChapterRecordsFrom(
 
 /**
  * Pure mapper: build `OkfVolumeRecord`s for every volume node in
- * `document`, pulling `volume_id` from the index and `title`/`type` from
- * the matching `Volume` domain object, matched by slug.
+ * `document`, pulling `volume_id` from the index and `title`/`type` and the
+ * typed OKF fields (`status`, `generated`, `verified`, `stale_after`) from
+ * the matching `Volume` domain object, matched by slug — the volume-level
+ * counterpart of `okfChapterRecordsFrom`.
  *
  * A volume node with no matching entry in `volumes` is skipped (same
  * defensive posture as `okfChapterRecordsFrom`).
@@ -99,6 +118,7 @@ export function okfVolumeRecordsFrom(
       volume_id: node.volume_id,
       title: volume.title,
       type: volume.type,
+      ...serializeOkfCommonFields(volume),
     });
   }
 
