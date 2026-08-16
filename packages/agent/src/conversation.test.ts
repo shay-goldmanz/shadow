@@ -23,10 +23,12 @@ import { toChapterSlug } from "@shadow/core";
 import type { IndexDocument } from "@shadow/indexing";
 import type { AgenticSessionOptions, FakeAgenticTurnResponder } from "@shadow/model";
 import { FakeAgenticSessionPort } from "@shadow/model";
-import type { Finding, ResearchBrief, ResearchResult } from "@shadow/research";
+import type { Finding, ResearchBrief, ResearchBriefPort, ResearchResult } from "@shadow/research";
 import { ShadowAgent, type ShadowAgentDeps, type ShadowEvent } from "./conversation.ts";
+import { AutoTurnBudgetExceededError } from "./errors.ts";
 import {
   alwaysNarrativeClassifier,
+  expectRejection,
   FakeResearchBriefPort,
   freshIndexer,
   scriptedClaimRestater,
@@ -219,6 +221,53 @@ async function withSessionCwd<T>(fn: (sessionCwd: string) => Promise<T>): Promis
   } finally {
     await rm(dir, { recursive: true, force: true });
   }
+}
+
+/**
+ * A `ResearchBriefPort` a test drives by hand: `research()` never resolves
+ * on its own — each call's outcome is settled later via `resolveCall`/
+ * `rejectCall`, by call index (0-based, in the order `research()` was
+ * actually invoked). `waitForCall` lets a test await "this call has
+ * happened" without guessing at microtask timing, so tests can pin down
+ * settle order (T0.2) precisely: resolve/reject calls in whatever order the
+ * test wants, independent of call order.
+ */
+class ControllableResearchBriefPort implements ResearchBriefPort {
+  readonly calls: ResearchBrief[] = [];
+  private readonly deferreds: {
+    resolve: (result: ResearchResult) => void;
+    reject: (error: unknown) => void;
+  }[] = [];
+  private readonly callSignals: (() => void)[] = [];
+
+  research(brief: ResearchBrief): Promise<ResearchResult> {
+    const index = this.calls.length;
+    this.calls.push(brief);
+    const promise = new Promise<ResearchResult>((resolve, reject) => {
+      this.deferreds[index] = { resolve, reject };
+    });
+    this.callSignals[index]?.();
+    return promise;
+  }
+
+  async waitForCall(index: number): Promise<void> {
+    if (this.calls[index]) return;
+    await new Promise<void>((resolve) => {
+      this.callSignals[index] = resolve;
+    });
+  }
+
+  resolveCall(index: number, result: ResearchResult): void {
+    this.deferreds[index]?.resolve(result);
+  }
+
+  rejectCall(index: number, error: unknown): void {
+    this.deferreds[index]?.reject(error);
+  }
+}
+
+function emptyResult(): ResearchResult {
+  return { findings: [], sources: [] };
 }
 
 describe("ShadowConversation — critical path", () => {
@@ -421,6 +470,218 @@ describe("ShadowConversation — a second sendMessage reuses the same session (D
 
         await conversation.dispose();
         expect(sessions.sessions[0]?.isClosed).toBe(true);
+      });
+    });
+  });
+});
+
+// -----------------------------------------------------------------------
+// T0.2 — research directives run concurrently within a turn.
+// -----------------------------------------------------------------------
+
+const TWO_DIRECTIVE_REPLY = [
+  "Looking into both.",
+  "```shadow:research",
+  JSON.stringify({ goal: "Directive A goal", subjectDomains: ["a.test"] }),
+  "```",
+  "```shadow:research",
+  JSON.stringify({ goal: "Directive B goal", subjectDomains: ["b.test"] }),
+  "```",
+].join("\n");
+
+describe("ShadowConversation — parallel research briefs (T0.2)", () => {
+  test("brief B settling before brief A -> completion events yield in settle order, but followUps stay in directive order", async () => {
+    await withVolumeHarness(async ({ evidenceStore, volumeStore, volume, root }) => {
+      await withSessionCwd(async (sessionCwd) => {
+        const research = new ControllableResearchBriefPort();
+
+        const respond: FakeAgenticTurnResponder = (_prompt, context) =>
+          context.turnIndex === 0
+            ? { text: TWO_DIRECTIVE_REPLY }
+            : { text: "Both findings look good, nothing more to research." };
+        const sessions = new FakeAgenticSessionPort(respond);
+
+        const deps: ShadowAgentDeps = {
+          agenticSessionPort: sessions,
+          researchBriefPort: research,
+          volumeStore,
+          evidenceStore,
+          indexer: freshIndexer(root),
+          checkWorthinessClassifier: alwaysNarrativeClassifier,
+          entailmentRelevanceJudge: scriptedEntailmentJudge(),
+          claimRestater: scriptedClaimRestater(() => {
+            throw new Error("should not be called");
+          }),
+          sessionCwd,
+        };
+
+        const agent = new ShadowAgent(deps);
+        const conversation = agent.startConversation(volume);
+
+        const events: ShadowEvent[] = [];
+        const drained = (async () => {
+          for await (const event of conversation.sendMessage("Look into A and B.")) {
+            events.push(event);
+          }
+        })();
+
+        // Both `research()` calls happen before either settles — proof the
+        // two briefs are genuinely in flight together, not one waiting on
+        // the other.
+        await research.waitForCall(0);
+        await research.waitForCall(1);
+        expect(research.calls[0]?.goal).toBe("Directive A goal");
+        expect(research.calls[1]?.goal).toBe("Directive B goal");
+
+        // Settle brief B (directive index 1) before brief A (directive
+        // index 0) — the opposite of directive order.
+        research.resolveCall(1, emptyResult());
+        research.resolveCall(0, emptyResult());
+
+        await drained;
+
+        // --- research-started fires for both, up front, in directive order
+        const started = events.filter((e) => e.type === "research-started");
+        expect(started.map((e) => (e as { brief: ResearchBrief }).brief.goal)).toEqual([
+          "Directive A goal",
+          "Directive B goal",
+        ]);
+
+        // --- completion events observed in *settle* order: B, then A -----
+        const completed = events.filter((e) => e.type === "research-completed");
+        expect(completed.map((e) => (e as { brief: ResearchBrief }).brief.goal)).toEqual([
+          "Directive B goal",
+          "Directive A goal",
+        ]);
+
+        // --- but the next turn's prompt (followUps) is in *directive*
+        // order: A's findings text appears before B's, regardless of which
+        // settled first -----------------------------------------------------
+        const followUpPrompt = sessions.sessions[0]?.prompts[1] ?? "";
+        const indexOfA = followUpPrompt.indexOf("Directive A goal");
+        const indexOfB = followUpPrompt.indexOf("Directive B goal");
+        expect(indexOfA).toBeGreaterThanOrEqual(0);
+        expect(indexOfB).toBeGreaterThanOrEqual(0);
+        expect(indexOfA).toBeLessThan(indexOfB);
+      });
+    });
+  });
+
+  test("one brief failing does not sink the other — it gets its own research-failed event/followUp, siblings complete normally", async () => {
+    await withVolumeHarness(async ({ evidenceStore, volumeStore, volume, root }) => {
+      await withSessionCwd(async (sessionCwd) => {
+        const research = new ControllableResearchBriefPort();
+
+        const respond: FakeAgenticTurnResponder = (_prompt, context) =>
+          context.turnIndex === 0
+            ? { text: TWO_DIRECTIVE_REPLY }
+            : { text: "Noted — one failed, one didn't." };
+        const sessions = new FakeAgenticSessionPort(respond);
+
+        const deps: ShadowAgentDeps = {
+          agenticSessionPort: sessions,
+          researchBriefPort: research,
+          volumeStore,
+          evidenceStore,
+          indexer: freshIndexer(root),
+          checkWorthinessClassifier: alwaysNarrativeClassifier,
+          entailmentRelevanceJudge: scriptedEntailmentJudge(),
+          claimRestater: scriptedClaimRestater(() => {
+            throw new Error("should not be called");
+          }),
+          sessionCwd,
+        };
+
+        const agent = new ShadowAgent(deps);
+        const conversation = agent.startConversation(volume);
+
+        const events: ShadowEvent[] = [];
+        const drained = (async () => {
+          for await (const event of conversation.sendMessage("Look into A and B.")) {
+            events.push(event);
+          }
+        })();
+
+        await research.waitForCall(0);
+        await research.waitForCall(1);
+
+        // Directive A's brief fails; directive B's succeeds.
+        research.rejectCall(0, new Error("the web is down"));
+        research.resolveCall(1, emptyResult());
+
+        await drained;
+
+        expect(events.some((e) => e.type === "error")).toBe(false);
+
+        const failed = events.filter((e) => e.type === "research-failed");
+        expect(failed).toHaveLength(1);
+        expect((failed[0] as { brief: ResearchBrief }).brief.goal).toBe("Directive A goal");
+        expect((failed[0] as { error: string }).error).toBe("the web is down");
+
+        const completed = events.filter((e) => e.type === "research-completed");
+        expect(completed).toHaveLength(1);
+        expect((completed[0] as { brief: ResearchBrief }).brief.goal).toBe("Directive B goal");
+
+        // followUps for both, in directive order: A's failure text first,
+        // then B's findings text.
+        const followUpPrompt = sessions.sessions[0]?.prompts[1] ?? "";
+        expect(followUpPrompt).toContain(
+          'Research brief "Directive A goal" failed: the web is down',
+        );
+        expect(followUpPrompt).toContain('Research findings for "Directive B goal"');
+        expect(followUpPrompt.indexOf("Directive A goal")).toBeLessThan(
+          followUpPrompt.indexOf("Directive B goal"),
+        );
+      });
+    });
+  });
+});
+
+describe("ShadowConversation — maxAutoTurns budget is unchanged by parallel research (T0.2)", () => {
+  test("a model that keeps issuing a research directive every turn exhausts the budget and throws", async () => {
+    await withVolumeHarness(async ({ evidenceStore, volumeStore, volume, root }) => {
+      await withSessionCwd(async (sessionCwd) => {
+        const research = new FakeResearchBriefPort(evidenceStore, () => []);
+        const respond: FakeAgenticTurnResponder = () => ({
+          text: [
+            "Still looking.",
+            "```shadow:research",
+            JSON.stringify({ goal: "Keep researching forever", subjectDomains: ["loop.test"] }),
+            "```",
+          ].join("\n"),
+        });
+        const sessions = new FakeAgenticSessionPort(respond);
+
+        const deps: ShadowAgentDeps = {
+          agenticSessionPort: sessions,
+          researchBriefPort: research,
+          volumeStore,
+          evidenceStore,
+          indexer: freshIndexer(root),
+          checkWorthinessClassifier: alwaysNarrativeClassifier,
+          entailmentRelevanceJudge: scriptedEntailmentJudge(),
+          claimRestater: scriptedClaimRestater(() => {
+            throw new Error("should not be called");
+          }),
+          sessionCwd,
+          maxAutoTurns: 2,
+        };
+
+        const agent = new ShadowAgent(deps);
+        const conversation = agent.startConversation(volume);
+
+        await expectRejection(
+          (async () => {
+            for await (const _event of conversation.sendMessage("Investigate forever.")) {
+              // drain — the budget-exceeded error is thrown out of the generator
+            }
+          })(),
+          AutoTurnBudgetExceededError,
+        );
+
+        // One prompt per turn, exactly `maxAutoTurns` of them, before the
+        // loop gives up rather than continuing indefinitely.
+        expect(sessions.sessions[0]?.prompts).toHaveLength(2);
       });
     });
   });

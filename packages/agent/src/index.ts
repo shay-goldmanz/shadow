@@ -43,6 +43,8 @@ export {
   UnknownSourceError,
   UnresolvedEvidenceQuoteError,
 } from "./errors.ts";
+export type { AsyncEventProducer } from "./merge-async-events.ts";
+export { mergeAsyncEvents } from "./merge-async-events.ts";
 export type { PublishDeps, PublishResult } from "./publish.ts";
 export { publishChapter } from "./publish.ts";
 export type { EnsureSkillInstalledResult } from "./skills.ts";

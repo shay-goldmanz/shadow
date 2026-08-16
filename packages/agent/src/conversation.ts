@@ -69,6 +69,7 @@ import { draftChapter } from "./chapter-draft.ts";
 import type { ChapterDirective, ResearchDirective } from "./directives.ts";
 import { parseShadowDirectives } from "./directives.ts";
 import { AutoTurnBudgetExceededError } from "./errors.ts";
+import { type AsyncEventProducer, mergeAsyncEvents } from "./merge-async-events.ts";
 import { publishChapter } from "./publish.ts";
 import { ensureWritingVolumesSkillInstalled } from "./skills.ts";
 import { buildShadowSystemPrompt } from "./system-prompt.ts";
@@ -277,10 +278,8 @@ export class ShadowConversation {
       }
 
       const followUps: string[] = [];
-      for (const directive of directives.research) {
-        for await (const event of this.runResearchDirective(directive, followUps)) {
-          yield event;
-        }
+      for await (const event of this.runResearchDirectives(directives.research, followUps)) {
+        yield event;
       }
       for (const directive of directives.chapters) {
         for await (const event of this.runChapterDirective(directive, followUps)) {
@@ -294,21 +293,51 @@ export class ShadowConversation {
     throw new AutoTurnBudgetExceededError(maxAutoTurns);
   }
 
-  private async *runResearchDirective(
-    directive: ResearchDirective,
+  /**
+   * Run every research directive from one model turn concurrently (T0.2).
+   * `research-started` fires for all of them up front, in directive order,
+   * before any brief's `research()` call begins. Completion events
+   * (`research-completed`/`research-failed`) then stream out via
+   * `mergeAsyncEvents` in *settle* order — whichever brief finishes first is
+   * yielded first — but `followUps` (the next turn's prompt material) is
+   * assembled in *directive* order once every brief has settled, so the
+   * model always sees a deterministic prompt regardless of network timing.
+   * A brief that throws is caught right here and turned into a
+   * `research-failed` event/follow-up line, same shape the old sequential
+   * code produced — it never sinks the siblings still in flight, because
+   * each brief is an independent `Promise` from the start.
+   */
+  private async *runResearchDirectives(
+    directives: readonly ResearchDirective[],
     followUps: string[],
   ): AsyncGenerator<ShadowEvent, void, undefined> {
-    const brief = toResearchBrief(this.volume, directive);
-    yield { type: "research-started", brief };
-    try {
-      const result = await this.deps.researchBriefPort.research(brief);
-      yield { type: "research-completed", brief, result };
-      followUps.push(formatResearchResult(brief, result));
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      yield { type: "research-failed", brief, error: message };
-      followUps.push(formatResearchFailure(brief, message));
+    if (directives.length === 0) return;
+
+    const briefs = directives.map((directive) => toResearchBrief(this.volume, directive));
+    for (const brief of briefs) {
+      yield { type: "research-started", brief };
     }
+
+    const followUpBySlot: string[] = Array.from({ length: briefs.length });
+    const producers: AsyncEventProducer<ShadowEvent>[] = briefs.map(
+      (brief, slot) => async (push) => {
+        try {
+          const result = await this.deps.researchBriefPort.research(brief);
+          followUpBySlot[slot] = formatResearchResult(brief, result);
+          push({ type: "research-completed", brief, result });
+        } catch (error) {
+          const message = error instanceof Error ? error.message : String(error);
+          followUpBySlot[slot] = formatResearchFailure(brief, message);
+          push({ type: "research-failed", brief, error: message });
+        }
+      },
+    );
+
+    for await (const event of mergeAsyncEvents(producers)) {
+      yield event;
+    }
+
+    followUps.push(...followUpBySlot);
   }
 
   private async *runChapterDirective(

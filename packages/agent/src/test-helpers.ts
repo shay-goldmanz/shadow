@@ -86,7 +86,14 @@ export type FakeResearchResponder = (
 
 export class FakeResearchBriefPort implements ResearchBriefPort {
   readonly briefs: ResearchBrief[] = [];
-  /** Every `ResearchResult` this fake has produced, in call order — lets a test's scripted model responder read back the real `sourceId`s a later turn must cite. */
+  /**
+   * Every `ResearchResult` this fake has produced, indexed by call order —
+   * lets a test's scripted model responder read back the real `sourceId`s a
+   * later turn must cite. Written by call index (`results[index] = ...`),
+   * not appended on completion, so this stays call-ordered even when
+   * multiple `research()` calls are in flight concurrently (T0.2) and settle
+   * in a different order than they started.
+   */
   readonly results: ResearchResult[] = [];
   private callIndex = 0;
 
@@ -130,7 +137,7 @@ export class FakeResearchBriefPort implements ResearchBriefPort {
     }
 
     const result: ResearchResult = { findings, sources };
-    this.results.push(result);
+    this.results[index] = result;
     return result;
   }
 }
