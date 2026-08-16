@@ -237,6 +237,92 @@ export function runVolumeStoreContractTests(
         expect(second.updatedAt.getTime()).toBeGreaterThan(first.updatedAt.getTime());
       });
 
+      test("putChapter defaults OKF fields on create when omitted", async () => {
+        const { store } = harness;
+        const volume = toVolumeSlug("vol");
+        await store.createVolume({ slug: volume, title: "Vol" });
+
+        const created = await store.putChapter(volume, {
+          slug: toChapterSlug("c1"),
+          title: "C1",
+          body: "body",
+        });
+
+        expect(created.type).toBe("Concept");
+        expect(created.status).toBe("draft");
+        expect(created.staleAfter).toBeNull();
+        expect(created.generated).toEqual({ by: "unknown", at: created.generated.at });
+        expect(created.verified).toEqual([]);
+      });
+
+      test("putChapter preserves omitted OKF fields on update instead of resetting them to creation defaults", async () => {
+        const { store } = harness;
+        const volume = toVolumeSlug("vol");
+        await store.createVolume({ slug: volume, title: "Vol" });
+
+        const staleAfter = new Date("2030-01-01T00:00:00.000Z");
+        const generated = { by: "agent:drafter", at: new Date("2025-01-01T00:00:00.000Z") };
+        const verified = [{ by: "process:audit", at: new Date("2025-06-01T00:00:00.000Z") }];
+        const first = await store.putChapter(volume, {
+          slug: toChapterSlug("c1"),
+          title: "V1",
+          body: "body v1",
+          type: "Attested Computation",
+          status: "stable",
+          staleAfter,
+          generated,
+          verified,
+        });
+        await delay(2);
+
+        // A partial upsert supplying only slug/title/body (as a repair path
+        // might) must not clobber the OKF fields left unspecified.
+        const second = await store.putChapter(volume, {
+          slug: toChapterSlug("c1"),
+          title: "V2",
+          body: "body v2",
+        });
+
+        expect(second.title).toBe("V2");
+        expect(second.body).toBe("body v2");
+        expect(second.type).toBe("Attested Computation");
+        expect(second.status).toBe("stable");
+        expect(second.staleAfter?.getTime()).toBe(staleAfter.getTime());
+        expect(second.generated).toEqual(generated);
+        expect(second.verified).toEqual(verified);
+        expect(second.updatedAt.getTime()).toBeGreaterThan(first.updatedAt.getTime());
+      });
+
+      test("putChapter staleAfter: omitted preserves the existing value, explicit null clears it", async () => {
+        const { store } = harness;
+        const volume = toVolumeSlug("vol");
+        await store.createVolume({ slug: volume, title: "Vol" });
+
+        const staleAfter = new Date("2030-06-15T00:00:00.000Z");
+        await store.putChapter(volume, {
+          slug: toChapterSlug("c1"),
+          title: "V1",
+          body: "body v1",
+          staleAfter,
+        });
+
+        const preserved = await store.putChapter(volume, {
+          slug: toChapterSlug("c1"),
+          title: "V2",
+          body: "body v2",
+          // staleAfter omitted entirely — must be preserved, not defaulted.
+        });
+        expect(preserved.staleAfter?.getTime()).toBe(staleAfter.getTime());
+
+        const cleared = await store.putChapter(volume, {
+          slug: toChapterSlug("c1"),
+          title: "V3",
+          body: "body v3",
+          staleAfter: null,
+        });
+        expect(cleared.staleAfter).toBeNull();
+      });
+
       test("getChapter rejects a missing chapter", async () => {
         const { store } = harness;
         const volume = toVolumeSlug("vol");

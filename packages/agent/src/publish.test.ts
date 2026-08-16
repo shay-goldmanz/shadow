@@ -96,6 +96,57 @@ describe("publishChapter — happy path", () => {
       expect(chapterNode).toBeDefined();
     });
   });
+
+  test("publishing preserves an operator-set staleAfter and the original generated actor, and stamps status/verified", async () => {
+    await withVolumeHarness(async ({ evidenceStore, volumeStore, volume, root }) => {
+      const { chapter } = await draftSimpleChapter({ evidenceStore, volumeStore }, volume, {
+        slug: "staleafter-chapter",
+        claimText: "Linear uses a 4px spacing grid.",
+        quote: "a 4px spacing grid",
+      });
+
+      // Simulates an operator (or a later drafting step) having set a
+      // staleAfter date on the chapter before it is published — this must
+      // survive `publishChapter`'s status/verified-stamping write, which
+      // does not itself mention `staleAfter` (regression for the bug where
+      // the store's creation defaults clobbered it on every publish).
+      const staleAfter = new Date("2030-01-01T00:00:00.000Z");
+      const withStaleAfter = await volumeStore.putChapter(volume, {
+        slug: chapter.slug,
+        title: chapter.title,
+        body: chapter.body,
+        type: chapter.type,
+        generated: chapter.generated,
+        frontmatter: chapter.frontmatter,
+        staleAfter,
+      });
+      expect(withStaleAfter.staleAfter?.getTime()).toBe(staleAfter.getTime());
+
+      const result = await publishChapter(
+        {
+          volumeStore,
+          evidenceStore,
+          indexer: freshIndexer(root),
+          checkWorthinessClassifier: alwaysNarrativeClassifier,
+          entailmentRelevanceJudge: scriptedEntailmentJudge(),
+          claimRestater: scriptedClaimRestater(() => {
+            throw new Error("restater should not be called on the happy path");
+          }),
+        },
+        volume,
+        chapter.slug,
+      );
+
+      expect(result.verdict.passed).toBe(true);
+      expect(result.published).toBe(true);
+
+      const published = await volumeStore.getChapter(volume, chapter.slug);
+      expect(published.staleAfter?.getTime()).toBe(staleAfter.getTime());
+      expect(published.generated).toEqual(chapter.generated);
+      expect(published.status).toBe("stable");
+      expect(published.verified.some((v) => v.by === "process:audit")).toBe(true);
+    });
+  });
 });
 
 describe("publishChapter — unsupported claims fail the audit and are not published", () => {
