@@ -167,6 +167,8 @@ class ControllableResearchSessionPort implements AgenticSessionPort {
   release(index: number): void {
     this.gateResolvers[index]?.();
   }
+
+  async deleteStoredSession(): Promise<void> {}
 }
 
 async function makeThrowawayEvidenceStore(): Promise<FileSystemEvidenceStore> {

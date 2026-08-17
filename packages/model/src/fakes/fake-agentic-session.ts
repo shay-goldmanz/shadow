@@ -119,6 +119,15 @@ const defaultResponder: FakeAgenticTurnResponder = (prompt) => ({ text: `echo: $
 export class FakeAgenticSessionPort implements AgenticSessionPort {
   /** Every session this fake has created, in creation order — inspect in assertions. */
   readonly sessions: FakeAgenticSession[] = [];
+  /**
+   * Every id passed to `deleteStoredSession`, in call order (T2.4) — the
+   * fake's inspectable stand-in for the SDK's `deleteSession`, mirroring
+   * `ClaudeAgentSdkSession`'s real adapter. Deliberately a *separate* list
+   * from any individual `FakeAgenticSession.deletedSessionIds`: this one
+   * records port-level, id-only deletions that need no live handle at all —
+   * exactly the cold-session shape this method exists for.
+   */
+  readonly deletedStoredSessionIds: string[] = [];
 
   private sessionCounter = 0;
 
@@ -133,6 +142,10 @@ export class FakeAgenticSessionPort implements AgenticSessionPort {
     );
     this.sessions.push(session);
     return session;
+  }
+
+  async deleteStoredSession(sdkSessionId: string): Promise<void> {
+    this.deletedStoredSessionIds.push(sdkSessionId);
   }
 }
 

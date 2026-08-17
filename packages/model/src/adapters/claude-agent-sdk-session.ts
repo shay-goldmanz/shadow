@@ -81,6 +81,16 @@ export function createClaudeAgentSdkSessionPort(
     createSession(options: AgenticSessionOptions = {}): AgenticSession {
       return new ClaudeAgentSdkSession(queryFn, deleteSessionFn, defaults, options);
     },
+    // T2.4/D6b: id-based deletion, independent of any live session handle —
+    // see `AgenticSessionPort.deleteStoredSession`'s doc for why this exists
+    // alongside (and, going forward, instead of) `ClaudeAgentSdkSession.close()`.
+    async deleteStoredSession(sdkSessionId: string): Promise<void> {
+      try {
+        await deleteSessionFn(sdkSessionId);
+      } catch (error) {
+        throw new AgenticSessionError(`failed to delete persisted session ${sdkSessionId}`, error);
+      }
+    },
   };
 }
 

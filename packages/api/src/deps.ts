@@ -47,10 +47,12 @@ export interface ApiDeps {
    * in-process state; `docs/API.md` documents no persistence guarantee for
    * chat sessions, only for volumes (D4).
    *
-   * Bounded (`ConversationRegistry`, not a raw `Map`): each conversation now
-   * persists its session transcript on disk for as long as it's held (D6's
-   * `resume` requires it), so an unbounded registry would leak both memory
-   * and disk. See that class's doc for the eviction policy.
+   * Bounded (`ConversationRegistry`, not a raw `Map`): each conversation
+   * holds an `AgenticSession` handle for as long as it's registered, so an
+   * unbounded registry would leak memory. Eviction only releases that
+   * in-memory handle, never the session's on-disk transcript (T2.4/D6b) —
+   * see that class's doc for the eviction policy, including how it skips a
+   * session with a running/queued turn.
    */
   readonly conversations: ConversationRegistry;
 }

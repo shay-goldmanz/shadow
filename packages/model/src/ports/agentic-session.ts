@@ -170,6 +170,25 @@ export interface AgenticSession {
 
 export interface AgenticSessionPort {
   createSession(options?: AgenticSessionOptions): AgenticSession;
+  /**
+   * Delete a previously-persisted session's on-disk transcript by its SDK
+   * session id, with no live `AgenticSession` handle required (T2.4/D6b).
+   *
+   * Once sessions outlive the process (`@shadow/sessions`, Tier 2), the
+   * *only* thing that knows a session's SDK id after a restart or an
+   * eviction is stored metadata (`SessionMeta.sdkSessionId`) — there is no
+   * in-memory `AgenticSession` left to call `close()` through, and `close()`
+   * couldn't help anyway: it deletes ids a *live* handle latched during its
+   * own turns (`ownSessionId`/`failedSessionIds` on
+   * `ClaudeAgentSdkSession`), which a cold session never had a handle to
+   * latch in the first place. This method is the id-based counterpart that
+   * works regardless — wraps the Agent SDK's `deleteSession` directly, and
+   * is the sole deletion path callers should use going forward
+   * (`ShadowConversation.release()` no longer deletes anything; see its
+   * doc). A no-op if `sdkSessionId` was never persisted, per the SDK's own
+   * `deleteSession` contract.
+   */
+  deleteStoredSession(sdkSessionId: string): Promise<void>;
 }
 
 /**

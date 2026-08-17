@@ -72,8 +72,11 @@
  * (`@shadow/model`'s `ClaudeAgentSdkSession`). `resume` only finds a
  * session that was actually written to `~/.claude/projects/`, so this
  * session must NOT be created with `persistSession: false` — see the
- * comment at that call site for the incident this guards against, and
- * `ShadowConversation.dispose` for the cleanup this now requires.
+ * comment at that call site for the incident this guards against. Cleaning
+ * up the resulting on-disk transcript is no longer this handle's job
+ * (T2.4/D6b): `release()` below only drops the in-memory reference, and
+ * deletion — when the operator actually wants a session gone — is the
+ * explicit, id-based `AgenticSessionPort.deleteStoredSession` path instead.
  */
 
 import { randomUUID } from "node:crypto";
@@ -311,25 +314,39 @@ export class ShadowConversation {
   }
 
   /**
-   * Release the underlying `AgenticSession`'s persisted transcript
-   * (`AgenticSession.close`, backed by the Agent SDK's `deleteSession`).
-   * This handle deliberately persists its session for `resume` to work
-   * across turns — see the comment on `persistSession` in
-   * `getOrCreateSession` — which means it accumulates on disk under
-   * `~/.claude/projects/` for as long as it stays alive. Nothing in this
-   * class calls `dispose` automatically: it has no notion of "the operator
-   * is done with this conversation." Whoever owns conversation lifecycle
-   * (today, `@shadow/api`'s `ApiDeps.conversations` map) should call this
-   * when evicting a conversation. A genuine no-op only if `getOrCreateSession`
-   * was never reached (no `sendMessage` call yet, so `this.session` is still
-   * `undefined`) — once a turn has run, `AgenticSession.close()` has ids to
-   * consider even for a turn that *failed* rather than completed (F3 review
-   * fix: `ClaudeAgentSdkSession.failedSessionIds`, excluding this handle's
-   * own resume target). `close()` is also idempotent (F3 review fix), so
-   * calling `dispose` more than once on the same conversation is safe.
+   * Drop this handle's reference to its underlying `AgenticSession`,
+   * deleting nothing (T2.4 — replaces the old `dispose()`, which called
+   * `AgenticSession.close()` and deleted the SDK transcript underneath it).
+   *
+   * D6b inverts D6a's cleanup rule: sessions now persist *past* the life of
+   * this in-memory handle (`@shadow/sessions`, Tier 2) — the SDK transcript
+   * is the entity of record, and this handle is only ever a cache entry for
+   * it. Releasing a cache entry must not delete the entity it cached, so
+   * eviction (`ConversationRegistry`) and server shutdown (`start.ts`) both
+   * call this instead of anything that touches `~/.claude/projects/`. The
+   * one legitimate deletion path left is explicit and id-based —
+   * `AgenticSessionPort.deleteStoredSession(sdkSessionId)`, driven by
+   * `SessionMeta.sdkSessionId` (T3.1's `DELETE` endpoint) — and it never
+   * goes through a `ShadowConversation` handle at all, which is what makes
+   * it work for a *cold* session (evicted or post-restart) that has no live
+   * handle for this method to even be called on.
+   *
+   * Nothing else needs releasing here: every `stream()` call spawns its own
+   * subprocess, which exits when that turn's `result` message arrives
+   * (module doc above) — this handle holds no live process, socket, or
+   * other non-transcript resource between turns, so dropping the reference
+   * is genuinely all there is to do today. Doing that explicitly (rather
+   * than leaving it to whatever the caller does with its own reference to
+   * this object) also means a caller that mistakenly reuses an "inert"
+   * handle after release gets a fresh, non-resuming session on its next
+   * `sendMessage` rather than silently reaching for a resume target this
+   * class no longer stands behind. If a future change gives `AgenticSession`
+   * genuine non-transcript teardown (an idle subprocess kept warm, say),
+   * it belongs here — T2.9's graceful-shutdown sequence is the next caller
+   * of this method and needs it to leave nothing dangling.
    */
-  async dispose(): Promise<void> {
-    await this.session?.close?.();
+  async release(): Promise<void> {
+    this.session = undefined;
   }
 
   /**
@@ -652,13 +669,14 @@ export class ShadowConversation {
       // spelled out here rather than left to be silently reintroduced.
       //
       // Cost this incurs (documented, not hidden): every conversation's
-      // transcript now persists under `~/.claude/projects/` for as long as
-      // the process keeps this `ShadowConversation` alive. Nothing in this
-      // package currently calls the matching cleanup —
-      // `AgenticSession.close()` (backed by the SDK's `deleteSession`) is
-      // available on `this.session` for whichever layer owns conversation
-      // lifecycle (today, `@shadow/api`'s `ApiDeps.conversations` map) to
-      // call once a conversation is evicted or the operator ends it.
+      // transcript persists under `~/.claude/projects/` for as long as the
+      // operator keeps talking to it — and, as of T2.4/D6b, for as long as
+      // the operator wants it resumable *after* that too, since eviction
+      // and shutdown now only `release()` this handle rather than deleting
+      // anything. The transcript is gone only when something calls
+      // `AgenticSessionPort.deleteStoredSession(sdkSessionId)` explicitly
+      // (T3.1's `DELETE` endpoint) — deliberate, id-based, and never routed
+      // through this handle.
     });
     return this.session;
   }

@@ -137,6 +137,8 @@ class ScriptedToolLoopSessionPort implements AgenticSessionPort {
     this.sessions.push(session);
     return session;
   }
+
+  async deleteStoredSession(): Promise<void> {}
 }
 
 function toolDefinitionsOf(agent: WebResearchToolAgent): readonly AnyToolDefinition[] {
@@ -291,6 +293,8 @@ describe("WebResearchToolAgent — concurrency guard", () => {
         createSession(): AgenticSession {
           return new BlockingSession();
         }
+
+        async deleteStoredSession(): Promise<void> {}
       }
 
       const agent = new WebResearchToolAgent({

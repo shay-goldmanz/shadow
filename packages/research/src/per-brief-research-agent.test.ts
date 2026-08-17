@@ -190,6 +190,7 @@ describe("PerBriefResearchAgent — concurrent calls both complete (T0.1)", () =
           // not serialized behind a shared `busy` flag.
           return new ControllableSession(`controllable-${index}`, options, index === 0);
         },
+        deleteStoredSession: async () => {},
       };
 
       const agent = new PerBriefResearchAgent({ transport, evidenceStore, sessions });
@@ -307,6 +308,7 @@ describe("PerBriefResearchAgent's underlying mechanism — findings/sources do n
             scriptFor(NOTION_URL, NOTION_FINDING),
           );
         },
+        deleteStoredSession: async () => {},
       };
 
       // Constructed exactly the way `PerBriefResearchAgent.research()`

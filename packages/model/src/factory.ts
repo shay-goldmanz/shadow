@@ -82,6 +82,11 @@ function withRetrying(port: AgenticSessionPort, policy: RetryPolicy): AgenticSes
     createSession(options?: AgenticSessionOptions): AgenticSession {
       return new RetryingAgenticSession(port.createSession(options), policy);
     },
+    // Id-based deletion (T2.4) has nothing to retry-wrap — it isn't a turn
+    // — so this just delegates straight through to the wrapped port.
+    deleteStoredSession(sdkSessionId: string): Promise<void> {
+      return port.deleteStoredSession(sdkSessionId);
+    },
   };
 }
 

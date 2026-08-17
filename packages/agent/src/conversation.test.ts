@@ -491,8 +491,17 @@ describe("ShadowConversation — a second sendMessage reuses the same session (D
         // reintroduces that flag. Assert the intent directly too.
         expect(sessions.sessions[0]?.options.persistSession).not.toBe(false);
 
-        await conversation.dispose();
-        expect(sessions.sessions[0]?.isClosed).toBe(true);
+        // T2.4: release() drops the handle but must not delete the SDK
+        // transcript — the regression this guards is the old `dispose()`
+        // behavior (called `AgenticSession.close()`, which deletes) coming
+        // back under the new name. `isClosed` staying `false` proves
+        // `close()` was never reached; `sessionId` going back to
+        // `undefined` proves the underlying handle really was dropped, not
+        // just left alone.
+        expect(conversation.sessionId).toBe(sessions.sessions[0]?.sessionId);
+        await conversation.release();
+        expect(sessions.sessions[0]?.isClosed).toBe(false);
+        expect(conversation.sessionId).toBeUndefined();
       });
     });
   });
@@ -1495,6 +1504,9 @@ function withRetrying(
   return {
     createSession(options?: AgenticSessionOptions): AgenticSession {
       return new RetryingAgenticSession(port.createSession(options), policy, instantSleep);
+    },
+    deleteStoredSession(sdkSessionId: string): Promise<void> {
+      return port.deleteStoredSession(sdkSessionId);
     },
   };
 }

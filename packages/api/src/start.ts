@@ -23,16 +23,21 @@ const server = createServer(deps, { port, hostname: "127.0.0.1" });
 console.log(`@shadow/api listening at ${server.url.toString()}`);
 
 /**
- * Every live conversation persists its `AgenticSession`'s transcript on
- * disk for as long as it's held (`ConversationRegistry`'s doc). On a normal
+ * Every live conversation holds its `AgenticSession` handle in memory for
+ * as long as it's registered (`ConversationRegistry`'s doc). On a normal
  * shutdown (Ctrl-C, or `kill`) there is no later request that will ever
- * evict and dispose them, so this is the only chance to release them —
- * cheap, and the alternative is a slow accumulation of dead session
- * directories under `~/.claude/projects/` every time the server restarts.
+ * evict them, so this is the only chance to drop those in-memory handles
+ * before the process exits. This is memory hygiene only, not disk cleanup
+ * (T2.4/D6b): `releaseAll()` deletes nothing — every conversation's SDK
+ * transcript is left on disk under `~/.claude/projects/`, on purpose, so it
+ * stays resumable the next time the server starts. (T2.9 will insert a
+ * turn-drain step ahead of this once turns can outlive a request; today,
+ * every turn is still request-scoped, so there is nothing in flight to wait
+ * for here.)
  */
 async function shutdown(signal: NodeJS.Signals): Promise<void> {
-  console.log(`${signal} received — closing ${deps.conversations.size} live conversation(s)...`);
-  await deps.conversations.disposeAll();
+  console.log(`${signal} received — releasing ${deps.conversations.size} live conversation(s)...`);
+  await deps.conversations.releaseAll();
   await server.stop();
   process.exit(0);
 }

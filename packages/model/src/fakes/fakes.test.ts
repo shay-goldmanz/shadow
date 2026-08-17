@@ -86,6 +86,14 @@ describe("FakeAgenticSessionPort", () => {
     expect(a).not.toBe(b);
   });
 
+  test("deleteStoredSession records the id, with no live session handle required (T2.4)", async () => {
+    const port = new FakeAgenticSessionPort();
+    // No `createSession()` call at all — the cold-session shape this method
+    // exists for: an id read back from stored metadata, not from a handle.
+    await port.deleteStoredSession("cold-session-id");
+    expect(port.deletedStoredSessionIds).toEqual(["cold-session-id"]);
+  });
+
   test("default responder echoes the prompt", async () => {
     const port = new FakeAgenticSessionPort();
     const session = port.createSession();

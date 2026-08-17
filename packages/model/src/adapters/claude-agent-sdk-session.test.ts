@@ -467,6 +467,43 @@ describe("createClaudeAgentSdkSessionPort — close()", () => {
   });
 });
 
+describe("createClaudeAgentSdkSessionPort — deleteStoredSession (T2.4)", () => {
+  test("delegates to the SDK's deleteSession with the given id, no live handle required", async () => {
+    const deleteCalls: string[] = [];
+    const port = createClaudeAgentSdkSessionPort(
+      {},
+      {
+        // biome-ignore lint/suspicious/noExplicitAny: test double, only the sessionId argument matters
+        deleteSession: (async (sessionId: string) => {
+          deleteCalls.push(sessionId);
+        }) as any,
+      },
+    );
+
+    // No `createSession()`/`stream()` call at all — this is exactly the
+    // cold-session shape T2.4 exists for: an id read from stored
+    // `SessionMeta.sdkSessionId` after a restart, with no `AgenticSession`
+    // handle in memory to call `close()` through.
+    await port.deleteStoredSession("cold-session-id");
+
+    expect(deleteCalls).toEqual(["cold-session-id"]);
+  });
+
+  test("wraps a thrown deleteSession failure in AgenticSessionError", async () => {
+    const port = createClaudeAgentSdkSessionPort(
+      {},
+      {
+        deleteSession: (async () => {
+          throw new Error("boom");
+          // biome-ignore lint/suspicious/noExplicitAny: test double
+        }) as any,
+      },
+    );
+
+    await expectRejection(port.deleteStoredSession("some-id"), AgenticSessionError);
+  });
+});
+
 describe("createClaudeAgentSdkSessionPort — guardrail", () => {
   test("throws SubscriptionAuthError when apiKeySource is not 'none', before yielding any content", async () => {
     const { queryFn } = makeRecordingQueryFn({ apiKeySource: "user" });
