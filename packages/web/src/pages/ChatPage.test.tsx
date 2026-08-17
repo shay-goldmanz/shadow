@@ -103,7 +103,7 @@ describe("ChatPage", () => {
         if (calls === 1) {
           const events: ChatStreamEvent[] = [
             { event: "session", data: { sessionId } },
-            { event: "error", data: { message: "Upstream overloaded", code: "upstream_error" } },
+            { event: "error", data: { message: "Upstream overloaded", code: "shadow_turn_error" } },
           ];
           return events;
         }

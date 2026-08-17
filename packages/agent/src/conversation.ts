@@ -253,7 +253,13 @@ export class ShadowConversation {
    * class calls `dispose` automatically: it has no notion of "the operator
    * is done with this conversation." Whoever owns conversation lifecycle
    * (today, `@shadow/api`'s `ApiDeps.conversations` map) should call this
-   * when evicting a conversation. A no-op if no turn has completed yet.
+   * when evicting a conversation. A genuine no-op only if `getOrCreateSession`
+   * was never reached (no `sendMessage` call yet, so `this.session` is still
+   * `undefined`) — once a turn has run, `AgenticSession.close()` has ids to
+   * consider even for a turn that *failed* rather than completed (F3 review
+   * fix: `ClaudeAgentSdkSession.failedSessionIds`, excluding this handle's
+   * own resume target). `close()` is also idempotent (F3 review fix), so
+   * calling `dispose` more than once on the same conversation is safe.
    */
   async dispose(): Promise<void> {
     await this.session?.close?.();

@@ -14,6 +14,7 @@ import type {
   AgenticSession,
   AgenticSessionOptions,
   AgenticStreamEvent,
+  AgenticTurnResult,
 } from "./ports/agentic-session.ts";
 import { runToCompletion } from "./ports/agentic-session.ts";
 import {
@@ -349,6 +350,185 @@ describe("RetryingAgenticSession — delay honored via injected fake sleep (T1.3
     expect(result.text).toBe("recovered");
     expect(delays).toEqual([1000, 4000]);
     expect(inner.prompts).toEqual(["hi", "hi", "hi"]);
+  });
+});
+
+/**
+ * Builds an `AgenticSession` whose `stream()` mints a fresh, independently
+ * trackable async generator per call ("attempt") — each with its own
+ * `finally` that records into a shared `log`, in order, both when the
+ * attempt STARTS (`start-N`) and when its iterator is actually CLOSED
+ * (`close-N`, whether by running to completion, throwing, or an external
+ * `.return()`/`.throw()`). Real async generator semantics, deliberately:
+ * yielding suspends execution at that `yield` — the `finally` does NOT run
+ * just because a value was produced, only once the generator is resumed
+ * past its last yield (via a further pull) or explicitly closed. This is
+ * exactly what F1's leak depended on: `RetryingAgenticSession` used to
+ * abandon a still-suspended inner iterator on every exit path, and this
+ * helper is the only way to observe that from outside (a plain event array
+ * can't distinguish "closed" from "produced its last event and never
+ * touched again").
+ */
+function trackedInnerSession(
+  attempts: ReadonlyArray<{
+    readonly events?: readonly AgenticStreamEvent[];
+    readonly result?: AgenticTurnResult;
+    readonly throws?: unknown;
+  }>,
+): { readonly session: AgenticSession; readonly log: string[] } {
+  const log: string[] = [];
+  let attemptIndex = 0;
+  const session: AgenticSession = {
+    sessionId: undefined,
+    usage: ZERO_USAGE,
+    stream(): AsyncGenerator<AgenticStreamEvent, void, undefined> {
+      const thisAttempt = attemptIndex++;
+      log.push(`start-${thisAttempt}`);
+      const script = attempts[thisAttempt];
+      return (async function* (): AsyncGenerator<AgenticStreamEvent, void, undefined> {
+        try {
+          if (!script) throw new Error(`trackedInnerSession: no script for attempt ${thisAttempt}`);
+          for (const event of script.events ?? []) {
+            yield event;
+          }
+          if (script.throws !== undefined) {
+            throw script.throws;
+          }
+          if (script.result) {
+            yield { type: "done", result: script.result };
+          }
+        } finally {
+          log.push(`close-${thisAttempt}`);
+        }
+      })();
+    },
+  };
+  return { session, log };
+}
+
+function doneResult(overrides: Partial<AgenticTurnResult> = {}): AgenticTurnResult {
+  return {
+    text: "",
+    usage: ZERO_USAGE,
+    sessionId: "session-x",
+    stopReason: "end_turn",
+    isError: false,
+    subagentsEnabled: false,
+    ...overrides,
+  };
+}
+
+describe("RetryingAgenticSession — F1 review fix: the inner iterator is closed on every exit path", () => {
+  test("normal completion: closed once the successful turn's 'done' has been forwarded", async () => {
+    const { session: inner, log } = trackedInnerSession([{ result: doneResult({ text: "ok" }) }]);
+    const session = new RetryingAgenticSession(inner, noRetryPolicy, fakeSleep().sleep);
+
+    const events = await collect(session, "hi");
+
+    expect(events).toHaveLength(1);
+    // Before the fix: only "start-0" — the inner generator was left
+    // suspended at its final yield, `finally` never ran, forever.
+    expect(log).toEqual(["start-0", "close-0"]);
+  });
+
+  test("exhausted isError: closed once the non-retried failure's 'done' has been forwarded", async () => {
+    const { session: inner, log } = trackedInnerSession([
+      { result: doneResult({ isError: true, stopReason: "max_turns" }) },
+    ]);
+    const session = new RetryingAgenticSession(inner, noRetryPolicy, fakeSleep().sleep);
+
+    const result = await runToCompletion(session, "hi");
+
+    expect(result.isError).toBe(true);
+    expect(log).toEqual(["start-0", "close-0"]);
+  });
+
+  test("consumer abandons the outer generator mid-turn (for-await break): the in-flight attempt is closed", async () => {
+    const { session: inner, log } = trackedInnerSession([
+      {
+        events: [
+          { type: "text-delta", text: "a" },
+          { type: "text-delta", text: "b" },
+        ],
+      },
+    ]);
+    const session = new RetryingAgenticSession(inner, noRetryPolicy, fakeSleep().sleep);
+
+    const seen: AgenticStreamEvent[] = [];
+    for await (const event of session.stream("hi")) {
+      seen.push(event);
+      break; // for-await-of's break calls .return() on the outer generator
+    }
+
+    expect(seen).toEqual([{ type: "text-delta", text: "a" }]);
+    expect(log).toEqual(["start-0", "close-0"]);
+  });
+
+  test("retry (isError channel): the abandoned attempt is closed strictly before the next attempt starts", async () => {
+    const { session: inner, log } = trackedInnerSession([
+      { result: doneResult({ isError: true, stopReason: "overloaded_error" }) },
+      { result: doneResult({ text: "recovered" }) },
+    ]);
+    const { policy } = spyPolicy(() => 0);
+    const session = new RetryingAgenticSession(inner, policy, fakeSleep().sleep);
+
+    const result = await runToCompletion(session, "hi");
+
+    expect(result.text).toBe("recovered");
+    // Before the fix: "start-0", "start-1", "close-1" — attempt 0's
+    // iterator was abandoned still suspended at its own final yield.
+    expect(log).toEqual(["start-0", "close-0", "start-1", "close-1"]);
+  });
+
+  test("retry (thrown channel): the abandoned attempt is closed strictly before the next attempt starts", async () => {
+    const boom = new AgenticSessionError("simulated transport failure");
+    const { session: inner, log } = trackedInnerSession([
+      { throws: boom },
+      { result: doneResult({ text: "recovered" }) },
+    ]);
+    const { policy } = spyPolicy(() => 0);
+    const session = new RetryingAgenticSession(inner, policy, fakeSleep().sleep);
+
+    const result = await runToCompletion(session, "hi");
+
+    expect(result.text).toBe("recovered");
+    expect(log).toEqual(["start-0", "close-0", "start-1", "close-1"]);
+  });
+
+  test("rethrow after exhaustion: the final attempt's iterator is closed even though the failure propagates", async () => {
+    const boom = new AgenticSessionError("still failing");
+    const { session: inner, log } = trackedInnerSession([{ throws: boom }]);
+    const session = new RetryingAgenticSession(inner, noRetryPolicy, fakeSleep().sleep);
+
+    const rejection = await expectRejection(runToCompletion(session, "hi"), AgenticSessionError);
+
+    expect(rejection).toBe(boom);
+    expect(log).toEqual(["start-0", "close-0"]);
+  });
+});
+
+describe("RetryingAgenticSession — F2 review fix: 'yielded' covers done events too", () => {
+  test("after a successful done, the consumer's it.throw() propagates instead of silently retrying the whole turn", async () => {
+    const inner = createFakeSession(() => ({ text: "ok" }));
+    // Would retry if ever consulted — proves the catch block never treats
+    // this as retryable.
+    const { policy, calls } = spyPolicy(() => 0);
+    const session = new RetryingAgenticSession(inner, policy, fakeSleep().sleep);
+
+    const it = session.stream("hi")[Symbol.asyncIterator]();
+    const first = await it.next();
+    expect(first.done).toBe(false);
+    expect(first.value).toMatchObject({ type: "done", result: { isError: false, text: "ok" } });
+
+    const boom = new Error("consumer decided to abort after seeing the result");
+    const rejection = await expectRejection(it.throw(boom), Error);
+
+    expect(rejection).toBe(boom);
+    // Exactly one prompt reached the inner session — the turn was NEVER
+    // silently re-run (the bug: `yielded` was false for a "done" event, so
+    // the injected throw looked like a fresh, retryable failure).
+    expect(inner.prompts).toEqual(["hi"]);
+    expect(calls).toHaveLength(0);
   });
 });
 

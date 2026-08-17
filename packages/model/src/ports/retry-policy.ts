@@ -148,6 +148,18 @@ export const noRetryPolicy: RetryPolicy = {
  * retries first would just delay that fallback by seconds for a failure
  * retrying can never fix (the session id genuinely does not exist on this
  * machine; trying again with the same id fails the same way every time).
+ *
+ * Cheap-minors review fix (documentation only, no behavior change): this is
+ * a **thrown-only** failure by design — verified live, the CLI has never
+ * been observed to report it as an `isError` `"done"` result, only as a
+ * raw error out of `query()` (`ClaudeAgentSdkSession.stream`'s
+ * `persistSession: false` guard comment reproduces the exact text for the
+ * one case that guard can trigger offline). Matched against
+ * `failure.message` uniformly on either channel anyway, per this module's
+ * doc on why `conservativeRetryPolicy` doesn't branch on `TurnFailure.kind`
+ * — defense-in-depth against a hypothetical future CLI version that starts
+ * surfacing it as a result instead, not because the `isError` channel is
+ * currently expected to produce it.
  */
 const NO_CONVERSATION_FOUND_PATTERN = /no conversation found/i;
 

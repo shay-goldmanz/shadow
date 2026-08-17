@@ -49,8 +49,9 @@ export interface BuildRealApiDepsOptions {
    * entry names: pass `noRetryPolicy` here to disable retries entirely, or
    * a custom `RetryPolicy` to change the behavior — one line, this call
    * site only. Omit for `createModel`'s default (`conservativeRetryPolicy`).
-   * T1.3's decorator is what will actually consult this; `createModel`
-   * only resolves and threads it for now.
+   * `RetryingAgenticSession` (`@shadow/model`'s T1.3, now built) is what
+   * actually consults this on every turn; `createModel` just resolves and
+   * threads it through to that decorator.
    */
   readonly retryPolicy?: RetryPolicy;
 }

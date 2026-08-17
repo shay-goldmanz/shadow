@@ -43,7 +43,12 @@ export interface Model {
    * `conservativeRetryPolicy` unless overridden — see
    * `CreateModelOptions.retryPolicy`). Exposed here too so a caller can
    * inspect/log which policy is active without reaching into
-   * `agenticSession`'s wrapping.
+   * `agenticSession`'s wrapping. Inspection only, not a live control: the
+   * `RetryingAgenticSession` instances `agenticSession.createSession()`
+   * already handed out captured this same object at construction time
+   * (`withRetrying` below) — reassigning or mutating a caller's reference to
+   * this field does not change what any already- or later-created session
+   * consults.
    */
   readonly retryPolicy: RetryPolicy;
 }

@@ -377,6 +377,75 @@ describe("createClaudeAgentSdkSessionPort — close()", () => {
     expect(deleteCalls).toEqual([failedSessionId]);
   });
 
+  test("F3 review fix: a resumed first turn that errors does NOT track the resume target for deletion — close() only deletes the operator's real transcript if it independently belongs there", async () => {
+    const resumeTarget = "operators-preexisting-transcript";
+    let callIndex = 0;
+    const queryFn: QueryFn = () => {
+      const thisCall = callIndex++;
+      return (async function* () {
+        // The CLI's error result echoes back the SAME id it was asked to
+        // resume — no new session was ever actually created.
+        yield initMessage({ sessionId: resumeTarget });
+        if (thisCall === 0) {
+          yield errorResultMessage(resumeTarget);
+        } else {
+          yield resultMessage(resumeTarget);
+        }
+      })();
+    };
+    const deleteCalls: string[] = [];
+    const port = createClaudeAgentSdkSessionPort(
+      {},
+      {
+        query: queryFn,
+        // biome-ignore lint/suspicious/noExplicitAny: test double, only the sessionId argument matters
+        deleteSession: (async (sessionId: string) => {
+          deleteCalls.push(sessionId);
+        }) as any,
+      },
+    );
+    const session = port.createSession({ resume: { sessionId: resumeTarget } });
+
+    const first = await runToCompletion(session, "first turn");
+    expect(first.isError).toBe(true);
+    expect(first.sessionId).toBe(resumeTarget); // still reported to the caller...
+
+    await session.close?.();
+    // ...but NOT deleted: it's the operator's pre-existing transcript, not
+    // one this handle orphaned. Before the fix, `close()` would have
+    // deleted the operator's real history here.
+    expect(deleteCalls).toEqual([]);
+
+    // A genuinely NEW id from a later failed turn is still tracked and
+    // deleted normally — the exclusion is narrow, not a blanket "never
+    // delete after a resumed handle" rule.
+    await runToCompletion(session, "second turn");
+    expect(session.sessionId).toBe(resumeTarget);
+  });
+
+  test("F3 review fix: close() is idempotent — a second call does not re-issue deleteSession for ids already gone", async () => {
+    const fixedSessionId = randomUUID();
+    const { queryFn } = makeRecordingQueryFn({ sessionIdForCall: () => fixedSessionId });
+    const deleteCalls: string[] = [];
+    const port = createClaudeAgentSdkSessionPort(
+      {},
+      {
+        query: queryFn,
+        // biome-ignore lint/suspicious/noExplicitAny: test double, only the sessionId argument matters
+        deleteSession: (async (sessionId: string) => {
+          deleteCalls.push(sessionId);
+        }) as any,
+      },
+    );
+    const session = port.createSession();
+    await runToCompletion(session, "hi");
+
+    await session.close?.();
+    await session.close?.();
+
+    expect(deleteCalls).toEqual([fixedSessionId]); // deleted exactly once, not twice
+  });
+
   test("is a no-op for a session created with persistSession: false — nothing was ever written to delete", async () => {
     const { queryFn } = makeRecordingQueryFn({});
     const deleteCalls: string[] = [];

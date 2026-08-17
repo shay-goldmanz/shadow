@@ -1,10 +1,12 @@
 import { describe, expect, test } from "bun:test";
 import { z } from "zod";
 import { AgenticSessionError, StructuredGenerationError } from "../errors.ts";
+import type { AgenticStreamEvent } from "../ports/agentic-session.ts";
 import { runToCompletion } from "../ports/agentic-session.ts";
 import { turnFailureFromThrown } from "../ports/retry-policy.ts";
 import { expectRejection } from "../test-helpers.ts";
 import {
+  FakeAgenticSession,
   FakeAgenticSessionPort,
   failNTimesThenSucceed,
   noConversationFoundError,
@@ -271,6 +273,43 @@ describe("FakeAgenticSessionPort", () => {
       const fake = port.sessions[0];
       expect(fake?.deletedSessionIds).toEqual([]);
     });
+
+    test("F3 review fix: a resumed first turn that errors does NOT track the resume target for deletion", async () => {
+      // The fake's own assigned session id is predictable (sequential,
+      // `fake-session-N`) — set the resume target to match it, modeling the
+      // real CLI's behavior of echoing back the id it was asked to resume
+      // on a first-turn error (see `ClaudeAgentSdkSession`'s mirrored fix).
+      const port = new FakeAgenticSessionPort(() => ({ isError: true, stopReason: "boom" }));
+      const session = port.createSession({
+        resume: { sessionId: "fake-session-1" },
+      }) as FakeAgenticSession;
+
+      const first = await runToCompletion(session, "first turn");
+      expect(first.isError).toBe(true);
+      expect(first.sessionId).toBe("fake-session-1");
+      expect(session.failedSessionIds).toEqual([]); // excluded, not tracked
+
+      await session.close?.();
+      expect(session.deletedSessionIds).toEqual([]); // nothing deleted either
+    });
+
+    test("F3 review fix: close() is idempotent — a second call does not double-record already-deleted ids", async () => {
+      const port = new FakeAgenticSessionPort((_prompt, { turnIndex }) => ({
+        isError: turnIndex === 0,
+      }));
+      const session = port.createSession();
+
+      await runToCompletion(session, "one"); // fails, tracked in failedSessionIds
+      await runToCompletion(session, "two"); // succeeds, latched as ownSessionId
+
+      await session.close?.();
+      const fake = port.sessions[0];
+      const afterFirstClose = [...(fake?.deletedSessionIds ?? [])];
+      expect(afterFirstClose.length).toBeGreaterThan(0);
+
+      await session.close?.();
+      expect(fake?.deletedSessionIds).toEqual(afterFirstClose); // unchanged — no duplicates
+    });
   });
 
   describe("FakeAgenticTurnScript.throws (T1.2: scripting the thrown-error channel)", () => {
@@ -292,11 +331,10 @@ describe("FakeAgenticSessionPort", () => {
       expect(port.sessions[0]?.failedSessionIds).toEqual([]);
     });
 
-    test("every other script field is ignored when `throws` is set — nothing is yielded before the throw", async () => {
+    test("the `done`-result-only fields are ignored when `throws` is set — no result-shaped event before the throw", async () => {
       const port = new FakeAgenticSessionPort(() => ({
         throws: new AgenticSessionError("boom"),
         text: "should never be seen",
-        events: [{ type: "text-delta", text: "should never be yielded" }],
       }));
       const session = port.createSession();
 
@@ -310,6 +348,37 @@ describe("FakeAgenticSessionPort", () => {
         AgenticSessionError,
       );
       expect(events).toEqual([]);
+    });
+
+    test("F6 review fix: `events` coexists with `throws` — scripted events are yielded, THEN the turn throws", async () => {
+      const boom = new AgenticSessionError("mid-turn transport failure");
+      const port = new FakeAgenticSessionPort(() => ({
+        events: [
+          { type: "text-delta", text: "partial " },
+          { type: "text-delta", text: "output" },
+        ],
+        throws: boom,
+      }));
+      const session = port.createSession();
+
+      const events: AgenticStreamEvent[] = [];
+      const rejection = await expectRejection(
+        (async () => {
+          for await (const event of session.stream("hello")) {
+            events.push(event);
+          }
+        })(),
+        AgenticSessionError,
+      );
+
+      expect(rejection).toBe(boom);
+      expect(events).toEqual([
+        { type: "text-delta", text: "partial " },
+        { type: "text-delta", text: "output" },
+      ]);
+      // No `done` event was ever produced — the turn failed mid-stream, not
+      // after completing a result.
+      expect(events.some((e) => e.type === "done")).toBe(false);
     });
   });
 

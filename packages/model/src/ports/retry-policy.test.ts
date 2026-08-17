@@ -151,6 +151,29 @@ describe("conservativeRetryPolicy", () => {
       const failure = turnFailureFromThrown(new AgenticSessionError("something else broke"));
       expect(conservativeRetryPolicy.delayBeforeRetry(failure, 0)).toBeNull();
     });
+
+    // Cheap-minors review fix: issue #10's live-verified expired-OAuth
+    // shape — an `isError` result, not a thrown `SubscriptionAuthError`
+    // (that class is D5's own guardrail, checked separately above and
+    // never what the CLI itself reports for an expired credential). Its
+    // `stopReason` is `stop_sequence`, which is not itself a retryable
+    // signature, and its message contains none of
+    // `RETRYABLE_KEYWORD_PATTERN`/`RETRYABLE_STATUS_CODE_PATTERN`'s
+    // signatures either — so this already falls through to "no retryable
+    // signature" by construction. Pinned as its own regression case
+    // (rather than folded into the generic "unrecognized" tests above)
+    // because retrying an expired credential is actively harmful — it
+    // burns the ~1s/~4s backoff, then the exhausted turn surfaces the
+    // exact same "please re-authenticate" failure, for no reason.
+    test("issue #10: an expired-OAuth error-result is not retried", () => {
+      const failure = turnFailureFromErrorResult(
+        errorResult({
+          text: "Failed to authenticate: OAuth session expired. Please run `claude login` again.",
+          stopReason: "stop_sequence",
+        }),
+      );
+      expect(conservativeRetryPolicy.delayBeforeRetry(failure, 0)).toBeNull();
+    });
   });
 
   test("attempt exhaustion applies even to a retryable signature — 2 retries is the hard cap", () => {

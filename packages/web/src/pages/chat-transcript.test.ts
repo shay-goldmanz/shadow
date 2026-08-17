@@ -144,7 +144,7 @@ describe("chat transcript reducer", () => {
       let state = appendUserMessage(INITIAL_CHAT_STATE, "believe X and write it up");
       state = applyStreamEvent(state, {
         event: "error",
-        data: { message: "overloaded", code: "upstream_error" },
+        data: { message: "overloaded", code: "shadow_turn_error" },
       });
 
       const errorItem = state.items[state.items.length - 1];
@@ -186,7 +186,7 @@ describe("chat transcript reducer", () => {
       let state = appendUserMessage(INITIAL_CHAT_STATE, "first attempt");
       state = applyStreamEvent(state, {
         event: "error",
-        data: { message: "overloaded", code: "upstream_error" },
+        data: { message: "overloaded", code: "shadow_turn_error" },
       });
       const firstErrorId = state.items[state.items.length - 1]?.id;
       expect(state.items.find((i) => i.id === firstErrorId)).toMatchObject({
@@ -212,6 +212,137 @@ describe("chat transcript reducer", () => {
       for (const item of state.items) {
         expect(item).not.toHaveProperty("retry");
       }
+    });
+
+    describe("F4 review fix (a): suppressed after a committed chapter publication", () => {
+      test("a chapter.published item after the failed turn's user message suppresses retry, even for an otherwise-retryable code", () => {
+        let state = appendUserMessage(INITIAL_CHAT_STATE, "believe X and write it up");
+        state = applyStreamEvent(state, {
+          event: "chapter.published",
+          data: { volume: "v", chapter: "c" },
+        });
+        // A retryable code by itself would offer retry (see the allowlist
+        // tests below) — the committed publication overrides that.
+        state = applyStreamEvent(state, {
+          event: "error",
+          data: { message: "something failed after publishing", code: "shadow_turn_error" },
+        });
+
+        const errorItem = state.items[state.items.length - 1];
+        expect(errorItem).toMatchObject({ type: "error", retry: undefined });
+      });
+
+      test("a chapter.published item from an EARLIER turn (before the current user message) does not suppress retry", () => {
+        let state = appendUserMessage(INITIAL_CHAT_STATE, "first belief");
+        state = applyStreamEvent(state, {
+          event: "chapter.published",
+          data: { volume: "v", chapter: "c1" },
+        });
+        // A fresh turn begins — this is a NEW user item; the earlier
+        // publication is now before it, not after it.
+        state = appendUserMessage(state, "second belief");
+        state = applyStreamEvent(state, {
+          event: "error",
+          data: { message: "overloaded", code: "shadow_turn_error" },
+        });
+
+        const errorItem = state.items[state.items.length - 1];
+        expect(errorItem).toMatchObject({
+          type: "error",
+          retry: { text: "second belief" },
+        });
+      });
+    });
+
+    describe("F4 review fix (b): retry gated on an allowlist of plausibly-transient codes", () => {
+      const retryableCodes = [
+        "shadow_turn_error",
+        "stream_failed",
+        "shadow_turn_failed",
+        "agentic_session_failed",
+        "retrieval_network_error",
+        "retrieval_timeout",
+        "internal_error",
+      ];
+      for (const code of retryableCodes) {
+        test(`"${code}" is retryable`, () => {
+          let state = appendUserMessage(INITIAL_CHAT_STATE, "believe X");
+          state = applyStreamEvent(state, { event: "error", data: { message: "m", code } });
+          expect(state.items[state.items.length - 1]).toMatchObject({
+            type: "error",
+            retry: { text: "believe X" },
+          });
+        });
+      }
+
+      const nonRetryableCodes = [
+        // Guaranteed-refail codes the review flagged by name.
+        "auto_turn_budget_exceeded",
+        "claim_missing_required_field",
+        "subscription_auth_error",
+        // A broad sample of the rest of error-mapping.ts's vocabulary —
+        // validation, not-found, quota, and deterministic-fault codes.
+        "invalid_slug",
+        "volume_not_found",
+        "source_budget_exceeded",
+        "chapter_parse_error",
+        "ledger_corrupt",
+        // An unrecognized/future code defaults to NOT retryable — the
+        // allowlist's safe default.
+        "some_brand_new_code_nobody_has_seen_yet",
+      ];
+      for (const code of nonRetryableCodes) {
+        test(`"${code}" is NOT retryable`, () => {
+          let state = appendUserMessage(INITIAL_CHAT_STATE, "believe X");
+          state = applyStreamEvent(state, { event: "error", data: { message: "m", code } });
+          expect(state.items[state.items.length - 1]).toMatchObject({
+            type: "error",
+            retry: undefined,
+          });
+        });
+      }
+    });
+  });
+
+  describe("F5 review fix: retry-flag clearing lives where a user item is minted, not only in appendUserMessage", () => {
+    test("a user item arriving through the reducer clears every prior retryable error's retry flag", () => {
+      let state = appendUserMessage(INITIAL_CHAT_STATE, "first attempt");
+      state = applyStreamEvent(state, {
+        event: "error",
+        data: { message: "overloaded", code: "shadow_turn_error" },
+      });
+      const firstErrorId = state.items[state.items.length - 1]?.id;
+      expect(state.items.find((i) => i.id === firstErrorId)).toMatchObject({
+        retry: { text: "first attempt" },
+      });
+
+      // Any future source of a "user" item — today only `appendUserMessage`
+      // (local send/retry), tomorrow also T2.8's `operator` wire event —
+      // goes through the SAME item-minting path (`withItem`) that now owns
+      // this clearing, so this assertion holds regardless of which
+      // function produced the new user item.
+      state = appendUserMessage(state, "first attempt");
+
+      expect(state.items.find((i) => i.id === firstErrorId)).toMatchObject({ retry: undefined });
+      expect(types(state.items)).toEqual(["user", "error", "user"]);
+    });
+
+    test("multiple prior retryable errors are all cleared by one new user item", () => {
+      let state = appendUserMessage(INITIAL_CHAT_STATE, "attempt one");
+      state = applyStreamEvent(state, {
+        event: "error",
+        data: { message: "m1", code: "shadow_turn_error" },
+      });
+      state = appendUserMessage(state, "attempt two");
+      state = applyStreamEvent(state, {
+        event: "error",
+        data: { message: "m2", code: "shadow_turn_error" },
+      });
+      expect(state.items.filter((i) => i.type === "error" && i.retry)).toHaveLength(1);
+
+      state = appendUserMessage(state, "attempt three");
+
+      expect(state.items.filter((i) => i.type === "error" && i.retry)).toHaveLength(0);
     });
   });
 

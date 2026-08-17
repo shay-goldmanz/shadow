@@ -87,54 +87,97 @@ export class RetryingAgenticSession implements AgenticSession {
       let yielded = false;
       const iterator = this.inner.stream(prompt)[Symbol.asyncIterator]();
       try {
-        for (;;) {
-          const next = await iterator.next();
-          if (next.done) {
-            // The port's contract guarantees a "done" event before
-            // completion; tolerate a well-behaved-but-early-ending
-            // generator the same way `runToCompletion` does, rather than
-            // asserting here.
-            return;
-          }
-          const event = next.value;
+        try {
+          for (;;) {
+            const next = await iterator.next();
+            if (next.done) {
+              // The port's contract guarantees a "done" event before
+              // completion; tolerate a well-behaved-but-early-ending
+              // generator the same way `runToCompletion` does, rather than
+              // asserting here.
+              return;
+            }
+            const event = next.value;
 
-          if (event.type === "done" && event.result.isError && !yielded) {
-            const failure = turnFailureFromErrorResult(event.result);
+            if (event.type === "done" && event.result.isError && !yielded) {
+              const failure = turnFailureFromErrorResult(event.result);
+              const delay = this.policy.delayBeforeRetry(failure, attempt);
+              if (delay !== null) {
+                await this.sleep(delay);
+                attempt += 1;
+                // The error "done" event is intentionally never yielded here
+                // — see module doc on why a retried attempt's terminal event
+                // must not reach the caller.
+                continue attemptLoop;
+              }
+              // Policy exhausted (or declined): fall through and yield this
+              // "done" event as the turn's real outcome.
+            }
+
+            // F2 review fix: set unconditionally, including for a "done"
+            // event (success, or an exhausted/non-retryable failure) — not
+            // just for delta/tool events. Without this, a successful "done"
+            // left `yielded` false, so if the caller responded to that
+            // "done" with `iterator.throw(err)` instead of `.next()` (the
+            // injected throw lands right here, at `yield event`, and is
+            // caught by the `catch` below), the `!yielded` check would
+            // treat an already-delivered turn as retryable and silently
+            // re-run it — the exact silent-duplicate-output failure this
+            // class exists to prevent.
+            yielded = true;
+            yield event;
+            if (event.type === "done") {
+              return;
+            }
+          }
+        } catch (error) {
+          if (!yielded) {
+            const failure = turnFailureFromThrown(error);
             const delay = this.policy.delayBeforeRetry(failure, attempt);
             if (delay !== null) {
               await this.sleep(delay);
               attempt += 1;
-              // The error "done" event is intentionally never yielded here
-              // — see module doc on why a retried attempt's terminal event
-              // must not reach the caller.
               continue attemptLoop;
             }
-            // Policy exhausted (or declined): fall through and yield this
-            // "done" event as the turn's real outcome.
           }
-
-          if (event.type !== "done") {
-            yielded = true;
-          }
-          yield event;
-          if (event.type === "done") {
-            return;
-          }
+          // Either something was already yielded (no-silent-duplicate rule —
+          // pass through untouched) or the policy declined: rethrow as-is,
+          // the same failure the caller would have seen unwrapped.
+          throw error;
         }
-      } catch (error) {
-        if (!yielded) {
-          const failure = turnFailureFromThrown(error);
-          const delay = this.policy.delayBeforeRetry(failure, attempt);
-          if (delay !== null) {
-            await this.sleep(delay);
-            attempt += 1;
-            continue attemptLoop;
-          }
-        }
-        // Either something was already yielded (no-silent-duplicate rule —
-        // pass through untouched) or the policy declined: rethrow as-is,
-        // the same failure the caller would have seen unwrapped.
-        throw error;
+      } finally {
+        // F1 review fix: close THIS attempt's iterator on every exit path
+        // above — normal completion (`return` after a successful/exhausted
+        // "done"), a retry decision (`continue attemptLoop`, either
+        // channel), a non-retryable failure rethrown to the caller, and the
+        // outer generator being unwound by the consumer's own `.return()`
+        // (e.g. `handlers/chat.ts`'s `cancel()`, or a `for await...of`
+        // `break`) while suspended at `yield event` above. Scoped inside
+        // the loop body so it always targets the CURRENT attempt's
+        // `iterator`, never a stale one from an earlier attempt.
+        //
+        // In the real adapter (`ClaudeAgentSdkSession`), this `.return()`
+        // is what actually resumes its `for await (const message of
+        // rawMessages)` loop and tears down the underlying SDK `query()`
+        // subprocess — before this fix, nothing ever pulled or closed this
+        // iterator again after its last event was forwarded, so
+        // cancellation through this decorator was inert and every turn
+        // leaked an unreturned SDK generator (worse on a retried turn,
+        // which additionally abandons every attempt before the last).
+        //
+        // Known limitation, not fixed here: if the consumer calls
+        // `.return()` on the OUTER generator while THIS attempt is
+        // suspended in `await this.sleep(delay)` (backoff, not a `yield`),
+        // async generators queue that `.return()` behind whatever `.next()`
+        // call is already in flight — so this attempt still runs to its
+        // next suspension point, which starts attempt N+1's `iterator` and
+        // pulls from it at least once, before the queued return is actually
+        // delivered. That is inherent to how JS async generators serialize
+        // queued requests, not something `stream()` can special-case from
+        // the inside; this `finally` at least guarantees the wasted
+        // attempt's iterator is torn down promptly once that happens,
+        // rather than leaking indefinitely.
+        await iterator.return?.(undefined);
       }
     }
   }
