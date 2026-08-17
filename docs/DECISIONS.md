@@ -151,6 +151,108 @@ interface to be built against a guessed wire contract that its own fake then con
 an instance of AbortSignal`, thrown inside the SDK's `setMaxListeners`. Live verification runs
 via `bun run` until that combination changes.
 
+### D6b — Amendment: persistence inverts D6a's cleanup, and the sole deletion path is explicit
+
+**Context.** D6a's fix bound disposal to eviction: `ShadowConversation.dispose()` called
+`AgenticSession.close()`, which deleted the SDK transcript, every time the LRU registry pushed a
+handle out or the server shut down. That made the *cache's* lifetime the *transcript's*
+lifetime — an operator's conversation could vanish from `~/.claude/projects/` the moment 50
+other sessions crowded it out of memory, or the moment `Ctrl-C` was pressed, with no relation to
+whether the operator still wanted it. Tier 2's whole premise — survive a page reload, resume a
+session days later — needs the opposite: eviction and shutdown have to be cache events, not
+retirement events.
+
+**Decision.** `ShadowConversation.release()` (T2.4) replaces `dispose()`: it drops the in-memory
+handle and deletes nothing. `ConversationRegistry` eviction and `start.ts`'s SIGINT/SIGTERM path
+both call it now, never `close()`. The registry additionally refuses to evict a session with a
+running or queued turn — `size <= maxSize` weakens to `size <= maxSize + busy-count`, and
+`SessionService` re-runs eviction every time a turn settles, so a session skipped for being busy
+is released the moment it's safe rather than lingering. Server shutdown (T2.9) winds turns down
+first — `iterator.return()`, a `turn-boundary(ended, interrupted)` record written, appends
+flushed, bounded by a ~10s deadline — and only then releases every handle; nothing on disk is
+touched by any of it.
+
+The one path left that actually deletes a transcript is explicit and id-based:
+`AgenticSessionPort.deleteStoredSession(sdkSessionId)` (T2.4), wrapping the SDK's own
+`deleteSession` and driven by `SessionMeta.sdkSessionId` rather than by a live
+`ShadowConversation` handle. That's deliberate, not incidental: a cold session — evicted, or
+simply untouched since the last server restart — has no `AgenticSession` object for a
+handle-based `close()` to even be called on, so id-based deletion is the only shape that can
+reach it at all. `DELETE /api/sessions/:id` (T3.1, not yet built as this is written) is the
+intended caller, deleting the store directory and the SDK transcript together so neither
+outlives the other. Until T3.1 ships, nothing in this codebase calls `deleteStoredSession`
+outside its own tests — sessions accumulate under `~/.claude/projects/` with no operator-facing
+way to remove one. That is the honest, temporary cost of shipping Tier 2 ahead of Tier 3.
+
+**Two carve-outs stay non-persisted, on purpose.** Per-brief research sessions
+(`PerBriefResearchAgent`, T0.1) and the search provider's per-call sessions
+(`AgenticSearchProvider`, T0.5) both set `persistSession: false` — each is a single turn that is
+never resumed, so D6's reuse argument doesn't apply to them, and D6a's leak ("one orphaned
+transcript per brief, forever") is closed by never writing one rather than by remembering to
+delete it later.
+
+**The first-turn/failed-id rules are separate from the happy path above, and weaker than the
+plan's failure table implies.** `@shadow/model`'s `ClaudeAgentSdkSession` (T1.1) never latches an
+error result's `session_id` into `ownSessionId`: a 529 or any other `is_error: true` first turn
+must still look like a first turn to the retry that follows it, or the retry would try to resume
+a session that never actually completed. The CLI may nonetheless have written a transcript under
+that id before failing, so it is tracked in a separate `failedSessionIds` set for `close()` to
+clean up later — except when that id is exactly the handle's own `options.resume` target (the
+Tier 1 review's F3 fix): an errored *resumed* first turn echoes back the operator's own
+pre-existing id, not a new one this handle orphaned, and `close()` must never delete that.
+
+In principle this closes the loop — `close()` deletes `ownSessionId` and every
+`failedSessionIds` entry together. In practice, as of Tier 2, **nothing calls `close()`
+anymore**: `@shadow/model`'s own doc on it says plainly it is "deliberately not called
+automatically anywhere in this package," and the one call site left in `@shadow/agent` is the
+T2.3 resume-fallback path, on a handle already documented as a no-op for that exact shape (a
+thrown, pre-`"done"` failure latches neither `ownSessionId` nor `failedSessionIds`). And
+`SessionMeta.sdkSessionId` is only ever written from a *successful* `conversation.sessionId`
+(`finishTurn`'s patch), so a first turn that failed outright never gets one — meaning even T3.1's
+future `DELETE`, keyed off `meta.sdkSessionId`, has nothing to target. A genuinely failed first
+turn's transcript is therefore orphaned twice over today. The plan's failure table says "failed
+persisted transcripts tracked for cleanup"; as built, nothing performs that cleanup.
+
+**The fallback summary stays out of the citable transcript (D19/D23).** T2.3's in-conversation
+resume fallback — a resumed first turn's SDK transcript is genuinely gone — recreates the session
+without `resume` and prepends a deterministic summary to the *model prompt only*, never to the
+recorded operator transcript source, which has already run exactly once by the time the fallback
+fires. This is D19/D23's rule applied to recovered context specifically: an `operator`-kind claim
+must cite a real, verified session turn, and a summary Shadow itself assembled from prior turns
+is not one — smuggling it into the transcript source would let Shadow cite itself as the
+operator.
+
+**T0.4's cost measurement is pending, not landed.** The design's claim that per-brief agents
+"skip re-paying the ~18k-token preamble" assumes Anthropic's server-side prompt cache stays warm
+*across* genuinely separate sessions sharing a system prompt — D6's own measurement was of a
+single session, not this cross-session case. `packages/research/src/live-brief-cost-smoke.test.ts`
+(T0.4) is a live-gated smoke test built to measure it directly: two fresh, non-persisted,
+research-shaped sessions a short gap apart, comparing the second session's `cacheReadTokens`
+against its `cacheWriteTokens`. It is skipped by default (`SHADOW_LIVE_TEST` unset) and, the one
+time it was run while landing T0.4, produced a **confounded** result rather than a trustworthy
+number: run from inside a nested Claude Code (Remote) session, both "fresh" sessions reported the
+*same* `sessionId` as the outer session's own — the container appears to route nested `query()`
+calls through one ambient session rather than spawning genuinely independent ones, which makes
+any cache-read number from that run unusable as evidence either way. The real number is still
+unmeasured. To obtain it:
+
+```
+SHADOW_LIVE_TEST=1 bun test packages/research/src/live-brief-cost-smoke.test.ts
+```
+
+run on a machine authenticated via `claude login` directly — not inside a nested Claude Code
+session — with `ANTHROPIC_API_KEY` unset. Until that runs clean, T0.5's stateless per-call fix
+ships on the strength of "correct either way": if the preamble turns out not to be cache-eligible
+cross-session, the recorded fallback is an internal FIFO queue on the search provider instead of
+today's one-shot-session default — a decision this amendment defers, not one it makes.
+
+**Cost.** Sessions accumulate under `~/.claude/projects/` indefinitely with no way to remove one
+until T3.1 ships `DELETE /api/sessions/:id` — trading D6a's silent-leak-on-every-eviction failure
+mode for a visible, bounded one (disk, not correctness), which is the right trade for
+keep-forever retention but a real cost until Tier 3 lands. Failed first-turn transcripts are a
+smaller, separate leak that Tier 3 alone won't close, since nothing persists their id anywhere a
+delete path could ever reach.
+
 ---
 
 ## D7 — No build step: Bun runs TypeScript source directly
