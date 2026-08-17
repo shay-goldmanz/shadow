@@ -69,6 +69,8 @@ export type {
   StructuredGenerationRequest,
   StructuredGenerationResult,
 } from "./ports/structured-generation.ts";
+export type { SleepFn } from "./retrying-agentic-session.ts";
+export { RetryingAgenticSession, realSleep } from "./retrying-agentic-session.ts";
 export type { ToolDefinition, ToolResult, ToolServerHandle } from "./tools.ts";
 export { createToolServer, defineTool } from "./tools.ts";
 export type { TokenUsage } from "./usage.ts";
