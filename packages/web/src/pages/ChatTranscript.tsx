@@ -266,5 +266,18 @@ function TranscriptItemView({
           {item.retry && onRetry && <RetryButton text={item.retry.text} onRetry={onRetry} />}
         </div>
       );
+
+    // T2.8: a turn that ended with no closing signal at all — the wire's
+    // `turn.interrupted` event, or `chat-transcript.ts`'s
+    // `markInterruptedIfPending` synthesizing the same shape for a crash
+    // mid-append that never even wrote a boundary record.
+    case "interrupted":
+      return (
+        <div className="research-event research-event--error" role="alert">
+          <Badge tone="clay">Interrupted</Badge>{" "}
+          <span>Shadow stopped mid-turn before finishing.</span>
+          {item.retry && onRetry && <RetryButton text={item.retry.text} onRetry={onRetry} />}
+        </div>
+      );
   }
 }

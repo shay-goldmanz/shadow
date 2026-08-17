@@ -1,9 +1,18 @@
 import "../test/dom-setup.ts";
 import { afterEach, describe, expect, test } from "bun:test";
-import { cleanup, fireEvent, render } from "@testing-library/react";
+import { cleanup, fireEvent, render, within } from "@testing-library/react";
 import { FakeApiClient } from "../api/fake-client.ts";
-import type { ChatStreamEvent } from "../api/types.ts";
+import type { ChatStreamEvent, SessionEventEnvelope } from "../api/types.ts";
 import { ChatPage } from "./ChatPage.tsx";
+
+/** `FakeApiClient`, but `getSessionEvents` yields a fixed, controlled sequence then throws — standing in for a follow connection that drops mid-turn (T2.8's "stream ends with no boundary at all" shape). Subclassed (not spread) so every other `ShadowApiClient` method stays real (`FakeApiClient`'s prototype methods aren't own-enumerable, so `{...instance}` would silently drop them). */
+class DroppingSessionEventsClient extends FakeApiClient {
+  override async *getSessionEvents(): AsyncGenerator<SessionEventEnvelope> {
+    yield { event: "operator", data: { text: "please finish this" }, seq: 1 };
+    yield { event: "text", data: { delta: "partway through..." }, seq: 2 };
+    throw new Error("connection dropped");
+  }
+}
 
 afterEach(() => cleanup());
 
@@ -64,6 +73,42 @@ describe("ChatPage", () => {
     ]);
   });
 
+  test("T2.8: a new chat navigates (replacing the current URL) to the id-carrying route once the first send mints a session id", async () => {
+    const client = new FakeApiClient({
+      streamDelayMs: 0,
+      chatScript: (sessionId, input): ChatStreamEvent[] => [
+        { event: "session", data: { sessionId } },
+        { event: "operator", data: { text: input.message } },
+        { event: "text", data: { delta: "ok" } },
+        { event: "done", data: {} },
+      ],
+    });
+    const navCalls: unknown[] = [];
+    const { getByLabelText, getByText, findByText } = render(
+      <ChatPage
+        client={client}
+        slug="design-inspiration"
+        navigate={(route, options) => navCalls.push({ route, options })}
+      />,
+    );
+
+    send(getByLabelText, getByText, "first message");
+    await findByText("ok");
+
+    expect(navCalls).toEqual([
+      {
+        route: { name: "chat", slug: "design-inspiration", sessionId: "sess_1" },
+        options: { replace: true },
+      },
+    ]);
+
+    // A second send on the SAME mount does not navigate again — the id is
+    // already known.
+    send(getByLabelText, getByText, "second message");
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(navCalls).toHaveLength(1);
+  });
+
   test("echoes the session id from the first turn on the next message (D6 session reuse)", async () => {
     const seenSessionIds: (string | undefined)[] = [];
     const client = new FakeApiClient({
@@ -72,6 +117,7 @@ describe("ChatPage", () => {
         seenSessionIds.push(input.sessionId);
         const events: ChatStreamEvent[] = [
           { event: "session", data: { sessionId } },
+          { event: "operator", data: { text: input.message } },
           { event: "text", data: { delta: "ok" } },
           { event: "done", data: {} },
         ];
@@ -103,12 +149,14 @@ describe("ChatPage", () => {
         if (calls === 1) {
           const events: ChatStreamEvent[] = [
             { event: "session", data: { sessionId } },
+            { event: "operator", data: { text: input.message } },
             { event: "error", data: { message: "Upstream overloaded", code: "shadow_turn_error" } },
           ];
           return events;
         }
         const events: ChatStreamEvent[] = [
           { event: "session", data: { sessionId } },
+          { event: "operator", data: { text: input.message } },
           { event: "text", data: { delta: "recovered" } },
           { event: "done", data: {} },
         ];
@@ -155,5 +203,133 @@ describe("ChatPage", () => {
     send(getByLabelText, getByText, "hello");
     const textarea = getByLabelText("Message Shadow") as HTMLTextAreaElement;
     expect(textarea.disabled).toBe(true);
+  });
+
+  // T2.8: the operator wire event is the single source of user bubbles now
+  // — ChatPage no longer appends its own local one on send, so a message
+  // renders exactly once regardless of what else the turn does.
+  test("T2.8: exactly one user bubble is rendered per send (operator event, no local append)", async () => {
+    const client = new FakeApiClient({ streamDelayMs: 0 });
+    const { getByLabelText, getByText, findByText } = render(
+      <ChatPage client={client} slug="design-inspiration" navigate={() => {}} />,
+    );
+
+    send(getByLabelText, getByText, "I believe in Linear and Notion's UI, and Epoch's one-pagers.");
+    await findByText("Audit failed");
+
+    expect(document.querySelectorAll(".chat-transcript__item--user").length).toBe(1);
+    expect(document.querySelector(".chat-transcript__item--user")?.textContent).toContain(
+      "I believe in Linear and Notion's UI, and Epoch's one-pagers.",
+    );
+  });
+
+  test("T2.8: mounting an existing session id replays its stored transcript via follow", async () => {
+    const client = new FakeApiClient({ streamDelayMs: 0 });
+    // Seed the session directly through the client — standing in for
+    // history from an earlier page load, before this `ChatPage` ever
+    // mounted.
+    for await (const _event of client.chat({
+      volumeSlug: "design-inspiration",
+      sessionId: "sess_seeded",
+      message: "seeded belief",
+    })) {
+      // drain
+    }
+
+    const { findByText } = render(
+      <ChatPage
+        client={client}
+        slug="design-inspiration"
+        sessionId="sess_seeded"
+        navigate={() => {}}
+      />,
+    );
+
+    expect(await findByText("seeded belief")).toBeTruthy();
+    expect(await findByText("Audit failed")).toBeTruthy();
+    expect(document.querySelectorAll(".chat-transcript__item--user").length).toBe(1);
+  });
+
+  test("T2.8: a passive tab watching a session sees another tab's later turn appear live via follow", async () => {
+    let calls = 0;
+    const client = new FakeApiClient({
+      streamDelayMs: 0,
+      chatScript: (sessionId, input): ChatStreamEvent[] => {
+        calls += 1;
+        return [
+          { event: "session", data: { sessionId } },
+          { event: "operator", data: { text: input.message } },
+          { event: "text", data: { delta: `reply ${calls}` } },
+          { event: "done", data: {} },
+        ];
+      },
+    });
+    // Seed the session so both tabs can mount at a known id.
+    for await (const _event of client.chat({
+      volumeSlug: "design-inspiration",
+      sessionId: "sess_shared",
+      message: "opening message",
+    })) {
+      // drain
+    }
+
+    // Two independent mounts, both attached to `document.body` — every
+    // query below is scoped with `within(...)` so a tab's assertions can
+    // never accidentally match the OTHER tab's DOM tree.
+    const tabA = render(
+      <ChatPage
+        client={client}
+        slug="design-inspiration"
+        sessionId="sess_shared"
+        navigate={() => {}}
+      />,
+    );
+    const a = within(tabA.container);
+    expect(await a.findByText("reply 1")).toBeTruthy();
+
+    const tabB = render(
+      <ChatPage
+        client={client}
+        slug="design-inspiration"
+        sessionId="sess_shared"
+        navigate={() => {}}
+      />,
+    );
+    const b = within(tabB.container);
+    expect(await b.findByText("reply 1")).toBeTruthy(); // tabB's own replay catches up first
+
+    send(
+      (label) => b.getByLabelText(label),
+      (text) => b.getByText(text),
+      "message from tab B",
+    );
+    expect(await b.findByText("reply 2")).toBeTruthy();
+
+    // tabA never sent anything — its input was never disabled by tab B's
+    // turn (PLAN.md: "input disabled while THIS tab's own turn streams") —
+    // but the new content still just appears, via tabA's own follow
+    // subscription to the same session.
+    expect(await a.findByText("message from tab B")).toBeTruthy();
+    expect(await a.findByText("reply 2")).toBeTruthy();
+    const tabAInput = a.getByLabelText("Message Shadow") as HTMLTextAreaElement;
+    expect(tabAInput.disabled).toBe(false);
+  });
+
+  test("T2.8: a connection that drops mid-turn renders an interrupted marker with Retry", async () => {
+    const dropping = new DroppingSessionEventsClient({ streamDelayMs: 0 });
+
+    const { findByText } = render(
+      <ChatPage
+        client={dropping}
+        slug="design-inspiration"
+        sessionId="sess_dropped"
+        navigate={() => {}}
+      />,
+    );
+
+    expect(await findByText("please finish this")).toBeTruthy();
+    const retryButton = await findByText("Retry last message");
+    expect(retryButton).toBeTruthy();
+    expect(document.querySelector(".chat-transcript__item--interrupted")).toBeTruthy();
   });
 });

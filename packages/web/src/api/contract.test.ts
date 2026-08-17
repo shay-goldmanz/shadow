@@ -28,14 +28,10 @@ import { describe, expect, test } from "bun:test";
 import type { WithApiOptions } from "../../../api/src/test-helpers.ts";
 import { withApi, withScriptedApi } from "../../../api/src/test-helpers.ts";
 import { parseChapterBody } from "../components/chapter-body.ts";
-import {
-  appendUserMessage,
-  applyStreamEvent,
-  beginStreaming,
-  INITIAL_CHAT_STATE,
-} from "../pages/chat-transcript.ts";
+import { applyStreamEvent, beginStreaming, INITIAL_CHAT_STATE } from "../pages/chat-transcript.ts";
+import { FakeApiClient } from "./fake-client.ts";
 import { HttpApiClient } from "./http-client.ts";
-import { ApiError, type VolumeSummary } from "./types.ts";
+import { ApiError, type ChatStreamEvent, type VolumeSummary } from "./types.ts";
 
 describe("contract: HttpApiClient against a real @shadow/api server", () => {
   test("volumes: create, list, and get round-trip with the real wire shape (no chapterCount, ever)", async () => {
@@ -165,7 +161,11 @@ describe("contract: HttpApiClient against a real @shadow/api server", () => {
       const client = new HttpApiClient(`${baseUrl}/api`);
       await client.createVolume({ slug: "chat-craft", title: "Chat Craft" });
 
-      let state = beginStreaming(appendUserMessage(INITIAL_CHAT_STATE, OPERATOR_MESSAGE));
+      // T2.8: the `operator` wire event is the single source of the user
+      // bubble now — no local seed here any more (that would double it,
+      // one from this line and one from the real server's own `operator`
+      // event on the stream below).
+      let state = beginStreaming(INITIAL_CHAT_STATE);
       const seenEvents: string[] = [];
       for await (const event of client.chat({
         volumeSlug: "chat-craft",
@@ -188,9 +188,16 @@ describe("contract: HttpApiClient against a real @shadow/api server", () => {
       // module doc) — assert at least one arrived, so this test would fail
       // outright (not just silently pass) if the scripted turn stopped
       // exercising them.
+      expect(seenEvents).toContain("operator");
       expect(seenEvents).toContain("audit");
       expect(seenEvents).toContain("chapter.published");
       expect(state.streaming).toBe(false);
+
+      // Exactly one user bubble, minted from the real server's `operator`
+      // event — the T2.8 property this contract test exists to pin against
+      // the real wire, not just the fake.
+      const userItems = state.items.filter((item) => item.type === "user");
+      expect(userItems).toEqual([expect.objectContaining({ text: OPERATOR_MESSAGE })]);
 
       const auditItem = state.items.find((item) => item.type === "audit");
       expect(auditItem).toMatchObject({ passed: true });
@@ -236,6 +243,138 @@ describe("contract: HttpApiClient against a real @shadow/api server", () => {
       const client = new HttpApiClient(`${baseUrl}/api`);
       const volumes = await client.listVolumes();
       expect(volumes.map((v) => v.slug)).toContain("disconnect-test");
+    });
+  });
+
+  describe("T2.8: getSessionEvents — GET /api/sessions/:id/events", () => {
+    test("replays a turn's transcript via HttpApiClient, seq-stamped, ending with done", async () => {
+      const respond: WithApiOptions["respond"] = () => ({ text: "Full reply text." });
+
+      await withScriptedApi({ respond }, async ({ baseUrl }) => {
+        const client = new HttpApiClient(`${baseUrl}/api`);
+        await client.createVolume({ slug: "session-events-craft", title: "Session Events" });
+
+        let sessionId: string | undefined;
+        for await (const event of client.chat({
+          volumeSlug: "session-events-craft",
+          message: "Hello Shadow",
+        })) {
+          if (event.event === "session") sessionId = event.data.sessionId;
+        }
+        if (!sessionId) throw new Error("expected a sessionId from the chat stream");
+
+        const replayed: string[] = [];
+        const seqs: (number | undefined)[] = [];
+        for await (const envelope of client.getSessionEvents(sessionId)) {
+          replayed.push(envelope.event);
+          seqs.push(envelope.seq);
+        }
+
+        expect(replayed).toEqual(["operator", "text", "done"]);
+        // Every record-derived event carries a seq; `done` (not derived
+        // from any one record) does not.
+        expect(seqs[0]).toBeGreaterThan(0);
+        expect(seqs[1]).toBeGreaterThan(seqs[0] as number);
+        expect(seqs[2]).toBeUndefined();
+      });
+    });
+
+    test("fromSeq dedupes on reconnect: only events at or after the given seq come back (T2.7's inclusive contract)", async () => {
+      const respond: WithApiOptions["respond"] = (_prompt, { turnIndex }) =>
+        turnIndex === 0 ? { text: "first reply" } : { text: "second reply" };
+
+      await withScriptedApi({ respond }, async ({ baseUrl }) => {
+        const client = new HttpApiClient(`${baseUrl}/api`);
+        await client.createVolume({ slug: "reconnect-craft", title: "Reconnect" });
+
+        let sessionId: string | undefined;
+        for await (const event of client.chat({
+          volumeSlug: "reconnect-craft",
+          message: "first message",
+        })) {
+          if (event.event === "session") sessionId = event.data.sessionId;
+        }
+        if (!sessionId) throw new Error("expected a sessionId from the chat stream");
+        for await (const _event of client.chat({ sessionId, message: "second message" })) {
+          // drain
+        }
+
+        // A client that saw everything through some seq N reconnects with
+        // fromSeq = N + 1 — simulated here by first reading the full
+        // transcript once to learn where the second turn's `operator`
+        // event landed.
+        const full: { readonly event: string; readonly seq: number | undefined }[] = [];
+        for await (const envelope of client.getSessionEvents(sessionId)) {
+          full.push({ event: envelope.event, seq: envelope.seq });
+        }
+        const operatorSeqs = full.filter((e) => e.event === "operator").map((e) => e.seq);
+        expect(operatorSeqs).toHaveLength(2);
+        const secondOperatorSeq = operatorSeqs[1];
+        if (secondOperatorSeq === undefined) throw new Error("expected the second operator's seq");
+
+        const reconnected: string[] = [];
+        const seqs: (number | undefined)[] = [];
+        for await (const envelope of client.getSessionEvents(sessionId, {
+          fromSeq: secondOperatorSeq,
+        })) {
+          reconnected.push(envelope.event);
+          seqs.push(envelope.seq);
+        }
+
+        // Only the second turn — the first turn's lower-seq events never
+        // reappear.
+        expect(reconnected).toEqual(["operator", "text", "done"]);
+        expect(seqs.every((seq) => seq === undefined || seq >= (secondOperatorSeq as number))).toBe(
+          true,
+        );
+      });
+    });
+  });
+
+  describe("T2.8: FakeApiClient's getSessionEvents behaves like HttpApiClient's for an equivalent turn", () => {
+    test("replay-only produces the same event-type sequence, shaped identically, on both clients", async () => {
+      const respond: WithApiOptions["respond"] = () => ({ text: "reply text" });
+
+      await withScriptedApi({ respond }, async ({ baseUrl }) => {
+        const real = new HttpApiClient(`${baseUrl}/api`);
+        await real.createVolume({ slug: "parity-craft", title: "Parity" });
+
+        let realSessionId: string | undefined;
+        for await (const event of real.chat({ volumeSlug: "parity-craft", message: "hello" })) {
+          if (event.event === "session") realSessionId = event.data.sessionId;
+        }
+        if (!realSessionId) throw new Error("expected a sessionId");
+
+        const fake = new FakeApiClient({
+          streamDelayMs: 0,
+          chatScript: (sessionId, input): ChatStreamEvent[] => [
+            { event: "session", data: { sessionId } },
+            { event: "operator", data: { text: input.message } },
+            { event: "text", data: { delta: "reply text" } },
+            { event: "done", data: {} },
+          ],
+        });
+        let fakeSessionId: string | undefined;
+        for await (const event of fake.chat({ volumeSlug: "parity-craft", message: "hello" })) {
+          if (event.event === "session") fakeSessionId = event.data.sessionId;
+        }
+        if (!fakeSessionId) throw new Error("expected a sessionId");
+
+        const realReplay: string[] = [];
+        for await (const envelope of real.getSessionEvents(realSessionId)) {
+          realReplay.push(envelope.event);
+        }
+        const fakeReplay: string[] = [];
+        for await (const envelope of fake.getSessionEvents(fakeSessionId)) {
+          fakeReplay.push(envelope.event);
+        }
+
+        // Same wire vocabulary and order for the same interaction — the
+        // contract `ChatPage` relies on (`applyStreamEvent` doesn't care
+        // which client produced the event).
+        expect(fakeReplay).toEqual(realReplay);
+        expect(realReplay).toEqual(["operator", "text", "done"]);
+      });
     });
   });
 });

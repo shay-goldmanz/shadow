@@ -58,6 +58,22 @@
  * `operator` is new (T2.2) — no `ShadowEvent` produces it; it comes from
  * the store-level `operator-message` record, which the live path (`chat.ts`)
  * synthesizes itself at the start of every turn (see `operatorMessageEvent`).
+ * `turn.interrupted` is new (T2.8) — the ONE `turn-boundary` phase/endReason
+ * combination that gets a wire representation: `ended`/`interrupted`
+ * (T2.9's graceful-shutdown boundary, or any future source of the same
+ * shape). `started`, `ended/completed`, and `ended/error` still map to `[]`
+ * here — `started`/`completed` need no client-visible marker (the live path
+ * signals completion via `done`, driven by the turn's generator ending, not
+ * by this mapping; replay has nothing to mark for a turn that simply
+ * finished), and `ended/error`'s content is carried by `errorEventForBoundary`
+ * instead (below), not this function. `wireEventsForLive` inherits this
+ * unchanged, but `chat.ts`'s live path never actually reaches it for
+ * `turn-boundary` records at all (it special-cases them via
+ * `errorEventForBoundary` alone and `continue`s) — `turn.interrupted` is
+ * therefore only ever observed through T2.7's replay+follow endpoint, which
+ * runs every record through this module's `recordToWireEvents` uniformly.
+ * See `../../web/src/pages/chat-transcript.ts`'s `"turn.interrupted"` case
+ * for the client side: a stalled turn's Retry affordance.
  */
 
 import type { ShadowEvent } from "@shadow/agent";
@@ -345,10 +361,24 @@ export function wireEventsFromStored(event: StoredSessionEvent): readonly WireEv
       // maps the shape.
       return [{ event: "error", data: { message: event.error, code: "shadow_turn_error" } }];
 
-    case "turn-boundary":
-      // No wire representation (yet) — `docs/API.md`'s SSE table has no
-      // row for it. Store-level bookkeeping only (T2.1/T2.5).
+    case "turn-boundary": {
+      // `started`/`ended-completed`/`ended-error` have no wire
+      // representation — `docs/API.md`'s SSE table has no row for any
+      // `turn-boundary` phase, `ended/error`'s content is carried by
+      // `errorEventForBoundary` instead (this module's doc), and
+      // `started`/`ended-completed` need no client marker at all. The one
+      // exception (T2.8): `ended/interrupted` — the sole shape T2.1's
+      // stored transcript can carry that otherwise leaves a replaying
+      // client no way to ever learn a turn stalled (no further events for
+      // it are ever coming). `UnknownStoredEvent`'s index-signature overlap
+      // (documented above, `research-completed`/`chapter-audit`) is why
+      // this narrows explicitly rather than a plain property read.
+      const boundary = event as Extract<StoredSessionEvent, { readonly type: "turn-boundary" }>;
+      if (boundary.phase === "ended" && boundary.endReason === "interrupted") {
+        return [{ event: "turn.interrupted", data: {} }];
+      }
       return [];
+    }
 
     default:
       // `UnknownStoredEvent` (forward compat — a `type` this build doesn't

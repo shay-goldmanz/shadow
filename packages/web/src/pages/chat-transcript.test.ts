@@ -4,6 +4,7 @@ import {
   appendUserMessage,
   applyStreamEvent,
   INITIAL_CHAT_STATE,
+  markInterruptedIfPending,
   type TranscriptItem,
 } from "./chat-transcript.ts";
 
@@ -61,20 +62,36 @@ describe("chat transcript reducer", () => {
     expect(state.items[0]).toMatchObject({ type: "assistant", text: "Hello, operator." });
   });
 
-  // F7 review fix: the reducer's exhaustive `switch` (`event satisfies
-  // never`) means `operator` MUST have a case or this file fails to
-  // compile — this test pins its *behavior*, not just its existence: it's
-  // a defensive default that leaves the transcript untouched, because
-  // `ChatPage` already appends its own local "user" item the instant the
-  // operator hits send (T2.8 is expected to make this wire event the real
-  // source of truth instead; until then, rendering both would duplicate
-  // the bubble).
-  test("an operator event is swallowed (no transcript item, no state change) — ChatPage already appends its own local user bubble", () => {
-    const before = appendUserMessage(INITIAL_CHAT_STATE, "Hi Shadow.");
-    const after = applyStreamEvent(before, { event: "operator", data: { text: "Hi Shadow." } });
+  // T2.8: the `operator` wire event is now the SINGLE source of user
+  // bubbles — `ChatPage` no longer appends its own local one on send (the
+  // F7 review fix's original swallow existed only because that local
+  // append already covered it). Minting here means the sending tab renders
+  // its own message exactly once, from the same event a second live viewer
+  // or a replayed session sees.
+  test("an operator event mints a user transcript item and marks the turn pending", () => {
+    const after = applyStreamEvent(INITIAL_CHAT_STATE, {
+      event: "operator",
+      data: { text: "Hi Shadow." },
+    });
 
-    expect(after).toEqual(before);
     expect(types(after.items)).toEqual(["user"]);
+    expect(after.items[0]).toMatchObject({ type: "user", text: "Hi Shadow." });
+    expect(after.turnPending).toBe(true);
+  });
+
+  test("two operator events mint two distinct user items — no dedup, no double-append", () => {
+    let state = applyStreamEvent(INITIAL_CHAT_STATE, {
+      event: "operator",
+      data: { text: "first" },
+    });
+    state = applyStreamEvent(state, { event: "done", data: {} });
+    state = applyStreamEvent(state, { event: "operator", data: { text: "second" } });
+
+    expect(types(state.items)).toEqual(["user", "user"]);
+    expect(state.items.map((i) => (i.type === "user" ? i.text : undefined))).toEqual([
+      "first",
+      "second",
+    ]);
   });
 
   test("a chapter.restated event is kept as its own visible item, not swallowed", () => {
@@ -373,5 +390,182 @@ describe("chat transcript reducer", () => {
 
     expect(types(state.items)).toEqual(["assistant", "research.started", "assistant"]);
     expect(state.items[2]).toMatchObject({ text: "second" });
+  });
+
+  describe("T2.8: replay = live for the same script", () => {
+    test("a stream that reconstructs an assistant reply as one replayed `text` event ends up with the same transcript a live, chunk-by-chunk stream produces", () => {
+      // The live path ("chat.ts") streams several `text-delta` chunks as
+      // Shadow produces them; replay ("session-events.ts") has no live
+      // delta history to lean on, so it reconstructs the SAME reply as one
+      // `text` event carrying the full accumulated string
+      // (`@shadow/api`'s `event-mapping.ts`, the `assistant-message` case).
+      // Both are just `ChatStreamEvent`s to this reducer — the coalescing
+      // in the `"text"` case already handles either shape identically.
+      const prefix: ChatStreamEvent[] = [
+        { event: "session", data: { sessionId: "sess_1" } },
+        { event: "operator", data: { text: "believe X and write it up" } },
+      ];
+      const suffix: ChatStreamEvent[] = [
+        {
+          event: "research.started",
+          data: { briefId: "b1", brief: { volume: "v", goal: "How does X work?" } },
+        },
+        { event: "research.finished", data: { briefId: "b1", findings: [] } },
+        { event: "chapter.drafted", data: { volume: "v", chapter: "c" } },
+        { event: "audit", data: { volume: "v", chapter: "c", passed: true, repairs: [] } },
+        { event: "chapter.published", data: { volume: "v", chapter: "c" } },
+        { event: "done", data: {} },
+      ];
+
+      const liveEvents: ChatStreamEvent[] = [
+        ...prefix,
+        { event: "text", data: { delta: "Got it — " } },
+        { event: "text", data: { delta: "I'll look into it. " } },
+        { event: "text", data: { delta: "Drafting now." } },
+        ...suffix,
+      ];
+      const replayEvents: ChatStreamEvent[] = [
+        ...prefix,
+        { event: "text", data: { delta: "Got it — I'll look into it. Drafting now." } },
+        ...suffix,
+      ];
+
+      const live = liveEvents.reduce(applyStreamEvent, INITIAL_CHAT_STATE);
+      const replay = replayEvents.reduce(applyStreamEvent, INITIAL_CHAT_STATE);
+
+      expect(replay).toEqual(live);
+      expect(types(live.items)).toEqual([
+        "user",
+        "assistant",
+        "research.started",
+        "research.finished",
+        "chapter.drafted",
+        "audit",
+        "chapter.published",
+      ]);
+      expect(live.items[1]).toMatchObject({
+        type: "assistant",
+        text: "Got it — I'll look into it. Drafting now.",
+      });
+    });
+  });
+
+  describe("T2.8: truncated-turn rendering (both shapes) with retry", () => {
+    test("an explicit turn.interrupted event (wire signal) renders an interrupted marker, retryable", () => {
+      let state = applyStreamEvent(INITIAL_CHAT_STATE, {
+        event: "operator",
+        data: { text: "please finish this" },
+      });
+      state = applyStreamEvent(state, { event: "text", data: { delta: "partway through" } });
+      state = applyStreamEvent(state, { event: "turn.interrupted", data: {} });
+
+      expect(types(state.items)).toEqual(["user", "assistant", "interrupted"]);
+      expect(state.items[2]).toMatchObject({
+        type: "interrupted",
+        retry: { text: "please finish this" },
+      });
+      expect(state.turnPending).toBe(false);
+      expect(state.streaming).toBe(false);
+    });
+
+    test("a stream that ends with no boundary at all — markInterruptedIfPending synthesizes the same marker", () => {
+      let state = applyStreamEvent(INITIAL_CHAT_STATE, {
+        event: "operator",
+        data: { text: "please finish this too" },
+      });
+      state = applyStreamEvent(state, { event: "text", data: { delta: "still going" } });
+      // No `done`/`error`/`turn.interrupted` ever arrives — the stream just
+      // stopped (T2.1's torn-tail shape: a crash mid-append never even
+      // wrote a boundary record for the wire to carry). Whoever noticed the
+      // connection end calls this.
+      state = markInterruptedIfPending(state);
+
+      expect(types(state.items)).toEqual(["user", "assistant", "interrupted"]);
+      expect(state.items[2]).toMatchObject({
+        type: "interrupted",
+        retry: { text: "please finish this too" },
+      });
+      expect(state.turnPending).toBe(false);
+    });
+
+    test("both shapes produce an identical transcript for the same turn", () => {
+      const base = applyStreamEvent(
+        applyStreamEvent(INITIAL_CHAT_STATE, {
+          event: "operator",
+          data: { text: "same turn" },
+        }),
+        { event: "text", data: { delta: "same text" } },
+      );
+
+      const viaWireEvent = applyStreamEvent(base, { event: "turn.interrupted", data: {} });
+      const viaLocalInference = markInterruptedIfPending(base);
+
+      expect(viaWireEvent).toEqual(viaLocalInference);
+    });
+
+    test("markInterruptedIfPending is a no-op once a turn has already resolved (done, error, or a prior turn.interrupted)", () => {
+      let done = applyStreamEvent(INITIAL_CHAT_STATE, {
+        event: "operator",
+        data: { text: "x" },
+      });
+      done = applyStreamEvent(done, { event: "done", data: {} });
+      expect(markInterruptedIfPending(done)).toEqual(done);
+
+      let errored = applyStreamEvent(INITIAL_CHAT_STATE, {
+        event: "operator",
+        data: { text: "y" },
+      });
+      errored = applyStreamEvent(errored, {
+        event: "error",
+        data: { message: "boom", code: "shadow_turn_error" },
+      });
+      expect(markInterruptedIfPending(errored)).toEqual(errored);
+
+      // Calling it a second time after it already fired is also a no-op —
+      // `turnPending` is already false.
+      let interrupted = applyStreamEvent(INITIAL_CHAT_STATE, {
+        event: "operator",
+        data: { text: "z" },
+      });
+      interrupted = applyStreamEvent(interrupted, { event: "turn.interrupted", data: {} });
+      expect(markInterruptedIfPending(interrupted)).toEqual(interrupted);
+    });
+
+    test("markInterruptedIfPending is a no-op before any turn has started", () => {
+      expect(markInterruptedIfPending(INITIAL_CHAT_STATE)).toEqual(INITIAL_CHAT_STATE);
+    });
+
+    test("an interrupted marker is not retryable once a chapter already published for this turn (F4-equivalent gating, same rule as error)", () => {
+      let state = applyStreamEvent(INITIAL_CHAT_STATE, {
+        event: "operator",
+        data: { text: "write it up" },
+      });
+      state = applyStreamEvent(state, {
+        event: "chapter.published",
+        data: { volume: "v", chapter: "c" },
+      });
+      state = applyStreamEvent(state, { event: "turn.interrupted", data: {} });
+
+      expect(state.items[state.items.length - 1]).toMatchObject({
+        type: "interrupted",
+        retry: undefined,
+      });
+    });
+
+    test("a fresh send supersedes (clears) a prior interrupted item's retry affordance", () => {
+      let state = applyStreamEvent(INITIAL_CHAT_STATE, {
+        event: "operator",
+        data: { text: "first try" },
+      });
+      state = applyStreamEvent(state, { event: "turn.interrupted", data: {} });
+      const interruptedId = state.items[state.items.length - 1]?.id;
+      expect(state.items.find((i) => i.id === interruptedId)).toMatchObject({
+        retry: { text: "first try" },
+      });
+
+      state = appendUserMessage(state, "first try");
+
+      expect(state.items.find((i) => i.id === interruptedId)).toMatchObject({ retry: undefined });
+    });
   });
 });

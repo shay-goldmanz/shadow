@@ -208,13 +208,24 @@ describe("wireEventsFromStored — golden mapping table", () => {
     ]);
   });
 
-  test("turn-boundary (started/ended) -> no wire representation", () => {
+  test("turn-boundary (started/ended-completed/ended-error) -> no wire representation", () => {
     expect(wireEventsFromStored(turnBoundaryStarted())).toEqual([]);
     expect(wireEventsFromStored(turnBoundaryEnded("completed"))).toEqual([]);
-    expect(wireEventsFromStored(turnBoundaryEnded("interrupted"))).toEqual([]);
+    // ended/error's content is carried by `errorEventForBoundary` instead
+    // (tested separately, below) — `wireEventsFromStored` itself still maps
+    // it to nothing.
     expect(
       wireEventsFromStored(turnBoundaryEnded("error", { message: "boom", code: "internal_error" })),
     ).toEqual([]);
+  });
+
+  // T2.8: the one `turn-boundary` shape that DOES get a wire event — a
+  // replaying client has no other way to learn a turn stalled with no
+  // further events ever coming for it (`event-mapping.ts`'s module doc).
+  test("turn-boundary (ended/interrupted) -> turn.interrupted", () => {
+    expect(wireEventsFromStored(turnBoundaryEnded("interrupted"))).toEqual([
+      { event: "turn.interrupted", data: {} },
+    ]);
   });
 
   test("turnBoundaryEnded('error', ...) requires an error payload", () => {

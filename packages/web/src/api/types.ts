@@ -545,6 +545,15 @@ export type ChatStreamEvent =
   // for the full live/replay story.
   | { readonly event: "operator"; readonly data: { readonly text: string } }
   | { readonly event: "text"; readonly data: { readonly delta: string } }
+  // T2.8's new wire event — `GET /api/sessions/:id/events` (T2.7) only, the
+  // one `turn-boundary` shape that gets a wire representation
+  // (`@shadow/api`'s `event-mapping.ts` module doc): a turn stalled with no
+  // further events ever coming for it. `POST /api/chat` never sends this —
+  // its own stream just ends (a client-side signal `chat-transcript.ts`'s
+  // `markInterruptedIfPending` covers separately, for the shape T2.1's
+  // torn-tail tolerance can produce that never even wrote a boundary
+  // record, so the wire has nothing to carry at all).
+  | { readonly event: "turn.interrupted"; readonly data: Record<string, never> }
   | {
       readonly event: "research.started";
       readonly data: { readonly briefId: string; readonly brief: ResearchBrief };
@@ -602,6 +611,32 @@ export type ChatStreamEvent =
     }
   | { readonly event: "error"; readonly data: { readonly message: string; readonly code: string } }
   | { readonly event: "done"; readonly data: Record<string, never> };
+
+/**
+ * One event from `GET /api/sessions/:id/events` (T2.7/T2.8) — replay,
+ * optionally followed live. The same `ChatStreamEvent` vocabulary
+ * `POST /api/chat` sends (`session` never actually appears; that event is
+ * `POST /api/chat`-only, minted at enqueue time, not stored), plus
+ * `turn.interrupted`.
+ *
+ * `seq` is lifted to the ENVELOPE rather than folded into each variant's
+ * `data` — `ChatStreamEvent`'s own shapes stay exactly what `POST /api/chat`
+ * sends, with no endpoint-specific field bolted onto all thirteen of them —
+ * and is `undefined` for the two events this endpoint can send that carry
+ * no backing `StoredEventRecord`: a live-tail `text` delta (chunked, no
+ * seq'd record of its own — the eventual `assistant-message` record's seq
+ * covers the text it sums to) and the replay-only `done` marker (not
+ * derived from any one record; `?follow=true` never sends it at all —
+ * `@shadow/api`'s `session-events.ts` module doc). `seq` is the reconnect
+ * cursor per T2.7's inclusive `fromSeq` contract: reconnecting with
+ * `fromSeq = seq + 1` never re-delivers this event and never skips
+ * whatever came after it either.
+ */
+export interface SessionEventEnvelope {
+  readonly event: ChatStreamEvent["event"];
+  readonly data: unknown;
+  readonly seq: number | undefined;
+}
 
 // ---- errors ---------------------------------------------------------------
 

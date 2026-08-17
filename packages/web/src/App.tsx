@@ -31,7 +31,12 @@ export function App({ client }: { readonly client: ShadowApiClient }) {
           <VolumeViewPage client={client} slug={route.slug} navigate={navigate} />
         )}
         {route.name === "chat" && (
-          <ChatPage client={client} slug={route.slug} navigate={navigate} />
+          <ChatPage
+            client={client}
+            slug={route.slug}
+            sessionId={route.sessionId}
+            navigate={navigate}
+          />
         )}
         {route.name === "chapter" && (
           <ChapterPage

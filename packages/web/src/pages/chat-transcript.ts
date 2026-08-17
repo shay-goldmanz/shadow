@@ -97,6 +97,23 @@ export type TranscriptItem =
        * honest) or once superseded by a later send (see `appendUserMessage`).
        */
       readonly retry: { readonly text: string } | undefined;
+    }
+  | {
+      readonly id: string;
+      readonly type: "interrupted";
+      /**
+       * T2.8's wire `turn.interrupted` event (or `markInterruptedIfPending`'s
+       * client-side synthesis of the same shape) renders this — a turn that
+       * ended with no closing signal at all: `@shadow/api`'s
+       * `event-mapping.ts` module doc for the one `turn-boundary` shape that
+       * gets a wire event, and this file's `markInterruptedIfPending` for the
+       * one that never even got the CHANCE to (a crash mid-append). Always
+       * retryable when there's operator text to resend and nothing has
+       * published since — same gating as `"error"`'s `retry`, minus the
+       * error-code allowlist: there is no code here, and a stalled turn is
+       * always plausibly worth another attempt.
+       */
+      readonly retry: { readonly text: string } | undefined;
     };
 
 export interface ChatState {
@@ -104,6 +121,19 @@ export interface ChatState {
   readonly items: readonly TranscriptItem[];
   readonly streaming: boolean;
   readonly nextId: number;
+  /**
+   * True from the `operator` event that mints a turn's user bubble until
+   * that turn's terminal signal (`done`, `error`, or `turn.interrupted`)
+   * arrives. Distinct from `streaming` on purpose: `streaming` is a single
+   * tab's OWN `send()` call in flight (drives its own input-disable);
+   * `turnPending` is a structural fact about the TRANSCRIPT, true
+   * regardless of which tab (or a prior page load) started the turn —
+   * exactly what `markInterruptedIfPending` needs to answer "does this
+   * transcript currently end mid-turn?" for a viewer that never called
+   * `send()` at all, e.g. a replay+follow viewer whose connection just
+   * dropped.
+   */
+  readonly turnPending: boolean;
 }
 
 export const INITIAL_CHAT_STATE: ChatState = {
@@ -111,6 +141,7 @@ export const INITIAL_CHAT_STATE: ChatState = {
   items: [],
   streaming: false,
   nextId: 0,
+  turnPending: false,
 };
 
 /**
@@ -189,16 +220,65 @@ function isRetryableErrorCode(code: string): boolean {
   return RETRYABLE_ERROR_CODES.has(code);
 }
 
+/**
+ * Mints a local "user" item directly — used by `ChatPage`'s retry
+ * affordance (T1.4, re-sending the same text through the ordinary send
+ * path) and by tests that want to seed a prior turn's operator message
+ * without driving a full event sequence. NOT used by `ChatPage`'s `send()`
+ * for the operator's own outgoing message any more (T2.8): the `operator`
+ * wire event below is the single source of truth for that bubble now — the
+ * sending tab renders it once, from the same event a second viewer's
+ * replay/follow sees, rather than a local append racing (and duplicating)
+ * it. Retry-flag clearing for a new user item lives in `withItem` itself
+ * (F5 review fix, see that function), so it applies here identically to the
+ * `operator` case below.
+ */
 export function appendUserMessage(state: ChatState, text: string): ChatState {
-  // Retry-flag clearing for a new user item lives in `withItem` itself now
-  // (F5 review fix, see that function) — this is just the local-send path
-  // to a user item, same as any future one (e.g. T2.8's `operator` wire
-  // event) would be.
   return withItem(state, { type: "user", text });
 }
 
 export function beginStreaming(state: ChatState): ChatState {
   return { ...state, streaming: true };
+}
+
+/** The most recent `"user"` item, and whether a chapter has published since it landed (F4 review fix (a): a committed side effect makes a resend unsafe regardless of the error code). Shared by the `"error"` and `"turn.interrupted"` cases below — both gate their `retry` field on exactly this. */
+function lookupLastUser(items: readonly TranscriptItem[]): {
+  readonly item: Extract<TranscriptItem, { type: "user" }> | undefined;
+  readonly publishedSince: boolean;
+} {
+  let lastUserIndex = -1;
+  for (let i = items.length - 1; i >= 0; i--) {
+    if (items[i]?.type === "user") {
+      lastUserIndex = i;
+      break;
+    }
+  }
+  const item =
+    lastUserIndex >= 0
+      ? (items[lastUserIndex] as Extract<TranscriptItem, { type: "user" }>)
+      : undefined;
+  const publishedSince =
+    lastUserIndex >= 0 &&
+    items.slice(lastUserIndex + 1).some((existing) => existing.type === "chapter.published");
+  return { item, publishedSince };
+}
+
+/**
+ * T2.8: the client-side twin of the wire's `turn.interrupted` event, for
+ * the one shape the wire can never carry a signal for — T2.1's torn-tail
+ * read tolerance means a crash mid-append can leave a transcript with no
+ * closing `turn-boundary` record at all, not even an `interrupted` one, so
+ * there is nothing for `@shadow/api`'s `event-mapping.ts` to map. Whoever
+ * notices the underlying event stream end without a terminal signal for the
+ * turn currently open — `ChatPage`'s replay+follow subscription losing its
+ * connection, or its own `POST /api/chat` loop doing the same — calls this.
+ * A no-op whenever the transcript isn't mid-turn (`turnPending` false), so
+ * it's always safe to call defensively, on every stream end for any reason
+ * (including an ordinary `done`).
+ */
+export function markInterruptedIfPending(state: ChatState): ChatState {
+  if (!state.turnPending) return state;
+  return applyStreamEvent(state, { event: "turn.interrupted", data: {} });
 }
 
 /** Folds one SSE event into the transcript, in arrival order. Consecutive `text` deltas coalesce into one growing assistant bubble. */
@@ -208,17 +288,17 @@ export function applyStreamEvent(state: ChatState, event: ChatStreamEvent): Chat
       return { ...state, sessionId: event.data.sessionId };
 
     case "operator":
-      // Defensive default (F7 review fix): swallowed for now — `ChatPage`
-      // already appends its own local "user" transcript item the instant
-      // the operator hits send (`appendUserMessage`), so rendering this
-      // wire event too would duplicate the bubble. T2.8 is expected to
-      // replace that local append with this wire event as the single
-      // source of truth (so a second live viewer, or a replayed session,
-      // sees the same user bubbles) — until then, this case exists so a
-      // future stream carrying `operator` doesn't fall through to the
-      // exhaustiveness check below and so the intent is on record, but it
-      // deliberately leaves `state` untouched.
-      return state;
+      // T2.8: the single source of user bubbles. `ChatPage` no longer
+      // appends its own local "user" item on send (F7's original swallow —
+      // this case used to leave `state` untouched specifically because that
+      // local append already existed) — this wire event is now the only
+      // place a "user" item is minted from a live or replayed turn, so the
+      // sending tab renders its own message exactly once, and a second
+      // live viewer or a replayed session sees the identical bubble.
+      // `turnPending: true` marks the transcript as now mid-turn, for
+      // `markInterruptedIfPending` to read if this turn ever stalls with no
+      // closing signal.
+      return { ...withItem(state, { type: "user", text: event.data.text }), turnPending: true };
 
     case "text": {
       const last = state.items[state.items.length - 1];
@@ -300,28 +380,12 @@ export function applyStreamEvent(state: ChatState, event: ChatStreamEvent): Chat
       // The failed turn's operator message is the most recent "user" item —
       // input is disabled while a turn streams, so exactly one turn (and
       // therefore at most one candidate) can be in flight when it errors.
-      let lastUserIndex = -1;
-      for (let i = state.items.length - 1; i >= 0; i--) {
-        if (state.items[i]?.type === "user") {
-          lastUserIndex = i;
-          break;
-        }
-      }
-      const lastUserItem =
-        lastUserIndex >= 0
-          ? (state.items[lastUserIndex] as Extract<TranscriptItem, { type: "user" }>)
-          : undefined;
+      const { item: lastUserItem, publishedSince: publishedSinceLastUser } = lookupLastUser(
+        state.items,
+      );
 
-      // F4 review fix (a): a chapter that already published between the
-      // failed turn's operator message and this error is a COMMITTED side
-      // effect — resending the same text would re-run the whole turn and
-      // risk a duplicate publication, not just retry a no-op. Suppressed
-      // regardless of the error code's own retryability below.
-      const publishedSinceLastUser =
-        lastUserIndex >= 0 &&
-        state.items.slice(lastUserIndex + 1).some((item) => item.type === "chapter.published");
-
-      // F4 review fix (b): even absent a committed side effect, only a
+      // F4 review fix (b): even absent a committed side effect
+      // (`lookupLastUser`'s `publishedSince` — see its doc), only a
       // plausibly-transient code is worth resending for — see
       // `RETRYABLE_ERROR_CODES`'s doc above.
       const canRetry =
@@ -337,11 +401,34 @@ export function applyStreamEvent(state: ChatState, event: ChatStreamEvent): Chat
           retry: canRetry ? { text: lastUserItem.text } : undefined,
         }),
         streaming: false,
+        turnPending: false,
+      };
+    }
+
+    case "turn.interrupted": {
+      // T2.8: the wire's explicit "this turn stalled" signal — see
+      // `event-mapping.ts`'s (api package) module doc for when the server
+      // sends it, and `markInterruptedIfPending`'s doc for the shape it
+      // can't (a crash mid-append that never wrote a boundary at all,
+      // handled by that function instead, but folding into this SAME case
+      // so both shapes render identically).
+      const { item: lastUserItem, publishedSince: publishedSinceLastUser } = lookupLastUser(
+        state.items,
+      );
+      const canRetry = lastUserItem !== undefined && !publishedSinceLastUser;
+
+      return {
+        ...withItem(state, {
+          type: "interrupted",
+          retry: canRetry ? { text: lastUserItem.text } : undefined,
+        }),
+        streaming: false,
+        turnPending: false,
       };
     }
 
     case "done":
-      return { ...state, streaming: false };
+      return { ...state, streaming: false, turnPending: false };
 
     default:
       // Exhaustiveness check: a `ChatStreamEvent` variant added to
@@ -357,14 +444,15 @@ type DistributiveOmit<T, K extends keyof T> = T extends unknown ? Omit<T, K> : n
 
 /**
  * Appends one item, minting its `id`. A new `"user"` item supersedes any
- * retryable error left over from a prior turn — its "Retry last message"
- * affordance would otherwise still offer to resend text that a fresh turn
- * has already moved past (T1.4). F5 review fix: this clearing used to live
- * only in `appendUserMessage`, the sole place that minted a `"user"` item —
- * but T2.8 will add a second source (the `operator` wire event, replacing
- * local user-bubble appending), which would have shipped with stale retry
- * buttons surviving a replay. Living here instead means ANY future source
- * of user items gets the clearing for free, by construction, without
+ * retryable `"error"` or `"interrupted"` item left over from a prior turn —
+ * its "Retry last message" affordance would otherwise still offer to resend
+ * text that a fresh turn has already moved past (T1.4, T2.8). F5 review
+ * fix: this clearing used to live only in `appendUserMessage`, the sole
+ * place that minted a `"user"` item — T2.8 added a second source (the
+ * `operator` wire event, the single source of user bubbles now), which
+ * would have shipped with stale retry buttons surviving a replay had the
+ * clearing not already lived here instead of there. Living here means ANY
+ * source of user items gets the clearing for free, by construction, without
  * having to remember to duplicate it.
  */
 function withItem(state: ChatState, item: DistributiveOmit<TranscriptItem, "id">): ChatState {
@@ -372,7 +460,7 @@ function withItem(state: ChatState, item: DistributiveOmit<TranscriptItem, "id">
   const items =
     item.type === "user"
       ? state.items.map((existing) =>
-          existing.type === "error" && existing.retry
+          (existing.type === "error" || existing.type === "interrupted") && existing.retry
             ? { ...existing, retry: undefined }
             : existing,
         )

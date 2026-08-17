@@ -6,7 +6,7 @@
  * app is inspectable without a server.
  */
 
-import type { ShadowApiClient } from "./client.ts";
+import type { GetSessionEventsOptions, ShadowApiClient } from "./client.ts";
 import { defaultChatScript } from "./fake-chat-script.ts";
 import { chapterSummariesOf, type SeedVolume, seedVolume, volumeSummaryOf } from "./fake-data.ts";
 import {
@@ -23,6 +23,7 @@ import {
   type LintReport,
   type PutChapterAudit,
   type PutChapterInput,
+  type SessionEventEnvelope,
   type SourceRecord,
   type UpdateVolumeInput,
   type Volume,
@@ -46,11 +47,35 @@ export interface FakeApiClientOptions {
   readonly chatScript?: (sessionId: string, input: ChatInput) => readonly ChatStreamEvent[];
 }
 
+/** A `getSessionEvents` subscriber — pushed to synchronously (`recordSessionEvent`), exactly like the real `SessionEventBus` (`@shadow/api`'s `session-bus.ts`): this stand-in is single-threaded JS, so "subscribe, then read the log" (below) can never miss an event the way an actually-concurrent bus could without the real one's bus-first-buffer care. */
+type SessionEventListener = (event: StoredEnvelope) => void;
+
+/** Every event this fake ever logs/publishes carries a REAL `seq` (stamped the instant it's recorded) — narrower than the public `SessionEventEnvelope` (`seq: number | undefined`, since a live `text` delta or the replay-only `done` marker carry none on the real wire either). Kept distinct so the internal log/bus never has to juggle a possibly-`undefined` seq it never actually produces; `getSessionEvents` widens back to `SessionEventEnvelope` only at its own `done`/live-tail yield points. */
+interface StoredEnvelope {
+  readonly event: SessionEventEnvelope["event"];
+  readonly data: unknown;
+  readonly seq: number;
+}
+
 export class FakeApiClient implements ShadowApiClient {
   private readonly volumes = new Map<string, SeedVolume>();
   private readonly streamDelayMs: number;
   private readonly chatScript: (sessionId: string, input: ChatInput) => readonly ChatStreamEvent[];
   private nextSessionId = 1;
+  /**
+   * Per-session stand-in for `@shadow/sessions`' `events.jsonl` — every
+   * `chat()`-scripted event `recordSessionEvent` stamps with a monotonic
+   * `seq`, mirroring `@shadow/api`'s `event-mapping.ts`/`session-events.ts`:
+   * `session` (a `POST /api/chat`-only synthetic, minted at enqueue time,
+   * never stored) and `done` (never stored either — `?follow=true` never
+   * sends it at all, and plain replay synthesizes it fresh once the stored
+   * transcript is exhausted, per `getSessionEvents` below) are the two
+   * event kinds this log never holds, matching the real server's own
+   * `StoredSessionEvent` union having no shape for either.
+   */
+  private readonly sessionLogs = new Map<string, StoredEnvelope[]>();
+  private readonly sessionSeqs = new Map<string, number>();
+  private readonly sessionListeners = new Map<string, Set<SessionEventListener>>();
 
   constructor(options: FakeApiClientOptions = {}) {
     for (const seed of options.volumes ?? [seedVolume()]) {
@@ -253,7 +278,81 @@ export class FakeApiClient implements ShadowApiClient {
     const sessionId = input.sessionId ?? `sess_${this.nextSessionId++}`;
     for (const event of this.chatScript(sessionId, input)) {
       if (this.streamDelayMs > 0) await sleep(this.streamDelayMs);
+      this.recordSessionEvent(sessionId, event);
       yield event;
+    }
+  }
+
+  /** Stamps + stores + publishes one `chat()`-scripted event for `getSessionEvents` — a no-op for `session`/`done` (this fake's log never holds either; see the `sessionLogs` field doc). */
+  private recordSessionEvent(sessionId: string, event: ChatStreamEvent): void {
+    if (event.event === "session" || event.event === "done") return;
+    const seq = (this.sessionSeqs.get(sessionId) ?? 0) + 1;
+    this.sessionSeqs.set(sessionId, seq);
+    const envelope: StoredEnvelope = { event: event.event, data: event.data, seq };
+    const log = this.sessionLogs.get(sessionId);
+    if (log) {
+      log.push(envelope);
+    } else {
+      this.sessionLogs.set(sessionId, [envelope]);
+    }
+    for (const listener of this.sessionListeners.get(sessionId) ?? []) {
+      listener(envelope);
+    }
+  }
+
+  async *getSessionEvents(
+    sessionId: string,
+    options: GetSessionEventsOptions = {},
+  ): AsyncIterable<SessionEventEnvelope> {
+    const fromSeq = options.fromSeq ?? 1;
+
+    // Bus-first-buffer (mirrors `@shadow/api`'s `session-events.ts`, even
+    // though single-threaded JS makes the race it guards against
+    // unreachable here — same shape either way, so a caller can't tell
+    // this fake apart from the real endpoint by relying on ordering).
+    const buffered: StoredEnvelope[] = [];
+    let wake: (() => void) | undefined;
+    const listener: SessionEventListener | undefined = options.follow
+      ? (event) => {
+          buffered.push(event);
+          wake?.();
+        }
+      : undefined;
+    if (listener) {
+      const listeners = this.sessionListeners.get(sessionId) ?? new Set();
+      listeners.add(listener);
+      this.sessionListeners.set(sessionId, listeners);
+    }
+
+    try {
+      let lastSeq = fromSeq - 1;
+      for (const envelope of this.sessionLogs.get(sessionId) ?? []) {
+        if (envelope.seq < fromSeq) continue;
+        yield envelope;
+        lastSeq = envelope.seq;
+      }
+
+      if (!options.follow) {
+        yield { event: "done", data: {}, seq: undefined };
+        return;
+      }
+
+      for (;;) {
+        while (buffered.length > 0) {
+          const next = buffered.shift();
+          if (!next || next.seq <= lastSeq) continue; // already delivered above — dedup by seq, same as the real endpoint
+          lastSeq = next.seq;
+          yield next;
+        }
+        await new Promise<void>((resolve) => {
+          wake = resolve;
+        });
+        wake = undefined;
+      }
+    } finally {
+      if (listener) {
+        this.sessionListeners.get(sessionId)?.delete(listener);
+      }
     }
   }
 
