@@ -21,29 +21,24 @@
  *
  * ## Mapping ShadowEvent -> docs/API.md's SSE table
  *
- * Not one-to-one; see each `case` below for the specific gap. Summary for
- * the task report: `operator-turn-recorded` and `assistant-message` are
- * dropped (no doc row; the latter is redundant with the `text` deltas
- * that already sum to it). `research-failed` and `chapter-published` /
- * `chapter-rejected` have no doc row but are real `ShadowEvent`s Shadow
- * actually emits, so — per instruction to follow the real shape rather
- * than invent nothing — they are forwarded as `research.failed` /
- * `chapter.published` / `chapter.rejected`, dot-named to match the table's
- * own convention. `chapter.restated` (D9's visibility requirement) is
- * synthesized: `chapter-audit`'s `repairs[]` is the only place a
- * `RepairDecision` appears in `ShadowEvent`, so this handler unpacks one
- * `chapter.restated` per decision. `indexed` is never emitted for chat: see
- * the `chapter-audit` case below for why that is a real gap, not an
- * oversight.
+ * The mapping itself — every `ShadowEvent` case, every wire field, and why
+ * each gap from `docs/API.md`'s table is what it is — now lives in
+ * `../event-mapping.ts` (T2.2), shared with replay (T2.7). This handler's
+ * job is just the live-specific wiring around it: stream `text-delta`s
+ * straight through (they have no stored shape at all), stamp every other
+ * event through a per-turn `StoredEventStamper` (brief-id correlation,
+ * `../event-mapping.ts`), and run the stamped result through
+ * `wireEventsForLive`.
  */
 
+import { randomUUID } from "node:crypto";
 import type { ShadowConversation, ShadowEvent } from "@shadow/agent";
 import { toVolumeSlug } from "@shadow/core";
-import type { ResearchBrief } from "@shadow/research";
 import type { BunRequest } from "bun";
 import type { ApiDeps } from "../deps.ts";
 import { toErrorResponse } from "../error-mapping.ts";
 import { InvalidRequestError, SessionNotFoundError } from "../errors.ts";
+import { operatorMessageEvent, StoredEventStamper, wireEventsForLive } from "../event-mapping.ts";
 import { encodeSseEvent } from "../sse.ts";
 
 interface ChatBody {
@@ -126,6 +121,16 @@ export async function postChat(deps: ApiDeps, req: BunRequest<"/api/chat">): Pro
       };
       send("session", { sessionId });
 
+      // The user bubble. Synthesized here (`@shadow/agent` never emits an
+      // `operator-message` `ShadowEvent` — see `../event-mapping.ts`'s
+      // doc), at the point the turn starts, so a second live viewer of this
+      // same session sees it too, and so live and replayed transcripts
+      // render identically (T2.2). Stored-shape identical to what T2.5's
+      // tee will later append for this same turn.
+      for (const wire of wireEventsForLive(operatorMessageEvent(message))) {
+        send(wire.event, wire.data);
+      }
+
       // Shadow can be legitimately silent for a long time — a research brief
       // that fetches several pages, then a Tier 2 audit, can easily outlast any
       // fixed server timeout. An SSE comment line is a no-op to every client
@@ -143,117 +148,32 @@ export async function postChat(deps: ApiDeps, req: BunRequest<"/api/chat">): Pro
         }
       }, 5_000);
 
-      // Correlates a `research-started` brief with its later `research-completed`
-      // / `research-failed` counterpart — `ShadowEvent` carries the same
-      // `ResearchBrief` object reference across both yields
-      // (`conversation.ts`'s `runResearchDirectives`), but has no `briefId`
-      // field of its own (`docs/API.md`'s `research.finished: { briefId, ... }`
-      // assumes one exists; it doesn't, so this handler mints one).
-      const briefIds = new WeakMap<ResearchBrief, string>();
-      let briefCounter = 0;
+      // Turn-scoped: mints/stamps `briefId`s while `research-started`'s
+      // `ResearchBrief` object identity still correlates it to the same
+      // brief's later `research-completed`/`-failed` (`../event-mapping.ts`).
+      // A fresh stamper per turn keeps ids unique across turns too — the
+      // `turnId` prefix, not just the per-stamper counter.
+      const turnId = randomUUID();
+      const stamper = new StoredEventStamper(turnId);
 
       try {
         iterator = conversation.sendMessage(message) as AsyncGenerator<ShadowEvent>;
         for await (const event of iterator) {
           if (closed) break; // client disconnected (cancel()) mid-turn — stop draining the generator
-          switch (event.type) {
-            case "operator-turn-recorded":
-              // No doc row — internal bookkeeping the operator doesn't need
-              // to see; it's implied by having sent the message at all.
-              break;
-            case "text-delta":
-              send("text", { delta: event.text });
-              break;
-            case "assistant-message":
-              // No doc row, and redundant: concatenated `text` deltas
-              // already reconstruct this exact string.
-              break;
-            case "research-started": {
-              const briefId = `brief-${++briefCounter}`;
-              briefIds.set(event.brief, briefId);
-              send("research.started", { briefId, brief: event.brief });
-              break;
-            }
-            case "research-completed": {
-              const briefId = briefIds.get(event.brief) ?? "unknown";
-              for (const source of event.result.sources) {
-                send("research.source", {
-                  sourceId: source.id,
-                  url: source.url,
-                  title: source.title,
-                });
-              }
-              send("research.finished", { briefId, findings: event.result.findings });
-              break;
-            }
-            case "research-failed": {
-              // No doc row (the table only has started/source/finished for
-              // research) — forwarded anyway: silently dropping a real
-              // failure would contradict the table's own stated purpose
-              // ("silence reads as failure").
-              const briefId = briefIds.get(event.brief) ?? "unknown";
-              send("research.failed", { briefId, brief: event.brief, error: event.error });
-              break;
-            }
-            case "chapter-drafted":
-              send("chapter.drafted", { volume: event.volume, chapter: event.chapter });
-              break;
-            case "chapter-audit": {
-              // D9: what Shadow softened, and why, stays visible. One
-              // `chapter.restated` per `RepairDecision`, emitted before the
-              // summary `audit` event they contributed to.
-              for (const repair of event.repairs) {
-                send("chapter.restated", {
-                  claim: repair.label,
-                  from: repair.from,
-                  to: repair.to,
-                  reason: repair.reason,
-                  outcome: repair.outcome,
-                });
-              }
-              // `docs/API.md`'s `audit: { chapter, verdict, findings }` names
-              // fields `ShadowEvent`'s `chapter-audit` doesn't carry (no
-              // `AuditVerdict`, no per-claim findings — only `passed` and
-              // `repairs`; the issue list arrives separately, below, on
-              // `chapter-published`/`chapter-rejected`). Forwarded with the
-              // real fields rather than a fabricated shape.
-              send("audit", {
-                volume: event.volume,
-                chapter: event.chapter,
-                passed: event.passed,
-                repairs: event.repairs,
-              });
-              break;
-            }
-            case "chapter-published":
-              // No doc row. `indexed: { volume, stats }` is what the table
-              // has here instead, but `@shadow/agent`'s `publishChapter`
-              // discards the `Indexer.reindex` result it triggers
-              // internally (`packages/agent/src/publish.ts`), so this
-              // handler has no `stats` to report without either changing
-              // `@shadow/agent` (outside this package's boundary) or
-              // re-running `indexer.reindex` itself here — which would
-              // reindex twice and is exactly the kind of duplicated
-              // domain logic the task rules out. `chapter.published`
-              // already tells the operator the reindex succeeded
-              // (`publishChapter` only reindexes on a passing verdict).
-              send("chapter.published", { volume: event.volume, chapter: event.chapter });
-              break;
-            case "chapter-rejected":
-              send("chapter.rejected", {
-                volume: event.volume,
-                chapter: event.chapter,
-                issues: event.issues,
-              });
-              break;
-            case "error":
-              // `docs/API.md`: "terminal for this turn." `ShadowEvent`'s
-              // `error` carries only a string, no stable code — this isn't
-              // one of the typed pillar errors `error-mapping.ts` maps, it's
-              // Shadow's own turn narrating its own failure.
-              send("error", { message: event.error, code: "shadow_turn_error" });
-              close();
-              return;
+          if (event.type === "text-delta") {
+            // No stored shape at all (`@shadow/sessions` never persists
+            // deltas) — streamed straight to the wire as `@shadow/agent`
+            // produces it, chunk by chunk.
+            send("text", { delta: event.text });
+            continue;
+          }
+          const stored = stamper.stampAgentEvent(event);
+          for (const wire of wireEventsForLive(stored)) {
+            send(wire.event, wire.data);
+          }
+          if (event.type === "error") {
+            close();
+            return;
           }
         }
         send("done", {});

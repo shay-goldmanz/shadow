@@ -16,6 +16,7 @@
     "@shadow/evidence": "workspace:*",
     "@shadow/indexing": "workspace:*",
     "@shadow/model": "workspace:*",
-    "@shadow/research": "workspace:*"
+    "@shadow/research": "workspace:*",
+    "@shadow/sessions": "workspace:*"
   }
 }

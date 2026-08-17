@@ -35,6 +35,7 @@
         "@shadow/indexing": "workspace:*",
         "@shadow/model": "workspace:*",
         "@shadow/research": "workspace:*",
+        "@shadow/sessions": "workspace:*",
       },
     },
     "packages/cli": {
