@@ -470,4 +470,197 @@ describe("contract: HttpApiClient against a real @shadow/api server", () => {
       });
     });
   });
+
+  describe("T3.1/T3.2: listSessions/renameSession/deleteSession", () => {
+    test("listSessions: newest-first, volume-scoped, no internal SDK ids on the wire", async () => {
+      const respond: WithApiOptions["respond"] = () => ({ text: "ok" });
+      await withScriptedApi({ respond }, async ({ baseUrl }) => {
+        const client = new HttpApiClient(`${baseUrl}/api`);
+        await client.createVolume({ slug: "sessions-craft", title: "Sessions" });
+        await client.createVolume({ slug: "other-craft", title: "Other" });
+
+        let firstId: string | undefined;
+        for await (const event of client.chat({
+          volumeSlug: "sessions-craft",
+          message: "first session's opening line",
+        })) {
+          if (event.event === "session") firstId = event.data.sessionId;
+        }
+        let secondId: string | undefined;
+        for await (const event of client.chat({
+          volumeSlug: "sessions-craft",
+          message: "second session's opening line",
+        })) {
+          if (event.event === "session") secondId = event.data.sessionId;
+        }
+        for await (const _event of client.chat({
+          volumeSlug: "other-craft",
+          message: "a session in a different volume",
+        })) {
+          // drain — must never appear in "sessions-craft"'s list below.
+        }
+        if (!firstId || !secondId) throw new Error("expected two session ids");
+
+        const scoped = await client.listSessions("sessions-craft");
+        expect(scoped.map((s) => s.id)).toEqual([secondId, firstId]);
+        expect(scoped.map((s) => s.title)).toEqual([
+          "second session's opening line",
+          "first session's opening line",
+        ]);
+        expect(JSON.stringify(scoped)).not.toContain("sdkSessionId");
+
+        const global = await client.listSessions();
+        expect(global.map((s) => s.id)).toContain(firstId);
+        expect(global.length).toBeGreaterThanOrEqual(3);
+      });
+    });
+
+    test("renameSession: PATCH overrides the default title, 404s session_not_found for an unknown id", async () => {
+      const respond: WithApiOptions["respond"] = () => ({ text: "ok" });
+      await withScriptedApi({ respond }, async ({ baseUrl }) => {
+        const client = new HttpApiClient(`${baseUrl}/api`);
+        await client.createVolume({ slug: "rename-craft", title: "Rename" });
+
+        let sessionId: string | undefined;
+        for await (const event of client.chat({
+          volumeSlug: "rename-craft",
+          message: "default title from this line",
+        })) {
+          if (event.event === "session") sessionId = event.data.sessionId;
+        }
+        if (!sessionId) throw new Error("expected a sessionId");
+
+        const renamed = await client.renameSession(sessionId, "Operator-chosen title");
+        expect(renamed.id).toBe(sessionId);
+        expect(renamed.title).toBe("Operator-chosen title");
+
+        const [listed] = await client.listSessions("rename-craft");
+        expect(listed?.title).toBe("Operator-chosen title");
+
+        const error = await client.renameSession("no-such-session", "x").catch((e: unknown) => e);
+        expect(error).toBeInstanceOf(ApiError);
+        expect((error as ApiError).code).toBe("session_not_found");
+      });
+    });
+
+    test("deleteSession: removes the session from subsequent listings, 404s for an unknown id", async () => {
+      const respond: WithApiOptions["respond"] = () => ({ text: "ok" });
+      await withScriptedApi({ respond }, async ({ baseUrl }) => {
+        const client = new HttpApiClient(`${baseUrl}/api`);
+        await client.createVolume({ slug: "delete-craft", title: "Delete" });
+
+        let sessionId: string | undefined;
+        for await (const event of client.chat({
+          volumeSlug: "delete-craft",
+          message: "a session about to be deleted",
+        })) {
+          if (event.event === "session") sessionId = event.data.sessionId;
+        }
+        if (!sessionId) throw new Error("expected a sessionId");
+
+        await client.deleteSession(sessionId);
+        expect(await client.listSessions("delete-craft")).toEqual([]);
+
+        const error = await client.deleteSession(sessionId).catch((e: unknown) => e);
+        expect(error).toBeInstanceOf(ApiError);
+        expect((error as ApiError).code).toBe("session_not_found");
+      });
+    });
+  });
+
+  describe("T3.2: FakeApiClient's listSessions/renameSession/deleteSession behave like HttpApiClient's for an equivalent turn", () => {
+    test("listSessions: same newest-first order and title default on both clients", async () => {
+      const respond: WithApiOptions["respond"] = () => ({ text: "ok" });
+      await withScriptedApi({ respond }, async ({ baseUrl }) => {
+        const real = new HttpApiClient(`${baseUrl}/api`);
+        await real.createVolume({ slug: "parity-sessions-craft", title: "Parity Sessions" });
+        for await (const _event of real.chat({
+          volumeSlug: "parity-sessions-craft",
+          message: "real first line",
+        })) {
+          // drain
+        }
+        for await (const _event of real.chat({
+          volumeSlug: "parity-sessions-craft",
+          message: "real second line",
+        })) {
+          // drain
+        }
+
+        const fake = new FakeApiClient({ streamDelayMs: 0 });
+        for await (const _event of fake.chat({
+          volumeSlug: "parity-sessions-craft",
+          message: "real first line",
+        })) {
+          // drain
+        }
+        for await (const _event of fake.chat({
+          volumeSlug: "parity-sessions-craft",
+          message: "real second line",
+        })) {
+          // drain
+        }
+
+        const realList = await real.listSessions("parity-sessions-craft");
+        const fakeList = await fake.listSessions("parity-sessions-craft");
+        expect(fakeList.map((s) => s.title)).toEqual(realList.map((s) => s.title));
+        expect(realList.map((s) => s.title)).toEqual(["real second line", "real first line"]);
+      });
+    });
+
+    test("renameSession/deleteSession: same round-trip shape on both clients", async () => {
+      const respond: WithApiOptions["respond"] = () => ({ text: "ok" });
+      await withScriptedApi({ respond }, async ({ baseUrl }) => {
+        const real = new HttpApiClient(`${baseUrl}/api`);
+        await real.createVolume({ slug: "parity-mutate-craft", title: "Parity Mutate" });
+        let realId: string | undefined;
+        for await (const event of real.chat({
+          volumeSlug: "parity-mutate-craft",
+          message: "hello",
+        })) {
+          if (event.event === "session") realId = event.data.sessionId;
+        }
+        if (!realId) throw new Error("expected a real sessionId");
+
+        const fake = new FakeApiClient({ streamDelayMs: 0 });
+        let fakeId: string | undefined;
+        for await (const event of fake.chat({
+          volumeSlug: "parity-mutate-craft",
+          message: "hello",
+        })) {
+          if (event.event === "session") fakeId = event.data.sessionId;
+        }
+        if (!fakeId) throw new Error("expected a fake sessionId");
+
+        const realRenamed = await real.renameSession(realId, "Renamed");
+        const fakeRenamed = await fake.renameSession(fakeId, "Renamed");
+        expect(fakeRenamed.title).toBe(realRenamed.title);
+
+        await real.deleteSession(realId);
+        await fake.deleteSession(fakeId);
+        expect(await real.listSessions("parity-mutate-craft")).toEqual([]);
+        expect(await fake.listSessions("parity-mutate-craft")).toEqual([]);
+      });
+    });
+
+    // T3.2's UI needs `deleteSession` scriptable to 409 `session_busy` — the
+    // real server proves this shape at the handler level
+    // (`sessions.test.ts`'s gated-turn harness); this fake needs no live
+    // turn to reproduce the SAME error shape a `SessionList` delete-confirm
+    // has to handle (D6a: a fake must reproduce the real failure modes).
+    test("deleteSession: busySessionIds scripts a 409 session_busy shaped exactly like the real one", async () => {
+      const fake = new FakeApiClient({ streamDelayMs: 0, busySessionIds: ["sess_1"] });
+      for await (const _event of fake.chat({ volumeSlug: "busy-craft", message: "hello" })) {
+        // drain — mints "sess_1"
+      }
+
+      const error = await fake.deleteSession("sess_1").catch((e: unknown) => e);
+      expect(error).toBeInstanceOf(ApiError);
+      expect((error as ApiError).code).toBe("session_busy");
+
+      // Busy means "still there" — the session is NOT removed by a
+      // rejected delete.
+      expect((await fake.listSessions("busy-craft")).map((s) => s.id)).toEqual(["sess_1"]);
+    });
+  });
 });

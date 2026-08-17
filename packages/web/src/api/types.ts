@@ -487,6 +487,24 @@ export interface LintReport {
   readonly findings: readonly LintFinding[];
 }
 
+// ---- sessions (T3.1/T3.2) --------------------------------------------------
+
+/**
+ * `handlers/sessions.ts`'s `toSessionSummary` — a curated view of
+ * `@shadow/sessions`' `SessionMeta`, not the type itself: `sdkSessionId`/
+ * `failedSdkSessionIds` are internal SDK-transcript bookkeeping and never
+ * cross the wire (that handler's own module doc). `title` is `null` until
+ * either the first turn completes (`defaultTitleFrom`, `session-service.ts`)
+ * or an operator `PATCH` sets one explicitly.
+ */
+export interface SessionSummary {
+  readonly id: string;
+  readonly volume: string;
+  readonly title: string | null;
+  readonly createdAt: string;
+  readonly lastActiveAt: string;
+}
+
 // ---- chat / SSE (D5, D6, D9) ----------------------------------------------
 
 export interface ChatInput {

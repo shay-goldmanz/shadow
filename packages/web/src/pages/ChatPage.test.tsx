@@ -265,7 +265,12 @@ describe("ChatPage", () => {
       />,
     );
 
-    expect(await findByText("seeded belief")).toBeTruthy();
+    // T3.2's session list also shows this session's own row (same default
+    // title, "seeded belief") — scoped to `.chat-transcript` so that
+    // (correct) sibling text doesn't make this query ambiguous.
+    const transcript = document.querySelector(".chat-transcript");
+    if (!transcript) throw new Error("expected a .chat-transcript element");
+    expect(await within(transcript as HTMLElement).findByText("seeded belief")).toBeTruthy();
     expect(await findByText("Audit failed")).toBeTruthy();
     expect(document.querySelectorAll(".chat-transcript__item--user").length).toBe(1);
   });

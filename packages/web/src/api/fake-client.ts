@@ -24,6 +24,7 @@ import {
   type PutChapterAudit,
   type PutChapterInput,
   type SessionEventEnvelope,
+  type SessionSummary,
   type SourceRecord,
   type UpdateVolumeInput,
   type Volume,
@@ -39,12 +40,37 @@ function slugify(title: string): string {
     .replace(/^-+|-+$/g, "");
 }
 
+/** T3.1's default-title rule (`@shadow/api`'s `session-service.ts` `defaultTitleFrom`), mirrored here so a session minted by this fake's `chat()` lists with the same title an operator would see against the real server. */
+const DEFAULT_TITLE_MAX_LENGTH = 60;
+
+function defaultTitleFrom(operatorText: string): string {
+  const firstLine = (operatorText.split("\n")[0] ?? "").trim();
+  return firstLine.length > DEFAULT_TITLE_MAX_LENGTH
+    ? `${firstLine.slice(0, DEFAULT_TITLE_MAX_LENGTH)}…`
+    : firstLine;
+}
+
+/**
+ * `sessionMetas`' stored shape — `SessionSummary` plus an internal
+ * `activityRank`, a monotonic counter bumped on every turn (T3.2's
+ * `listSessions` sort key). Real `lastActiveAt` timestamps are
+ * millisecond-resolution ISO strings; two turns started in the same
+ * millisecond (routine in a synchronous test) would tie under a
+ * string-timestamp sort, silently reordering the list a test just sent
+ * turns into. `activityRank` never ties.
+ */
+interface FakeSessionMeta extends SessionSummary {
+  readonly activityRank: number;
+}
+
 export interface FakeApiClientOptions {
   readonly volumes?: readonly SeedVolume[];
   /** Delay between streamed chat events, for a realistic demo feel. 0 in tests. */
   readonly streamDelayMs?: number;
   /** Overrides the scripted chat turn. Defaults to the critical-path narration. */
   readonly chatScript?: (sessionId: string, input: ChatInput) => readonly ChatStreamEvent[];
+  /** Session ids `deleteSession` rejects with 409 `session_busy` (T3.1's "a turn is running or queued" shape) — scripting for T3.2's delete-while-busy UI path, standing in for actually racing a live turn. */
+  readonly busySessionIds?: readonly string[];
 }
 
 /** A `getSessionEvents` subscriber — pushed to synchronously (`recordSessionEvent`/`publishTextDelta`), exactly like the real `SessionEventBus` (`@shadow/api`'s `session-bus.ts`): this stand-in is single-threaded JS, so "subscribe, then read the log" (below) can never miss an event the way an actually-concurrent bus could without the real one's bus-first-buffer care. */
@@ -105,6 +131,10 @@ export class FakeApiClient implements ShadowApiClient {
   private readonly sessionLogs = new Map<string, StoredEnvelope[]>();
   private readonly sessionSeqs = new Map<string, number>();
   private readonly sessionListeners = new Map<string, Set<SessionEventListener>>();
+  /** T3.1/T3.2's session-list rows — `SessionMeta`'s wire summary, minted/touched by `chat()`, listed/renamed/deleted by the methods below. */
+  private readonly sessionMetas = new Map<string, FakeSessionMeta>();
+  private sessionActivityCounter = 0;
+  private readonly busySessionIds: Set<string>;
 
   constructor(options: FakeApiClientOptions = {}) {
     for (const seed of options.volumes ?? [seedVolume()]) {
@@ -113,6 +143,7 @@ export class FakeApiClient implements ShadowApiClient {
     this.streamDelayMs = options.streamDelayMs ?? 0;
     this.chatScript =
       options.chatScript ?? ((sessionId, input) => defaultChatScript(sessionId, input));
+    this.busySessionIds = new Set(options.busySessionIds ?? []);
   }
 
   async listVolumes(): Promise<readonly VolumeSummary[]> {
@@ -321,6 +352,7 @@ export class FakeApiClient implements ShadowApiClient {
    */
   async *chat(input: ChatInput): AsyncIterable<ChatStreamEvent> {
     const sessionId = input.sessionId ?? `sess_${this.nextSessionId++}`;
+    this.touchSession(sessionId, input);
     let pendingText = "";
     const flushPendingText = (): void => {
       if (pendingText === "") return;
@@ -448,6 +480,64 @@ export class FakeApiClient implements ShadowApiClient {
         this.sessionListeners.get(sessionId)?.delete(listener);
       }
     }
+  }
+
+  /** Mints (first turn) or touches (`lastActiveAt`, `activityRank`) `sessionId`'s row — called once per `chat()` turn, mirroring `session-service.ts`'s `finishTurn` bookkeeping closely enough for T3.2's list/rename/delete to have something real to work against. */
+  private touchSession(sessionId: string, input: ChatInput): void {
+    const now = new Date().toISOString();
+    const activityRank = ++this.sessionActivityCounter;
+    const existing = this.sessionMetas.get(sessionId);
+    if (existing) {
+      this.sessionMetas.set(sessionId, { ...existing, lastActiveAt: now, activityRank });
+      return;
+    }
+    this.sessionMetas.set(sessionId, {
+      id: sessionId,
+      volume: input.volumeSlug ?? "",
+      title: defaultTitleFrom(input.message),
+      createdAt: now,
+      lastActiveAt: now,
+      activityRank,
+    });
+  }
+
+  /** `GET /api/sessions?volume=` (T3.1/T3.2) — newest-first by `activityRank` (this fake's tie-free stand-in for the real store's `lastActiveAt` descending sort). */
+  async listSessions(volume?: string): Promise<readonly SessionSummary[]> {
+    const all = [...this.sessionMetas.values()];
+    const filtered = volume !== undefined ? all.filter((meta) => meta.volume === volume) : all;
+    return filtered
+      .toSorted((a, b) => b.activityRank - a.activityRank)
+      .map(({ activityRank: _activityRank, ...summary }) => summary);
+  }
+
+  /** `PATCH /api/sessions/:id { title }` (T3.1/T3.2). @throws {ApiError} `session_not_found` if `id` has no row. */
+  async renameSession(id: string, title: string): Promise<SessionSummary> {
+    const meta = this.sessionMetas.get(id);
+    if (!meta) throw new ApiError("session_not_found", `No session "${id}".`);
+    const updated: FakeSessionMeta = { ...meta, title };
+    this.sessionMetas.set(id, updated);
+    const { activityRank: _activityRank, ...summary } = updated;
+    return summary;
+  }
+
+  /**
+   * `DELETE /api/sessions/:id` (T3.1/T3.2). Busy check first (mirrors
+   * `session-service.ts`'s `deleteSession`: "checked FIRST, before anything
+   * else") — `busySessionIds` (constructor-scripted, see
+   * `FakeApiClientOptions`'s doc) stands in for the real `SessionLock`'s
+   * `hasActivity` check, since this fake has no turn queue to race.
+   */
+  async deleteSession(id: string): Promise<void> {
+    if (this.busySessionIds.has(id)) {
+      throw new ApiError("session_busy", `A turn is still running or queued for session "${id}".`);
+    }
+    if (!this.sessionMetas.has(id)) {
+      throw new ApiError("session_not_found", `No session "${id}".`);
+    }
+    this.sessionMetas.delete(id);
+    this.sessionLogs.delete(id);
+    this.sessionSeqs.delete(id);
+    this.sessionListeners.delete(id);
   }
 
   private requireVolume(slug: string): SeedVolume {

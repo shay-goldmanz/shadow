@@ -1,6 +1,6 @@
 import "./test/dom-setup.ts";
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { cleanup, fireEvent, render } from "@testing-library/react";
+import { cleanup, fireEvent, render, waitFor, within } from "@testing-library/react";
 import { App } from "./App.tsx";
 import type { GetSessionEventsOptions } from "./api/client.ts";
 import { FakeApiClient } from "./api/fake-client.ts";
@@ -102,18 +102,39 @@ describe("App — F6 review fix: ChatPage keyed by the route's session id", () =
     }
 
     location.hash = "#/v/design-inspiration/chat/sess_a";
-    const { getByLabelText, getByText, findByText } = render(
+    const { getByLabelText, getByText } = render(
       <ThemeProvider>
         <App client={client} />
       </ThemeProvider>,
     );
-    expect(await findByText("belief A")).toBeTruthy();
+    // T3.2's session list legitimately shows BOTH sessions ("belief A" and
+    // "belief B" are their default titles) regardless of which one is
+    // currently open — every text assertion below that cares about THIS
+    // mount's own transcript content is scoped to `.chat-transcript`, not
+    // the whole document, so it isn't tripped up by that (correct) sibling
+    // row. Re-queries `.chat-transcript` fresh on every poll (`waitFor`,
+    // not `within(...).findByText`, which would bind to whatever node was
+    // current at the FIRST call and go stale across the very remount this
+    // test exists to exercise — the old `<ol>` unmounts, a new one mounts).
+    async function expectInTranscript(text: string): Promise<void> {
+      await waitFor(() => {
+        const el = document.querySelector(".chat-transcript");
+        if (!el) throw new Error("expected a .chat-transcript element");
+        within(el as HTMLElement).getByText(text);
+      });
+    }
+    function transcriptHasText(text: string): boolean {
+      const el = document.querySelector(".chat-transcript");
+      return el !== null && (el as HTMLElement).textContent?.includes(text) === true;
+    }
+
+    await expectInTranscript("belief A");
     // One follow subscription opened for session A's mount.
     expect(client.getSessionEventsCalls).toBe(1);
     expect(document.querySelectorAll(".chat-transcript__item--user").length).toBe(1);
 
     location.hash = "#/v/design-inspiration/chat/sess_b";
-    expect(await findByText("belief B")).toBeTruthy();
+    await expectInTranscript("belief B");
 
     // A SECOND follow subscription opened — direct proof of a remount, not
     // the same instance quietly re-rendering with new props.
@@ -121,14 +142,14 @@ describe("App — F6 review fix: ChatPage keyed by the route's session id", () =
     // Fresh state: exactly session B's own one user bubble, not both
     // sessions' content concatenated onto a stale instance.
     expect(document.querySelectorAll(".chat-transcript__item--user").length).toBe(1);
-    expect(document.body.textContent).not.toContain("belief A");
+    expect(transcriptHasText("belief A")).toBe(false);
 
     // Sends from here go to the NEW session, not the old one silently kept
     // alive by an unremounted instance — a THIRD belief lands alongside B's,
     // never alongside A's (which this same DOM tree no longer even renders).
     send(getByLabelText, getByText, "a third belief, sent after switching to B");
-    expect(await findByText("a third belief, sent after switching to B")).toBeTruthy();
+    await expectInTranscript("a third belief, sent after switching to B");
     expect(document.querySelectorAll(".chat-transcript__item--user").length).toBe(2);
-    expect(document.body.textContent).not.toContain("belief A");
+    expect(transcriptHasText("belief A")).toBe(false);
   });
 });

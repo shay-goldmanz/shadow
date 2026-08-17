@@ -755,6 +755,178 @@
   resize: vertical;
 }
 
+/* ---- session list (T3.2) -------------------------------------------------- */
+
+.session-list {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-card);
+  padding: var(--space-4) var(--space-5);
+  margin-bottom: var(--space-6);
+}
+
+.session-list h2 {
+  font-size: 0.95rem;
+  margin: 0;
+}
+
+.session-list__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+  margin-bottom: var(--space-3);
+}
+
+.session-list__new {
+  font-size: 0.8rem;
+  padding: var(--space-1) var(--space-3);
+}
+
+.session-list__empty {
+  color: var(--text-muted);
+  font-size: 0.85rem;
+  margin: 0;
+}
+
+.session-list__items {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: var(--space-2);
+}
+
+.session-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2) var(--space-3);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: var(--space-2) var(--space-3);
+  transition: border-color var(--motion-fast) var(--motion-easing);
+}
+
+/* D10's semantic colour rule: sage means "this is yours / active" — the
+   session currently open on this ChatPage mount. */
+.session-row--active {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+}
+
+.session-row__main {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.session-row__title {
+  background: none;
+  border: none;
+  padding: 0;
+  text-align: left;
+  color: var(--text);
+  font-weight: 600;
+  font-size: 0.9rem;
+  cursor: pointer;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 100%;
+}
+
+.session-row__title:hover:not(:disabled) {
+  color: var(--accent);
+}
+
+.session-row__title:disabled {
+  color: var(--accent);
+  cursor: default;
+}
+
+.session-row__input {
+  border: 1px solid var(--accent);
+  border-radius: var(--radius);
+  padding: 2px var(--space-2);
+  background: var(--bg);
+  color: var(--text);
+  font-size: 0.9rem;
+  font-weight: 600;
+  width: 100%;
+  max-width: 320px;
+}
+
+.session-row__meta {
+  font-family: var(--font-mono);
+  font-size: 0.72rem;
+  color: var(--text-muted);
+}
+
+.session-row__actions {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  flex-shrink: 0;
+}
+
+.session-row__action {
+  background: none;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  color: var(--text-muted);
+  font-size: 0.78rem;
+  padding: var(--space-1) var(--space-2);
+  cursor: pointer;
+  transition: background var(--motion-fast) var(--motion-easing);
+}
+
+.session-row__action:hover:not(:disabled) {
+  background: var(--surface-sunken);
+}
+
+/* D10: red means "audit failed" elsewhere, but is otherwise the app's only
+   destructive-action colour — an outlined danger button here, matching
+   `.button--retry`'s outlined-accent convention for its own semantic tone. */
+.session-row__action--danger {
+  border-color: var(--danger);
+  color: var(--danger);
+}
+
+.session-row__action--danger:hover:not(:disabled) {
+  background: var(--danger-soft);
+}
+
+.session-row__confirm {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.session-row__confirm-label {
+  color: var(--danger);
+  font-size: 0.78rem;
+}
+
+.session-row__action--danger-confirm {
+  background: var(--danger);
+  border-color: var(--danger);
+  color: var(--surface);
+}
+
+.session-row__action--danger-confirm:hover:not(:disabled) {
+  opacity: 0.9;
+}
+
+.session-row__error {
+  flex-basis: 100%;
+  color: var(--danger);
+  font-size: 0.78rem;
+  margin: 0;
+}
+
 /* ---- snapshot dialog ----------------------------------------------------- */
 
 .snapshot-dialog {

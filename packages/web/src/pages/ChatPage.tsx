@@ -11,6 +11,7 @@ import {
   INITIAL_CHAT_STATE,
   markInterruptedIfPending,
 } from "./chat-transcript.ts";
+import { SessionList } from "./SessionList.tsx";
 
 /**
  * The centrepiece (docs/DECISIONS.md D1): the operator narrates beliefs and
@@ -46,6 +47,18 @@ import {
  * `send()` call lifecycle, regardless of `following` — "unchanged
  * convention": true the instant `send()` starts, false once its own
  * request settles. Transcript CONTENT is what `following` gates.
+ *
+ * ## Session list (T3.2)
+ *
+ * `SessionList` renders above the transcript, scoped to `slug` — resume,
+ * inline rename, and delete for the volume's sessions, all through
+ * `ShadowApiClient`. It owns its own fetch/mutate lifecycle (see its own
+ * doc); this component's only job is telling it *which* session is
+ * currently open (`sessionIdRef.current`, read fresh every render — a ref
+ * on purpose, so a first send's session-mint doesn't need a second render
+ * path to surface it here) and bumping `sessionListRefresh` when a first
+ * send mints a brand-new session id, since that's the one state change
+ * `SessionList` has no other way to learn about.
  */
 export function ChatPage({
   client,
@@ -63,6 +76,11 @@ export function ChatPage({
   const sessionIdRef = useRef<string | undefined>(sessionId);
   // Captured once, at mount — see this component's doc.
   const followingRef = useRef(sessionId !== undefined);
+  // T3.2: bumped whenever this tab's own send mints a brand-new session id,
+  // so `SessionList` (which owns no other way to learn a fresh row exists)
+  // refetches. Nothing else needs to bump this — rename/delete update
+  // `SessionList`'s own local state directly from each mutation's result.
+  const [sessionListRefresh, setSessionListRefresh] = useState(0);
 
   // Replay + follow (T2.7/T2.8): the sole content source for a mount that
   // already knows its session id. Runs for the component's whole lifetime;
@@ -123,6 +141,7 @@ export function ChatPage({
             sessionIdRef.current = event.data.sessionId;
             if (isNewSession) {
               navigate({ name: "chat", slug, sessionId: event.data.sessionId }, { replace: true });
+              setSessionListRefresh((n) => n + 1);
             }
           }
           if (applyLocally) {
@@ -173,6 +192,14 @@ export function ChatPage({
         </button>
         <h1>Chat with Shadow</h1>
       </header>
+
+      <SessionList
+        client={client}
+        slug={slug}
+        currentSessionId={sessionIdRef.current}
+        refreshToken={sessionListRefresh}
+        navigate={navigate}
+      />
 
       <ChatTranscript items={state.items} onRetry={(text) => void send(text)} />
       {state.streaming && (

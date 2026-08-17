@@ -22,6 +22,7 @@ import {
   type PutChapterAudit,
   type PutChapterInput,
   type SessionEventEnvelope,
+  type SessionSummary,
   type SourceRecord,
   type UpdateVolumeInput,
   type Volume,
@@ -149,6 +150,24 @@ export class HttpApiClient implements ShadowApiClient {
       const seq = typeof data.seq === "number" ? data.seq : undefined;
       yield { event: raw.event as ChatStreamEvent["event"], data, seq };
     }
+  }
+
+  async listSessions(volume?: string): Promise<readonly SessionSummary[]> {
+    const query = volume !== undefined ? `?volume=${encodeURIComponent(volume)}` : "";
+    const { sessions } = await this.getJson<{ sessions: SessionSummary[] }>(`/sessions${query}`);
+    return sessions;
+  }
+
+  async renameSession(id: string, title: string): Promise<SessionSummary> {
+    const { session } = await this.request<{ session: SessionSummary }>(
+      `/sessions/${encodeURIComponent(id)}`,
+      { method: "PATCH", body: JSON.stringify({ title }) },
+    );
+    return session;
+  }
+
+  async deleteSession(id: string): Promise<void> {
+    await this.request(`/sessions/${encodeURIComponent(id)}`, { method: "DELETE" });
   }
 
   private async getJson<T>(path: string): Promise<T> {

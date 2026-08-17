@@ -20,6 +20,7 @@ import type {
   PutChapterAudit,
   PutChapterInput,
   SessionEventEnvelope,
+  SessionSummary,
   SourceRecord,
   UpdateVolumeInput,
   Volume,
@@ -77,4 +78,24 @@ export interface ShadowApiClient {
     sessionId: string,
     options?: GetSessionEventsOptions,
   ): AsyncIterable<SessionEventEnvelope>;
+
+  /**
+   * `GET /api/sessions?volume=` (T3.1/T3.2) — newest-first
+   * (`SessionStore.list`'s ordering doc: `lastActiveAt` descending).
+   * Omitting `volume` lists globally; T3.2's session list always passes the
+   * current volume's slug.
+   */
+  listSessions(volume?: string): Promise<readonly SessionSummary[]>;
+
+  /** `PATCH /api/sessions/:id { title }` — overrides the first-turn default title for good. @throws {ApiError} `session_not_found` if `id` is unknown. */
+  renameSession(id: string, title: string): Promise<SessionSummary>;
+
+  /**
+   * `DELETE /api/sessions/:id` — removes the session's row, registry entry,
+   * and every SDK transcript it ever produced.
+   * @throws {ApiError} `session_busy` (409) if a turn is currently running
+   * or queued for this session — delete after it settles.
+   * @throws {ApiError} `session_not_found` (404) if `id` is unknown.
+   */
+  deleteSession(id: string): Promise<void>;
 }
