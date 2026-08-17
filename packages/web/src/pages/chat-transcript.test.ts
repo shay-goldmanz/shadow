@@ -139,6 +139,82 @@ describe("chat transcript reducer", () => {
     expect(state.items[0]).toMatchObject({ type: "error", message: "research failed" });
   });
 
+  describe("T1.4: retryable errors", () => {
+    test("a terminal error marks itself retryable, retaining the failed operator text", () => {
+      let state = appendUserMessage(INITIAL_CHAT_STATE, "believe X and write it up");
+      state = applyStreamEvent(state, {
+        event: "error",
+        data: { message: "overloaded", code: "upstream_error" },
+      });
+
+      const errorItem = state.items[state.items.length - 1];
+      expect(errorItem).toMatchObject({
+        type: "error",
+        retry: { text: "believe X and write it up" },
+      });
+    });
+
+    test("an error with no preceding operator message is not retryable", () => {
+      let state = INITIAL_CHAT_STATE;
+      state = applyStreamEvent(state, {
+        event: "error",
+        data: { message: "boom", code: "stream_failed" },
+      });
+      expect(state.items[0]).toMatchObject({ type: "error", retry: undefined });
+    });
+
+    test("an error mid-turn retains the operator text even after other events landed first", () => {
+      let state = appendUserMessage(INITIAL_CHAT_STATE, "second attempt please");
+      state = applyStreamEvent(state, { event: "text", data: { delta: "working on it" } });
+      state = applyStreamEvent(state, {
+        event: "research.started",
+        data: { briefId: "b1", brief: { volume: "v", goal: "g" } },
+      });
+      state = applyStreamEvent(state, {
+        event: "error",
+        data: { message: "network drop", code: "stream_failed" },
+      });
+
+      const errorItem = state.items[state.items.length - 1];
+      expect(errorItem).toMatchObject({
+        type: "error",
+        retry: { text: "second attempt please" },
+      });
+    });
+
+    test("a subsequent send supersedes (clears) a prior retryable error", () => {
+      let state = appendUserMessage(INITIAL_CHAT_STATE, "first attempt");
+      state = applyStreamEvent(state, {
+        event: "error",
+        data: { message: "overloaded", code: "upstream_error" },
+      });
+      const firstErrorId = state.items[state.items.length - 1]?.id;
+      expect(state.items.find((i) => i.id === firstErrorId)).toMatchObject({
+        retry: { text: "first attempt" },
+      });
+
+      // Retrying re-sends the same text through the ordinary send path,
+      // which is just another `appendUserMessage` call.
+      state = appendUserMessage(state, "first attempt");
+
+      // The old error item is still in the transcript (history is kept),
+      // but it is no longer retryable — a new turn has begun.
+      expect(state.items.find((i) => i.id === firstErrorId)).toMatchObject({ retry: undefined });
+      expect(types(state.items)).toEqual(["user", "error", "user"]);
+    });
+
+    test("non-error flows are unaffected: no retry field appears anywhere else", () => {
+      let state = INITIAL_CHAT_STATE;
+      state = applyStreamEvent(state, {
+        event: "chapter.published",
+        data: { volume: "v", chapter: "c" },
+      });
+      for (const item of state.items) {
+        expect(item).not.toHaveProperty("retry");
+      }
+    });
+  });
+
   test("text after a non-assistant item starts a new bubble rather than merging", () => {
     let state = INITIAL_CHAT_STATE;
     state = applyStreamEvent(state, { event: "text", data: { delta: "first" } });

@@ -669,6 +669,33 @@
   margin: var(--space-1) 0 0;
 }
 
+/*
+ * T1.4: "Retry last message" on a terminal `error` item. D10's semantic
+ * colour rule reserves red for the failure signal itself (the badge above);
+ * the retry action is the operator's own next move, so it takes the sage
+ * "yours / active" treatment — an outlined accent button, not a second red
+ * element competing with the one that means "this failed". `flex-basis:
+ * 100%` wraps it onto its own line below the badge/message, matching
+ * `.research-event__error`'s convention.
+ */
+.button--retry {
+  flex-basis: 100%;
+  width: fit-content;
+  margin-top: var(--space-1);
+  border-radius: var(--radius);
+  border: 1px solid var(--accent);
+  background: var(--surface);
+  color: var(--accent);
+  font-size: 0.85rem;
+  padding: var(--space-1) var(--space-3);
+  cursor: pointer;
+  transition: background var(--motion-fast) var(--motion-easing);
+}
+
+.button--retry:hover {
+  background: var(--accent-soft);
+}
+
 .chat-page__status {
   display: flex;
   align-items: center;

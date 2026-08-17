@@ -88,6 +88,15 @@ export type TranscriptItem =
       readonly type: "error";
       readonly message: string;
       readonly code: string;
+      /**
+       * Set when this error terminated the turn that was sending `text` —
+       * the failed operator message, retained so `ChatPage` can offer
+       * "Retry last message" and re-send the same text. `undefined` when
+       * there was no preceding operator message to retry (shouldn't happen
+       * in practice — every turn starts with one — but keeps the type
+       * honest) or once superseded by a later send (see `appendUserMessage`).
+       */
+      readonly retry: { readonly text: string } | undefined;
     };
 
 export interface ChatState {
@@ -105,7 +114,13 @@ export const INITIAL_CHAT_STATE: ChatState = {
 };
 
 export function appendUserMessage(state: ChatState, text: string): ChatState {
-  return withItem(state, { type: "user", text });
+  // A new send supersedes any retryable error left over from a prior turn —
+  // its "Retry last message" affordance would otherwise still offer to
+  // resend text that a fresh turn has already moved past.
+  const items = state.items.map((item) =>
+    item.type === "error" && item.retry ? { ...item, retry: undefined } : item,
+  );
+  return withItem({ ...state, items }, { type: "user", text });
 }
 
 export function beginStreaming(state: ChatState): ChatState {
@@ -194,11 +209,21 @@ export function applyStreamEvent(state: ChatState, event: ChatStreamEvent): Chat
         issues: event.data.issues,
       });
 
-    case "error":
+    case "error": {
+      // The failed turn's operator message is the most recent "user" item —
+      // input is disabled while a turn streams, so exactly one turn (and
+      // therefore at most one candidate) can be in flight when it errors.
+      const lastUserItem = [...state.items].reverse().find((item) => item.type === "user");
       return {
-        ...withItem(state, { type: "error", message: event.data.message, code: event.data.code }),
+        ...withItem(state, {
+          type: "error",
+          message: event.data.message,
+          code: event.data.code,
+          retry: lastUserItem ? { text: lastUserItem.text } : undefined,
+        }),
         streaming: false,
       };
+    }
 
     case "done":
       return { ...state, streaming: false };

@@ -92,6 +92,60 @@ describe("ChatPage", () => {
     expect(seenSessionIds[1]).toBe("sess_1");
   });
 
+  test("T1.4: retries the failed operator message on the same session after a terminal error", async () => {
+    let calls = 0;
+    const seenSessionIds: (string | undefined)[] = [];
+    const client = new FakeApiClient({
+      streamDelayMs: 0,
+      chatScript: (sessionId, input) => {
+        calls += 1;
+        seenSessionIds.push(input.sessionId);
+        if (calls === 1) {
+          const events: ChatStreamEvent[] = [
+            { event: "session", data: { sessionId } },
+            { event: "error", data: { message: "Upstream overloaded", code: "upstream_error" } },
+          ];
+          return events;
+        }
+        const events: ChatStreamEvent[] = [
+          { event: "session", data: { sessionId } },
+          { event: "text", data: { delta: "recovered" } },
+          { event: "done", data: {} },
+        ];
+        return events;
+      },
+    });
+
+    const { getByLabelText, getByText, findByText } = render(
+      <ChatPage client={client} slug="design-inspiration" navigate={() => {}} />,
+    );
+
+    send(getByLabelText, getByText, "please write it up");
+    await findByText("Upstream overloaded");
+
+    const retryButton = await findByText("Retry last message");
+    fireEvent.click(retryButton);
+    await findByText("recovered");
+
+    // The retry re-sent the same session id the failed turn minted, as
+    // just another turn on it — no server change needed for a resend.
+    expect(seenSessionIds).toEqual([undefined, "sess_1"]);
+
+    // History keeps the failed turn's user bubble and its error item; the
+    // retry's own user bubble and reply follow. The superseded error item
+    // no longer offers a retry affordance.
+    const transcript = document.querySelector(".chat-transcript");
+    const itemTypes = [...(transcript?.children ?? [])].map((el) =>
+      el.className.replace("chat-transcript__item chat-transcript__item--", ""),
+    );
+    expect(itemTypes).toEqual(["user", "error", "user", "assistant"]);
+    expect(document.querySelectorAll(".button--retry").length).toBe(0);
+
+    // The turn settled, so input follows the ordinary streaming convention.
+    const textarea = getByLabelText("Message Shadow") as HTMLTextAreaElement;
+    expect(textarea.disabled).toBe(false);
+  });
+
   test("disables the input while a turn is streaming", async () => {
     const client = new FakeApiClient({ streamDelayMs: 20 });
     const { getByLabelText, getByText } = render(

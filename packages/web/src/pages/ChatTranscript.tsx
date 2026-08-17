@@ -76,6 +76,21 @@ function withInlineCode(text: string): Array<string | { readonly code: string }>
   return parts;
 }
 
+/** T1.4: resends a retryable error item's retained operator text on the same session (`ChatPage.tsx`'s `send`, unchanged, does the sending). */
+function RetryButton({
+  text,
+  onRetry,
+}: {
+  readonly text: string;
+  readonly onRetry: (text: string) => void;
+}) {
+  return (
+    <button type="button" className="button button--retry" onClick={() => onRetry(text)}>
+      Retry last message
+    </button>
+  );
+}
+
 function Prose({ text }: { readonly text: string }) {
   return (
     <>
@@ -98,19 +113,32 @@ function Prose({ text }: { readonly text: string }) {
  * reads as progress instead of a hang — and `chapter.restated` gets the
  * same prominent treatment as anywhere else it appears (D9).
  */
-export function ChatTranscript({ items }: { readonly items: readonly TranscriptItem[] }) {
+export function ChatTranscript({
+  items,
+  onRetry,
+}: {
+  readonly items: readonly TranscriptItem[];
+  /** T1.4: re-sends a retryable error item's retained operator text. Omit to render without the affordance (e.g. read-only transcripts). */
+  readonly onRetry?: (text: string) => void;
+}) {
   return (
     <ol className="chat-transcript" aria-label="Conversation with Shadow">
       {items.map((item) => (
         <li key={item.id} className={`chat-transcript__item chat-transcript__item--${item.type}`}>
-          <TranscriptItemView item={item} />
+          <TranscriptItemView item={item} onRetry={onRetry} />
         </li>
       ))}
     </ol>
   );
 }
 
-function TranscriptItemView({ item }: { readonly item: TranscriptItem }) {
+function TranscriptItemView({
+  item,
+  onRetry,
+}: {
+  readonly item: TranscriptItem;
+  readonly onRetry?: (text: string) => void;
+}) {
   switch (item.type) {
     case "user":
       return (
@@ -235,6 +263,7 @@ function TranscriptItemView({ item }: { readonly item: TranscriptItem }) {
           <span>
             <Prose text={item.message} />
           </span>
+          {item.retry && onRetry && <RetryButton text={item.retry.text} onRetry={onRetry} />}
         </div>
       );
   }

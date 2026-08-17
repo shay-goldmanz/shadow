@@ -68,7 +68,7 @@ export function ChatPage({
         <h1>Chat with Shadow</h1>
       </header>
 
-      <ChatTranscript items={state.items} />
+      <ChatTranscript items={state.items} onRetry={(text) => void send(text)} />
       {state.streaming && (
         <p className="chat-page__status" aria-live="polite">
           Shadowing
