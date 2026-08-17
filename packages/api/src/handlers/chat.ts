@@ -146,7 +146,7 @@ export async function postChat(deps: ApiDeps, req: BunRequest<"/api/chat">): Pro
       // Correlates a `research-started` brief with its later `research-completed`
       // / `research-failed` counterpart — `ShadowEvent` carries the same
       // `ResearchBrief` object reference across both yields
-      // (`conversation.ts`'s `runResearchDirective`), but has no `briefId`
+      // (`conversation.ts`'s `runResearchDirectives`), but has no `briefId`
       // field of its own (`docs/API.md`'s `research.finished: { briefId, ... }`
       // assumes one exists; it doesn't, so this handler mints one).
       const briefIds = new WeakMap<ResearchBrief, string>();

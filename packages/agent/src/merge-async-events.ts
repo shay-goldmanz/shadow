@@ -28,7 +28,11 @@
  * genuinely arrived before it. This is a different failure channel than
  * "the underlying operation failed" (T0.2's callers catch that themselves
  * and push a failure-shaped event instead) — it exists for bugs in a
- * producer itself, which should propagate, not vanish.
+ * producer itself, which should propagate, not vanish. One asymmetry worth
+ * naming: once the merge has thrown, any event a still-running sibling
+ * producer `push`es *afterward* is buffered into an array nobody drains
+ * again — dropped, not deferred for delivery on some later resume, since
+ * the generator is already finished at that point.
  *
  * ## Buffering
  *

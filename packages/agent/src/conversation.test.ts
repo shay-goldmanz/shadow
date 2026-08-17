@@ -19,9 +19,14 @@ import { describe, expect, test } from "bun:test";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { toChapterSlug, toVolumeSlug, type VolumeSlug } from "@shadow/core";
-import { type ClaimSidecar, FileSystemEvidenceStore } from "@shadow/evidence";
-import type { IndexDocument } from "@shadow/indexing";
+import { toChapterSlug, toVolumeSlug, type VolumeSlug, type VolumeStore } from "@shadow/core";
+import {
+  type CheckWorthinessClassifier,
+  type ClaimSidecar,
+  FileSystemEvidenceStore,
+} from "@shadow/evidence";
+import type { BuildIndexResult, IndexDocument } from "@shadow/indexing";
+import { StructuralIndexer } from "@shadow/indexing";
 import type { AgenticSessionOptions, FakeAgenticTurnResponder } from "@shadow/model";
 import { FakeAgenticSessionPort } from "@shadow/model";
 import type { Finding, ResearchBrief, ResearchBriefPort, ResearchResult } from "@shadow/research";
@@ -728,25 +733,40 @@ interface GateSpec {
  */
 class ProbeEvidenceStore extends FileSystemEvidenceStore {
   readonly events: ProbeEvent[] = [];
-  private readonly gates = new Map<string, GateSpec>();
+  private readonly gates = new Map<
+    string,
+    { readonly callIndex: number; readonly spec: GateSpec }
+  >();
+  private readonly callCounts = new Map<string, number>();
 
   /**
-   * The next `putClaims` call for `chapter` fires `spec.onEnter` (if given)
-   * — proof this store has actually been reached — then awaits `spec.gate`
-   * before the real write happens. One-shot: consumed on first match.
+   * Gates the `callIndex`-th `putClaims` call for `chapter` (0-based;
+   * `callIndex` 0 is `draftChapter`'s persist, `callIndex` 1 is
+   * `publishChapter`'s post-audit persist on the happy path with no
+   * repairs). Fires `spec.onEnter` (if given) — proof this store has
+   * actually reached that call — then awaits `spec.gate` before the real
+   * write happens. One-shot per `chapter`: consumed once its call is
+   * reached.
    */
+  gatePutClaims(chapter: string, spec: GateSpec, callIndex = 0): void {
+    this.gates.set(chapter, { callIndex, spec });
+  }
+
+  /** Back-compat alias for `gatePutClaims(chapter, spec, 0)` — the very next call. */
   gateNextPutClaims(chapter: string, spec: GateSpec): void {
-    this.gates.set(chapter, spec);
+    this.gatePutClaims(chapter, spec, 0);
   }
 
   override async putClaims(volume: VolumeSlug, sidecar: ClaimSidecar): Promise<void> {
     const chapter = sidecar.chapter;
     this.events.push({ chapter, phase: "enter", ts: Date.now() });
-    const spec = this.gates.get(chapter);
-    if (spec) {
+    const seen = this.callCounts.get(chapter) ?? 0;
+    this.callCounts.set(chapter, seen + 1);
+    const pending = this.gates.get(chapter);
+    if (pending && pending.callIndex === seen) {
       this.gates.delete(chapter);
-      spec.onEnter?.();
-      await spec.gate;
+      pending.spec.onEnter?.();
+      await pending.spec.gate;
     }
     await super.putClaims(volume, sidecar);
     this.events.push({ chapter, phase: "exit", ts: Date.now() });
@@ -974,6 +994,441 @@ describe("ShadowConversation — different volumes are not serialized against ea
         release.resolve();
         await drainedOne;
         expect(eventsOne.some((e) => e.type === "chapter-published")).toBe(true);
+      });
+    });
+  });
+});
+
+// -----------------------------------------------------------------------
+// F1 — reindex is serialized corpus-wide across different volumes; draft
+// and audit for those same volumes still run in parallel.
+// -----------------------------------------------------------------------
+
+interface IndexerProbeEvent {
+  readonly phase: "enter" | "exit";
+  readonly call: number;
+  readonly ts: number;
+}
+
+/**
+ * Wraps a real `StructuralIndexer`'s `reindex` with an events log and an
+ * optional one-shot gate on a specific call index (0-based, in call order).
+ * `reindex` is corpus-wide (it doesn't know which volume "caused" it), so
+ * gating by call order — rather than by volume, as `ProbeEvidenceStore`
+ * does for `putClaims` — is the only way to pin down "this particular
+ * publish's reindex is the one in flight."
+ */
+class ProbeIndexer extends StructuralIndexer {
+  readonly events: IndexerProbeEvent[] = [];
+  private callCount = 0;
+  private gate: { readonly callIndex: number; readonly spec: GateSpec } | undefined;
+
+  gateReindexCall(callIndex: number, spec: GateSpec): void {
+    this.gate = { callIndex, spec };
+  }
+
+  override async reindex(store: VolumeStore): Promise<BuildIndexResult> {
+    const call = this.callCount++;
+    this.events.push({ phase: "enter", call, ts: Date.now() });
+    if (this.gate?.callIndex === call) {
+      const spec = this.gate.spec;
+      this.gate = undefined;
+      spec.onEnter?.();
+      await spec.gate;
+    }
+    const result = await super.reindex(store);
+    this.events.push({ phase: "exit", call, ts: Date.now() });
+    return result;
+  }
+}
+
+describe("ShadowConversation — the reindex step is serialized corpus-wide across different volumes, even though draft/audit stay parallel (F1 review fix)", () => {
+  test("volume two's audit-phase persist completes while volume one's reindex is still in flight, but volume two's own reindex does not start until volume one's is done", async () => {
+    await withVolumeHarness(async ({ volumeStore, volume: volumeOne, root }) => {
+      await withSessionCwd(async (sessionCwd) => {
+        const volumeTwo = toVolumeSlug("second-volume-f1");
+        await volumeStore.createVolume({ slug: volumeTwo, title: "Second Volume (F1)" });
+
+        const probeStore = new ProbeEvidenceStore(volumeStore);
+        const probeIndexer = new ProbeIndexer({ rootDir: root });
+        const research = new FakeResearchBriefPort(probeStore, () => {
+          throw new Error("no research directive expected in this test");
+        });
+        const sessions = new FakeAgenticSessionPort(
+          chapterOnMarkerResponder([LOCK_TEST_ALPHA, LOCK_TEST_BETA]),
+        );
+
+        const deps: ShadowAgentDeps = {
+          agenticSessionPort: sessions,
+          researchBriefPort: research,
+          volumeStore,
+          evidenceStore: probeStore,
+          indexer: probeIndexer,
+          checkWorthinessClassifier: alwaysNarrativeClassifier,
+          entailmentRelevanceJudge: scriptedEntailmentJudge(),
+          claimRestater: scriptedClaimRestater(() => {
+            throw new Error("no claim should need repair in this test");
+          }),
+          sessionCwd,
+        };
+
+        const agent = new ShadowAgent(deps);
+        const convOne = agent.startConversation(volumeOne);
+        const convTwo = agent.startConversation(volumeTwo);
+
+        // Gate the very first `reindex` call -- volume one's, since volume
+        // two hasn't even started drafting yet -- open, so the corpus lock
+        // stays held for as long as the test wants.
+        const oneEntered = deferred();
+        const oneRelease = deferred();
+        probeIndexer.gateReindexCall(0, {
+          onEnter: () => oneEntered.resolve(),
+          gate: oneRelease.promise,
+        });
+
+        const eventsOne: ShadowEvent[] = [];
+        const drainedOne = (async () => {
+          for await (const event of convOne.sendMessage(LOCK_TEST_ALPHA.operatorText)) {
+            eventsOne.push(event);
+          }
+        })();
+
+        await oneEntered.promise; // volume one now holds the corpus-wide reindex lock
+
+        // Start volume two's publish now. Its draft and Tier 0/2 audit run
+        // fully in parallel with volume one's still-gated reindex -- proven
+        // below by its post-audit `putClaims` (the call immediately before
+        // its own reindex attempt) completing before volume one's reindex
+        // exits.
+        const eventsTwo: ShadowEvent[] = [];
+        const drainedTwo = (async () => {
+          for await (const event of convTwo.sendMessage(LOCK_TEST_BETA.operatorText)) {
+            eventsTwo.push(event);
+          }
+        })();
+
+        // Poll (bounded) for volume two's audit-phase persist -- its second
+        // `putClaims` call for its chapter -- to complete. This is real
+        // filesystem work with no gate of its own, so it settles quickly if
+        // (and only if) it isn't blocked on anything.
+        const deadline = Date.now() + 2000;
+        while (
+          probeStore.events.filter((e) => e.chapter === LOCK_TEST_BETA.slug && e.phase === "exit")
+            .length < 2 &&
+          Date.now() < deadline
+        ) {
+          await Bun.sleep(1);
+        }
+        const betaAuditPersisted =
+          probeStore.events.filter((e) => e.chapter === LOCK_TEST_BETA.slug && e.phase === "exit")
+            .length >= 2;
+        expect(betaAuditPersisted).toBe(true); // draft/audit overlap: proven while volume one's reindex is still gated open
+
+        // Volume one's reindex must still be the only one that has entered —
+        // volume two's own reindex call cannot even be attempted yet,
+        // because it needs the same corpus-wide lock volume one is holding.
+        expect(probeIndexer.events.filter((e) => e.phase === "enter")).toHaveLength(1);
+
+        oneRelease.resolve();
+        await Promise.all([drainedOne, drainedTwo]);
+
+        expect(eventsOne.some((e) => e.type === "chapter-published")).toBe(true);
+        expect(eventsTwo.some((e) => e.type === "chapter-published")).toBe(true);
+
+        // Now that both are done: exactly two reindex calls happened, and
+        // they never overlapped -- volume two's reindex only entered after
+        // volume one's had already exited.
+        const enters = probeIndexer.events.filter((e) => e.phase === "enter");
+        const exits = probeIndexer.events.filter((e) => e.phase === "exit");
+        expect(enters).toHaveLength(2);
+        expect(exits).toHaveLength(2);
+        const call0Exit = exits.find((e) => e.call === 0)?.ts;
+        const call1Enter = enters.find((e) => e.call === 1)?.ts;
+        expect(call0Exit).toBeDefined();
+        expect(call1Enter).toBeDefined();
+        // biome-ignore lint/style/noNonNullAssertion: presence asserted immediately above
+        expect(call1Enter!).toBeGreaterThanOrEqual(call0Exit!);
+      });
+    });
+  });
+
+  test("same-volume publications are unaffected: still fully serialized, corpus lock or not", async () => {
+    // The existing T0.6 "same-volume" test above (unmodified by this fix)
+    // already pins this: two conversations on one volume never let their
+    // `putClaims` critical sections overlap, corpus-wide reindex lock now
+    // threaded through publishChapter or not. This test adds a direct
+    // reindex-level check with the same instrumented indexer used above, so
+    // the F1 fix's effect on same-volume behavior is asserted at the same
+    // granularity as its cross-volume behavior.
+    await withVolumeHarness(async ({ volumeStore, volume, root }) => {
+      await withSessionCwd(async (sessionCwd) => {
+        const probeStore = new ProbeEvidenceStore(volumeStore);
+        const probeIndexer = new ProbeIndexer({ rootDir: root });
+        const research = new FakeResearchBriefPort(probeStore, () => {
+          throw new Error("no research directive expected in this test");
+        });
+        const sessions = new FakeAgenticSessionPort(
+          chapterOnMarkerResponder([LOCK_TEST_ALPHA, LOCK_TEST_BETA]),
+        );
+
+        const deps: ShadowAgentDeps = {
+          agenticSessionPort: sessions,
+          researchBriefPort: research,
+          volumeStore,
+          evidenceStore: probeStore,
+          indexer: probeIndexer,
+          checkWorthinessClassifier: alwaysNarrativeClassifier,
+          entailmentRelevanceJudge: scriptedEntailmentJudge(),
+          claimRestater: scriptedClaimRestater(() => {
+            throw new Error("no claim should need repair in this test");
+          }),
+          sessionCwd,
+        };
+
+        const agent = new ShadowAgent(deps);
+        const convA = agent.startConversation(volume);
+        const convB = agent.startConversation(volume);
+
+        const entered = deferred();
+        const release = deferred();
+        probeStore.gateNextPutClaims(LOCK_TEST_ALPHA.slug, {
+          onEnter: () => entered.resolve(),
+          gate: release.promise,
+        });
+
+        const eventsA: ShadowEvent[] = [];
+        const drainedA = (async () => {
+          for await (const event of convA.sendMessage(LOCK_TEST_ALPHA.operatorText)) {
+            eventsA.push(event);
+          }
+        })();
+
+        await entered.promise; // conv A holds the volume lock, mid-draft
+
+        const eventsB: ShadowEvent[] = [];
+        const drainedB = (async () => {
+          for await (const event of convB.sendMessage(LOCK_TEST_BETA.operatorText)) {
+            eventsB.push(event);
+          }
+        })();
+
+        await Bun.sleep(50);
+        // Same-volume: conv B cannot even reach its own reindex attempt while
+        // conv A holds the volume lock -- unchanged from before this fix.
+        expect(probeIndexer.events).toHaveLength(0);
+
+        release.resolve();
+        await Promise.all([drainedA, drainedB]);
+
+        expect(eventsA.some((e) => e.type === "chapter-published")).toBe(true);
+        expect(eventsB.some((e) => e.type === "chapter-published")).toBe(true);
+        expect(probeIndexer.events.filter((e) => e.phase === "enter")).toHaveLength(2);
+      });
+    });
+  });
+});
+
+// -----------------------------------------------------------------------
+// F3 — a `publishChapter` throw after a successful draft no longer
+// discards the already-observed `chapter-drafted` event.
+// -----------------------------------------------------------------------
+
+describe("ShadowConversation — chapter-drafted survives a publishChapter throw (F3 review fix)", () => {
+  test("the draft is persisted and chapter-drafted is observed by the caller even though publishChapter itself throws afterward", async () => {
+    await withVolumeHarness(async ({ evidenceStore, volumeStore, volume, root }) => {
+      await withSessionCwd(async (sessionCwd) => {
+        const slug = "chapter-that-throws";
+        const marker = "THROW-DIRECTIVE";
+        // Must match verbatim what's actually passed to `sendMessage` below —
+        // `buildEvidenceSpan` requires the claim's quote to be a real
+        // substring of the recorded operator-turn transcript.
+        const operatorText = `${marker}: the operator's belief about the throwing case.`;
+
+        const respond: FakeAgenticTurnResponder = (prompt) => {
+          if (!prompt.includes(marker)) return { text: "Done." };
+          const match = /Operator \(sourceId: (\S+)\):/.exec(prompt);
+          const sourceId = match?.[1];
+          if (!sourceId) throw new Error("operator sourceId missing from prompt");
+          const chapter = {
+            slug,
+            title: "A chapter whose publish blows up",
+            body: [
+              `This chapter is about the throwing case.[^~belief]`,
+              // Deliberately unmarked -- forces the C1b check-worthiness
+              // sweep to actually call `checkWorthinessClassifier.classify`,
+              // which is what this test makes throw.
+              "This sentence has no footnote at all.",
+            ].join(" "),
+            claims: [
+              {
+                label: "belief",
+                kind: "operator",
+                text: "This chapter is about the throwing case.",
+                evidence: [{ sourceId, quote: operatorText }],
+              },
+            ],
+          };
+          return {
+            text: ["Drafting.", "```shadow:chapter", JSON.stringify(chapter), "```"].join("\n"),
+          };
+        };
+
+        const research = new FakeResearchBriefPort(evidenceStore, () => {
+          throw new Error("no research directive expected in this test");
+        });
+        const sessions = new FakeAgenticSessionPort(respond);
+
+        const boom = new Error("checkWorthinessClassifier exploded");
+        const throwingClassifier: CheckWorthinessClassifier = {
+          classify: async () => {
+            throw boom;
+          },
+        };
+
+        const deps: ShadowAgentDeps = {
+          agenticSessionPort: sessions,
+          researchBriefPort: research,
+          volumeStore,
+          evidenceStore,
+          indexer: freshIndexer(root),
+          checkWorthinessClassifier: throwingClassifier,
+          entailmentRelevanceJudge: scriptedEntailmentJudge(),
+          claimRestater: scriptedClaimRestater(() => {
+            throw new Error("should not be called");
+          }),
+          sessionCwd,
+        };
+
+        const agent = new ShadowAgent(deps);
+        const conversation = agent.startConversation(volume);
+
+        const events: ShadowEvent[] = [];
+        const rejection = await expectRejection(
+          (async () => {
+            for await (const event of conversation.sendMessage(operatorText)) {
+              events.push(event);
+            }
+          })(),
+          Error,
+        );
+        expect(rejection).toBe(boom);
+
+        // The regression this guards against: with the old "collect during
+        // the lock, yield only after release" shape, this throw discarded
+        // the already-collected `chapter-drafted` event entirely -- the
+        // operator got no signal a draft had landed on disk.
+        expect(events.some((e) => e.type === "chapter-drafted" && e.chapter === slug)).toBe(true);
+
+        // And the draft really is on disk -- `draftChapter` did complete
+        // before `publishChapter` blew up.
+        const persisted = await volumeStore.getChapter(volume, toChapterSlug(slug));
+        expect(persisted.title).toBe("A chapter whose publish blows up");
+
+        // Never got as far as chapter-audit/chapter-published/chapter-rejected
+        // -- publishChapter threw before producing a verdict.
+        expect(events.some((e) => e.type === "chapter-audit")).toBe(false);
+        expect(events.some((e) => e.type === "chapter-published")).toBe(false);
+        expect(events.some((e) => e.type === "chapter-rejected")).toBe(false);
+      });
+    });
+  });
+});
+
+// -----------------------------------------------------------------------
+// F4 — chapter events stream to the caller while the volume lock is still
+// held, not only after the whole draft-then-publish unit releases it.
+// -----------------------------------------------------------------------
+
+describe("ShadowConversation — chapter events stream out while the volume lock is still held (F4 review fix)", () => {
+  test("chapter-drafted reaches the consumer before publishChapter's post-audit persist, and the lock is provably still held at that point", async () => {
+    await withVolumeHarness(async ({ volumeStore, volume, root }) => {
+      await withSessionCwd(async (sessionCwd) => {
+        const spec: ChapterMarkerSpec = {
+          marker: "STREAM-DIRECTIVE",
+          slug: "chapter-stream",
+          operatorText: "STREAM-DIRECTIVE: the operator's belief about streaming.",
+        };
+        const probeStore = new ProbeEvidenceStore(volumeStore);
+        const research = new FakeResearchBriefPort(probeStore, () => {
+          throw new Error("no research directive expected in this test");
+        });
+        const sessions = new FakeAgenticSessionPort(chapterOnMarkerResponder([spec]));
+
+        const deps: ShadowAgentDeps = {
+          agenticSessionPort: sessions,
+          researchBriefPort: research,
+          volumeStore,
+          evidenceStore: probeStore,
+          indexer: freshIndexer(root),
+          checkWorthinessClassifier: alwaysNarrativeClassifier,
+          entailmentRelevanceJudge: scriptedEntailmentJudge(),
+          claimRestater: scriptedClaimRestater(() => {
+            throw new Error("no claim should need repair in this test");
+          }),
+          sessionCwd,
+        };
+
+        const agent = new ShadowAgent(deps);
+        const conversation = agent.startConversation(volume);
+
+        const entered = deferred();
+        const release = deferred();
+        // Gate the *second* `putClaims` call for this chapter --
+        // `publishChapter`'s post-audit persist, which happens after
+        // `chapter-drafted` was already pushed but before the corpus is
+        // reindexed -- so the volume lock is provably still held once we
+        // observe the event below.
+        probeStore.gatePutClaims(
+          spec.slug,
+          { onEnter: () => entered.resolve(), gate: release.promise },
+          1,
+        );
+
+        const iterator = conversation.sendMessage(spec.operatorText)[Symbol.asyncIterator]();
+        const events: ShadowEvent[] = [];
+
+        let next = await iterator.next();
+        while (!next.done && next.value.type !== "chapter-drafted") {
+          events.push(next.value);
+          next = await iterator.next();
+        }
+        if (next.done) throw new Error("stream ended before chapter-drafted was observed");
+        events.push(next.value);
+
+        // The consumer has now observed `chapter-drafted`. Confirm the
+        // producer really is sitting at the gate (not merely that we got
+        // lucky with scheduling) before checking the lock.
+        await entered.promise;
+
+        // Prove the lock is STILL held: a fresh attempt to acquire the same
+        // volume's lock must not run until the gate above is released. If
+        // events were still only yielded after the whole locked section
+        // released (the pre-F4 shape), this race would be untestable this
+        // way -- the generator wouldn't have produced anything yet for the
+        // consumer to observe in the first place while the lock was held.
+        let raced = false;
+        const racer = agent.withVolumeLock(volume, async () => {
+          raced = true;
+        });
+
+        await Bun.sleep(30);
+        expect(raced).toBe(false); // still queued behind the in-flight publish
+
+        release.resolve();
+        await racer;
+        expect(raced).toBe(true);
+
+        // Drain the rest of the stream so the conversation finishes cleanly
+        // -- `next` still holds the already-pushed `chapter-drafted` result,
+        // so advance past it first before continuing the loop.
+        next = await iterator.next();
+        while (!next.done) {
+          events.push(next.value);
+          next = await iterator.next();
+        }
+
+        expect(events.some((e) => e.type === "chapter-published")).toBe(true);
+        expect(events.some((e) => e.type === "error" || e.type === "chapter-rejected")).toBe(false);
       });
     });
   });

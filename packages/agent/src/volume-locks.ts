@@ -1,18 +1,36 @@
 /**
- * `VolumeLocks` — a per-key async mutex, keyed by volume slug (T0.6).
+ * `VolumeLocks` — a per-key async mutex (T0.6). Two kinds of key share this
+ * one map:
  *
- * Chapter publication (`publish.ts`) does read-modify-write on shared
- * per-volume files (the claim sidecar, retirement-event appends —
- * `@shadow/evidence`'s `store.ts` `putClaims`) and reindexes the corpus.
- * `conversation.ts`'s auto-continuation loop already runs chapter directives
- * one at a time *within* a single conversation, but nothing previously
- * stopped two different conversations — two operator sessions on the same
- * volume — from running `draftChapter`/`publishChapter` concurrently and
- * racing that shared state. `ShadowAgent` owns one `VolumeLocks` instance,
- * shared by every `ShadowConversation` it mints, so "same volume" is
- * serialized regardless of which conversation is publishing — while
- * different volumes stay fully independent (no cross-volume contention, no
- * global lock).
+ * - **A volume slug.** Chapter publication (`publish.ts`) does
+ *   read-modify-write on shared per-volume files (the claim sidecar,
+ *   retirement-event appends — `@shadow/evidence`'s `store.ts` `putClaims`).
+ *   `conversation.ts`'s auto-continuation loop already runs chapter
+ *   directives one at a time *within* a single conversation, but nothing
+ *   previously stopped two different conversations — two operator sessions
+ *   on the same volume — from running `draftChapter`/`publishChapter`
+ *   concurrently and racing that shared state. `ShadowAgent` owns one
+ *   `VolumeLocks` instance, shared by every `ShadowConversation` it mints
+ *   (and exposed to `@shadow/api`'s HTTP publish handler too — F2 review
+ *   fix), so "same volume" is serialized regardless of who is publishing.
+ * - **`CORPUS_LOCK_KEY`** (below). `publishChapter`'s final step,
+ *   `indexer.reindex`, is not scoped to the publishing chapter's own volume
+ *   — it reads *every* volume and rewrites the root corpus index
+ *   (`FileSystemVolumeStore`'s non-atomic `Bun.write`) plus every volume's
+ *   own index files. Two publishes on *different* volumes therefore still
+ *   race each other at that one step even though a per-volume lock keeps
+ *   their draft/audit sections apart (F1 review fix — a just-published
+ *   chapter could otherwise vanish from the corpus index under a stale
+ *   overwrite). This reserved key gives the reindex step its own
+ *   corpus-wide critical section, acquired *inside* the volume lock already
+ *   held for the publish in progress — lock order is always volume ->
+ *   corpus, and the corpus lock is only ever taken while holding a volume
+ *   lock, so there is no cycle to deadlock on.
+ *
+ * The real invariant, then: draft and audit run in parallel across
+ * different volumes — no cross-volume contention there, no global lock on
+ * that part — but the reindex step is serialized corpus-wide, regardless of
+ * which volume triggered it.
  *
  * ## Shape
  *
@@ -72,3 +90,14 @@ export class VolumeLocks {
     return this.chains.size;
   }
 }
+
+/**
+ * Reserved `VolumeLocks` key for the corpus-wide reindex step
+ * (`publish.ts`'s `withReindexLock`, F1 review fix) — never a real volume
+ * slug. `@shadow/core`'s `slug.ts` (`SLUG_PATTERN`) only accepts lowercase
+ * alphanumeric segments joined by single hyphens, with no leading
+ * whitespace; the leading space here makes this key fail that pattern
+ * unconditionally, so it can never collide with a validated `VolumeSlug` no
+ * matter what a future volume is named.
+ */
+export const CORPUS_LOCK_KEY = " corpus";

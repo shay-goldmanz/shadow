@@ -1,6 +1,8 @@
 /**
- * T0.3 — end-to-end proof, at the HTTP handler level, that Tier 0's
- * concurrency fix is actually wired in: two `POST /api/chat` sessions that
+ * T0.3 — end-to-end proof, at the HTTP handler level, that `PerBriefResearchAgent`
+ * (T0.1) actually delivers its no-shared-state-across-briefs contract when
+ * driven the way production traffic drives it — through two real
+ * `POST /api/chat` sessions, not a direct unit-level call: two sessions that
  * both trigger research in *overlapping* turns complete successfully, and
  * neither stream ever surfaces `research_agent_busy`
  * (`ResearchAgentBusyError`, `error-mapping.ts`).
@@ -35,14 +37,25 @@
  * `web-research-tool-agent.ts:166-181`) T0.1 was built to make
  * unreachable under concurrency.
  *
- * ## Revert-detection property
+ * ## What this test actually pins — and what it doesn't
  *
- * This test is built to fail if `composition.ts` (or equivalent wiring)
- * reverts to a single `WebResearchToolAgent` shared across conversations
- * instead of `PerBriefResearchAgent`'s fresh-instance-per-call design.
- * Verified by a manual experiment (performed and undone while writing this
- * test — not left in the tree): replacing the `researchPort` construction
- * below —
+ * This test injects the real `PerBriefResearchAgent` (T0.1) as
+ * `WithApiOptions.researchBriefPort` and asserts it survives two genuinely
+ * concurrent `research()` calls issued through two real HTTP sessions. That
+ * pins `PerBriefResearchAgent`'s own contract — a fresh `WebResearchToolAgent`
+ * per `research()` call, not one shared, `busy`-flagged instance — at the
+ * handler level, exercising `conversation.ts`'s real dispatch path into
+ * whatever `researchBriefPort` a caller supplies. It does **not** exercise
+ * `composition.ts`: that file's wiring (which concrete class it constructs
+ * for `researchBriefPort`) is never imported or invoked here, so this test
+ * cannot catch a regression where `composition.ts` alone reverts to
+ * constructing a single shared `WebResearchToolAgent` while
+ * `PerBriefResearchAgent` itself stays correct — only a manual read of
+ * `composition.ts`, or a dedicated test importing it, would catch that.
+ *
+ * The contract this test pins is real, though — verified by a manual
+ * experiment (performed and undone while writing this test, not left in the
+ * tree): replacing the `researchPort` construction below —
  *
  *   const researchPort = new PerBriefResearchAgent({ transport, evidenceStore, sessions });
  *
@@ -61,8 +74,8 @@
  * test failed — not with a caught busy-message assertion (there was no
  * second session for `waitForStart(1)` to ever observe), but by *timing
  * out* after 5s, hung forever on `await researchSessions.waitForStart(1)`,
- * which is just as decisive a failure signal for a revert as an assertion
- * would be — this test cannot pass under either failure shape a shared
+ * which is just as decisive a failure signal as an assertion would be —
+ * this test cannot pass under either failure shape a shared
  * `WebResearchToolAgent` produces (immediate busy throw, or the
  * silently-never-invoked-second-call this port's synchronous guard causes
  * here). Reverted back to `PerBriefResearchAgent` before landing.

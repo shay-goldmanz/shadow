@@ -54,6 +54,21 @@ export interface PublishDeps {
   readonly checkWorthinessClassifier: CheckWorthinessClassifier;
   readonly entailmentRelevanceJudge: EntailmentRelevanceJudge;
   readonly claimRestater: ClaimRestater;
+  /**
+   * Wraps only the `indexer.reindex` call below (F1 review fix).
+   * `reindex` is not scoped to this chapter's own volume — it reads every
+   * volume and rewrites the corpus-wide index plus every volume's own index
+   * files (`@shadow/core`'s `FileSystemVolumeStore`) — so two publishes on
+   * *different* volumes still race that one step even when each is holding
+   * its own per-volume lock. Callers that share a volume-scoped lock across
+   * publishes (`@shadow/agent`'s `ShadowConversation`, `@shadow/api`'s HTTP
+   * chapter handler) pass a callback that additionally serializes this step
+   * on a corpus-wide key (`volume-locks.ts`'s `CORPUS_LOCK_KEY`). Defaults
+   * to pass-through — `fn()` called directly, no serialization — so callers
+   * that don't need it (this file's own unit tests, any other single-caller
+   * context) are unaffected.
+   */
+  readonly withReindexLock?: <T>(fn: () => Promise<T>) => Promise<T>;
 }
 
 export interface PublishResult {
@@ -228,7 +243,8 @@ export async function publishChapter(
       verified: [...currentChapter.verified, { by: "process:audit", at: new Date() }],
       frontmatter: currentChapter.frontmatter,
     });
-    await deps.indexer.reindex(deps.volumeStore);
+    const withReindexLock = deps.withReindexLock ?? (<T>(fn: () => Promise<T>) => fn());
+    await withReindexLock(() => deps.indexer.reindex(deps.volumeStore));
     published = true;
   }
 

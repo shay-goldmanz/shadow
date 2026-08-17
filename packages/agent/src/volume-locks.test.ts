@@ -171,6 +171,86 @@ describe("VolumeLocks — independent keys", () => {
   });
 });
 
+describe("VolumeLocks — guarded delete (F5 mutant-kill)", () => {
+  test("A releases while B is queued and holding; C arriving then still waits for B rather than running concurrently", async () => {
+    // The mutant this kills: an unconditional `delete` in `withLock`'s
+    // `finally` instead of the guarded `if (this.chains.get(key) === tail)`.
+    // With that mutant, A's cleanup would drop the "vol-a" map entry the
+    // instant A releases -- even though B (queued behind A) has already
+    // overwritten it with its own tail. A caller arriving after that point
+    // (C, below) would then compute `previous = chains.get(key) ??
+    // Promise.resolve()`, find nothing, and start running immediately
+    // instead of queueing behind B -- exactly the concurrency violation the
+    // guard exists to prevent. None of the existing tests above call a
+    // *third* holder while a *second* is still active after the *first* has
+    // released, so none of them exercise this branch.
+    const locks = new VolumeLocks();
+    let active = 0;
+    let maxActive = 0;
+    const order: string[] = [];
+
+    const gateA = deferred<void>();
+    const gateB = deferred<void>();
+
+    const a = locks.withLock("vol-a", async () => {
+      active += 1;
+      maxActive = Math.max(maxActive, active);
+      order.push("a:start");
+      await gateA.promise;
+      order.push("a:end");
+      active -= 1;
+    });
+
+    // Let A actually begin before queuing B behind it.
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(order).toEqual(["a:start"]);
+
+    const b = locks.withLock("vol-a", async () => {
+      active += 1;
+      maxActive = Math.max(maxActive, active);
+      order.push("b:start");
+      await gateB.promise;
+      order.push("b:end");
+      active -= 1;
+    });
+
+    // Release A. B is queued behind it and should now take over the lock —
+    // this is the moment A's `finally` runs its (guarded) cleanup check.
+    gateA.resolve();
+    await a;
+
+    // A few microtask turns for B's `fn` to actually start running.
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(order).toEqual(["a:start", "a:end", "b:start"]);
+
+    // C arrives now: A has already released and cleaned up, B is still
+    // holding. Correct (guarded) code left B's tail in the map for C to
+    // queue behind.
+    const c = locks.withLock("vol-a", async () => {
+      active += 1;
+      maxActive = Math.max(maxActive, active);
+      order.push("c:start");
+      order.push("c:end");
+      active -= 1;
+    });
+
+    // Give C every real opportunity to run early if the guard were broken.
+    await Promise.resolve();
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(order).toEqual(["a:start", "a:end", "b:start"]); // c has not started
+
+    gateB.resolve();
+    await Promise.all([b, c]);
+
+    expect(order).toEqual(["a:start", "a:end", "b:start", "b:end", "c:start", "c:end"]);
+    expect(maxActive).toBe(1);
+    expect(locks.lockedKeyCount).toBe(0);
+  });
+});
+
 describe("VolumeLocks — cleanup", () => {
   test("a key's entry is removed once its chain fully drains", async () => {
     const locks = new VolumeLocks();

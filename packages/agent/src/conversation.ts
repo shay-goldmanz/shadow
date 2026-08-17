@@ -38,7 +38,8 @@
  * three." `disallowedTools` names the risky built-ins anyway, as
  * belt-and-braces against a future change loosening `allowedTools`.
  *
- * ## Same-volume chapter publication is serialized across conversations (T0.6)
+ * ## Same-volume chapter publication is serialized across conversations
+ * (T0.6); the reindex step is serialized corpus-wide (F1 review fix)
  *
  * `runChapterDirective` below drafts a chapter and then publishes it
  * (`chapter-draft.ts` + `publish.ts`), which read-modify-writes shared
@@ -49,9 +50,20 @@
  * shared state — an easy thing to hit once sessions can list and be resumed
  * independently. `ShadowAgent` owns one `VolumeLocks` (`volume-locks.ts`)
  * and hands it to every `ShadowConversation` it mints; `runChapterDirective`
- * holds it for the volume slug across the whole draft-then-publish unit.
- * Different volumes never contend with each other, and research directives
- * are untouched — only chapter publication needs this.
+ * holds it for the volume slug across the whole draft-then-publish unit —
+ * draft and audit for *different* volumes still run fully in parallel, and
+ * research directives are untouched by any of this.
+ *
+ * Reindexing is not volume-scoped, though: `publishChapter`'s final step
+ * reads every volume and rewrites the corpus-wide index plus every volume's
+ * own index files, so two publishes on different volumes still race *that*
+ * one step even with per-volume locking in place. `runChapterDirective`
+ * passes `publishChapter` a `withReindexLock` bound to the *same*
+ * `VolumeLocks` instance, keyed on `CORPUS_LOCK_KEY` — a reserved key that
+ * cannot collide with a real volume slug (`volume-locks.ts`) — acquired
+ * strictly *inside* the volume lock already held, so the corpus-wide
+ * critical section is as short as the reindex call itself, never the whole
+ * draft-then-publish unit.
  *
  * ## Session persistence is required, not optional (see `getOrCreateSession`)
  *
@@ -88,7 +100,7 @@ import { type AsyncEventProducer, mergeAsyncEvents } from "./merge-async-events.
 import { publishChapter } from "./publish.ts";
 import { ensureWritingVolumesSkillInstalled } from "./skills.ts";
 import { buildShadowSystemPrompt } from "./system-prompt.ts";
-import { VolumeLocks } from "./volume-locks.ts";
+import { CORPUS_LOCK_KEY, VolumeLocks } from "./volume-locks.ts";
 
 export interface ShadowAgentDeps {
   readonly agenticSessionPort: AgenticSessionPort;
@@ -336,7 +348,11 @@ export class ShadowConversation {
       yield { type: "research-started", brief };
     }
 
-    const followUpBySlot: string[] = Array.from({ length: briefs.length });
+    // Sparse until every producer settles (`mergeAsyncEvents` runs them all
+    // concurrently below) — honestly typed as possibly-`undefined` rather
+    // than lying with `string[]`; asserted filled at the spread site once
+    // every slot is guaranteed set.
+    const followUpBySlot: (string | undefined)[] = Array.from({ length: briefs.length });
     const producers: AsyncEventProducer<ShadowEvent>[] = briefs.map(
       (brief, slot) => async (push) => {
         try {
@@ -355,62 +371,94 @@ export class ShadowConversation {
       yield event;
     }
 
-    followUps.push(...followUpBySlot);
+    // Every producer above settled (successfully or not) before
+    // `mergeAsyncEvents` returned, and each one unconditionally sets its own
+    // slot before pushing its completion event — so every slot is filled by
+    // this point; the assertion below documents that invariant instead of
+    // silently coercing `undefined` to `string`.
+    followUps.push(
+      ...followUpBySlot.map((followUp, slot) => {
+        if (followUp === undefined) {
+          throw new Error(`internal error: research directive slot ${slot} never settled`);
+        }
+        return followUp;
+      }),
+    );
   }
 
   /**
    * Draft, then publish, one chapter directive — the whole read-modify-write
    * unit held under `volumeLocks` for `this.volume` (T0.6, module doc
    * above), so two conversations publishing to the same volume never
-   * interleave their sidecar writes/retirement appends/reindex. The lock is
-   * acquired before `draftChapter` and released once `publishChapter` (or a
-   * draft failure) is done; events are collected during the locked section
-   * and only yielded to the caller after it releases, so this generator's
-   * observable output is identical to running the same steps unlocked — the
-   * lock changes *when* two conversations' work can overlap, never *what*
-   * either one produces.
+   * interleave their sidecar writes/retirement appends/reindex; the reindex
+   * step inside `publishChapter` additionally serializes corpus-wide via
+   * `CORPUS_LOCK_KEY` (F1 review fix, module doc above).
+   *
+   * Events stream to the caller as each step completes, via a single-producer
+   * `mergeAsyncEvents` that `push`es synchronously from *inside* the locked
+   * section (F3/F4 review fix) — a deliberate departure from "collect during
+   * the lock, yield only after release": lock hold time no longer depends on
+   * how fast the consumer pulls (`push` returns immediately regardless), the
+   * caller can observe events like `chapter-drafted` *while the lock is
+   * still held* (streaming is no longer delayed for the whole draft+publish
+   * unit), and — the correctness fix, not just a latency one — a
+   * `publishChapter` throw after a successful draft no longer discards the
+   * already-pushed `chapter-drafted` event: `mergeAsyncEvents` drains every
+   * buffered event before surfacing a producer's rejection
+   * (`merge-async-events.ts`'s documented completion order), so the operator
+   * still gets the "a draft landed on disk" signal even when publication
+   * itself blows up afterward.
    */
   private async *runChapterDirective(
     directive: ChapterDirective,
     followUps: string[],
   ): AsyncGenerator<ShadowEvent, void, undefined> {
-    const events: ShadowEvent[] = [];
     let followUp: string | undefined;
 
-    await this.volumeLocks.withLock(this.volume, async () => {
-      let slug: ChapterSlug;
-      try {
-        const draft = await draftChapter(this.deps, this.volume, directive);
-        slug = draft.chapter.slug;
-        events.push({ type: "chapter-drafted", volume: this.volume, chapter: slug });
-      } catch (error) {
-        const message = error instanceof Error ? error.message : String(error);
-        events.push({
-          type: "error",
-          error: `Could not draft chapter "${directive.slug}": ${message}`,
+    yield* mergeAsyncEvents<ShadowEvent>([
+      async (push) => {
+        await this.volumeLocks.withLock(this.volume, async () => {
+          let slug: ChapterSlug;
+          try {
+            const draft = await draftChapter(this.deps, this.volume, directive);
+            slug = draft.chapter.slug;
+            push({ type: "chapter-drafted", volume: this.volume, chapter: slug });
+          } catch (error) {
+            const message = error instanceof Error ? error.message : String(error);
+            push({
+              type: "error",
+              error: `Could not draft chapter "${directive.slug}": ${message}`,
+            });
+            followUp = formatChapterDraftFailure(directive.slug, message);
+            return;
+          }
+
+          const result = await publishChapter(
+            {
+              ...this.deps,
+              withReindexLock: (fn) => this.volumeLocks.withLock(CORPUS_LOCK_KEY, fn),
+            },
+            this.volume,
+            slug,
+          );
+          const issues = result.outcomes.flatMap((outcome) => outcome.issues);
+          push({
+            type: "chapter-audit",
+            volume: this.volume,
+            chapter: slug,
+            passed: result.verdict.passed,
+            repairs: result.repairs,
+          });
+          if (result.published) {
+            push({ type: "chapter-published", volume: this.volume, chapter: slug });
+          } else {
+            push({ type: "chapter-rejected", volume: this.volume, chapter: slug, issues });
+          }
+          followUp = formatChapterOutcome(slug, result.published, issues, result.repairs);
         });
-        followUp = formatChapterDraftFailure(directive.slug, message);
-        return;
-      }
+      },
+    ]);
 
-      const result = await publishChapter(this.deps, this.volume, slug);
-      const issues = result.outcomes.flatMap((outcome) => outcome.issues);
-      events.push({
-        type: "chapter-audit",
-        volume: this.volume,
-        chapter: slug,
-        passed: result.verdict.passed,
-        repairs: result.repairs,
-      });
-      if (result.published) {
-        events.push({ type: "chapter-published", volume: this.volume, chapter: slug });
-      } else {
-        events.push({ type: "chapter-rejected", volume: this.volume, chapter: slug, issues });
-      }
-      followUp = formatChapterOutcome(slug, result.published, issues, result.repairs);
-    });
-
-    for (const event of events) yield event;
     if (followUp !== undefined) followUps.push(followUp);
   }
 
@@ -471,5 +519,30 @@ export class ShadowAgent {
 
   startConversation(volume: VolumeSlug, options?: StartConversationOptions): ShadowConversation {
     return new ShadowConversation(this.deps, volume, this.volumeLocks, options);
+  }
+
+  /**
+   * Run `fn` with `volume`'s lock held — the *same* `VolumeLocks` instance
+   * (and therefore the same mutex) every `ShadowConversation` this agent
+   * mints uses for chapter publication (T0.6). Exposed so `@shadow/api`'s
+   * HTTP chapter-publish handler (`handlers/chapters.ts`, F2 review fix) can
+   * serialize against chat-driven publishes on the same volume, not just
+   * against other HTTP publishes — without this, the HTTP path bypassed
+   * locking entirely.
+   */
+  withVolumeLock<T>(volume: VolumeSlug, fn: () => Promise<T>): Promise<T> {
+    return this.volumeLocks.withLock(volume, fn);
+  }
+
+  /**
+   * Run `fn` with the corpus-wide reindex lock held (`CORPUS_LOCK_KEY`, F1
+   * review fix) — the same lock `ShadowConversation.runChapterDirective`
+   * wraps around `publishChapter`'s reindex step. Exposed so the HTTP
+   * chapter-publish handler's own `publishChapter` call serializes its
+   * reindex against chat-driven publishes on *other* volumes too, not only
+   * same-volume ones.
+   */
+  withReindexLock<T>(fn: () => Promise<T>): Promise<T> {
+    return this.volumeLocks.withLock(CORPUS_LOCK_KEY, fn);
   }
 }
