@@ -79,6 +79,82 @@ describe("FileSystemSessionStore (filesystem-specific)", () => {
     }
   });
 
+  // Review #10: seq continuity across a store RE-OPEN. Filesystem-specific
+  // (not in the shared contract suite) because "reopen a new store instance
+  // pointed at the same on-disk state" only means something for a real
+  // filesystem backend — the regression this guards is F1's per-store-instance
+  // append-state cache (`FileSystemSessionStore`'s `appendState` map):
+  // without re-deriving `lastSeq` from disk on a fresh instance's first
+  // `append` for an id, a process restart would silently restart seq
+  // numbering at 1 instead of continuing where the previous process left off.
+  describe("seq continuity across a store re-open (F1 review fix)", () => {
+    test("a new FileSystemSessionStore instance on the same root continues seq, it does not restart", async () => {
+      const root = await makeTempRoot();
+      try {
+        const firstInstance = new FileSystemSessionStore(root);
+        await firstInstance.create(fixtureMeta("reopen-continuity"));
+        await firstInstance.append("reopen-continuity", [
+          {
+            turnId: "t1",
+            at: "2026-01-01T00:00:01.000Z",
+            event: { type: "operator-message", text: "one" },
+          },
+          {
+            turnId: "t1",
+            at: "2026-01-01T00:00:02.000Z",
+            event: { type: "operator-message", text: "two" },
+          },
+        ]);
+
+        // A brand-new instance -- its `appendState` map starts empty, no
+        // shared in-memory state with `firstInstance` at all.
+        const secondInstance = new FileSystemSessionStore(root);
+        const stamped = await secondInstance.append("reopen-continuity", [
+          {
+            turnId: "t2",
+            at: "2026-01-01T00:00:03.000Z",
+            event: { type: "operator-message", text: "three" },
+          },
+        ]);
+
+        expect(stamped.map((r) => r.seq)).toEqual([3]);
+        const events = await secondInstance.readEvents("reopen-continuity");
+        expect(events.map((e) => e.seq)).toEqual([1, 2, 3]);
+      } finally {
+        await rm(root, { recursive: true, force: true });
+      }
+    });
+  });
+
+  // F1 review fix: crash-orphaned events.jsonl.tmp.* files are cleaned up on
+  // the one-time repair pass, not left to accumulate forever.
+  describe("stale events.jsonl.tmp.* cleanup (F1 review fix)", () => {
+    test("an orphaned tmp file left by a prior crashed repair is removed on the next append", async () => {
+      const root = await makeTempRoot();
+      try {
+        const store = new FileSystemSessionStore(root);
+        await store.create(fixtureMeta("tmp-cleanup"));
+
+        const dir = join(root, "sessions", "tmp-cleanup");
+        const orphan = join(dir, "events.jsonl.tmp.orphaned-from-a-crash");
+        await Bun.write(orphan, "leftover partial write");
+        expect(await Bun.file(orphan).exists()).toBe(true);
+
+        await store.append("tmp-cleanup", [
+          {
+            turnId: "t1",
+            at: "2026-01-01T00:00:01.000Z",
+            event: { type: "operator-message", text: "one" },
+          },
+        ]);
+
+        expect(await Bun.file(orphan).exists()).toBe(false);
+      } finally {
+        await rm(root, { recursive: true, force: true });
+      }
+    });
+  });
+
   describe("crash tolerance (torn tail vs. mid-file corruption)", () => {
     test("a torn LAST line is tolerated: readEvents returns the readable prefix, not a throw", async () => {
       const root = await makeTempRoot();
@@ -116,9 +192,9 @@ describe("FileSystemSessionStore (filesystem-specific)", () => {
     test("append after a torn tail heals it instead of gluing new bytes onto the torn line", async () => {
       const root = await makeTempRoot();
       try {
-        const store = new FileSystemSessionStore(root);
-        await store.create(fixtureMeta("self-heal"));
-        await store.append("self-heal", [
+        const firstInstance = new FileSystemSessionStore(root);
+        await firstInstance.create(fixtureMeta("self-heal"));
+        await firstInstance.append("self-heal", [
           {
             turnId: "t1",
             at: "2026-01-01T00:00:01.000Z",
@@ -135,11 +211,17 @@ describe("FileSystemSessionStore (filesystem-specific)", () => {
         const wholeText = await Bun.file(eventsPath).text();
         await Bun.write(eventsPath, wholeText.slice(0, -10));
 
-        // The next append (as would happen when the server restarts and
-        // the session resumes) must assign seq 2 to the new event — not
-        // seq 3, which would silently re-lose the torn seq-2 record — and
-        // must leave the file in a state later reads can parse cleanly.
-        const stamped = await store.append("self-heal", [
+        // The next append happens through a FRESH store instance (F1 review
+        // fix) — exactly what a server restart after a crash looks like:
+        // `firstInstance`'s in-memory append-state cache (which would have
+        // no idea the file was just torn out from under it) never gets a
+        // chance to skip the one-time repair check, because the repair is
+        // scoped per store instance, not global. Must assign seq 2 to the
+        // new event — not seq 3, which would silently re-lose the torn
+        // seq-2 record — and must leave the file in a state later reads
+        // can parse cleanly.
+        const secondInstance = new FileSystemSessionStore(root);
+        const stamped = await secondInstance.append("self-heal", [
           {
             turnId: "t2",
             at: "2026-01-01T00:00:03.000Z",
@@ -148,7 +230,7 @@ describe("FileSystemSessionStore (filesystem-specific)", () => {
         ]);
         expect(stamped.map((r) => r.seq)).toEqual([2]);
 
-        const events = await store.readEvents("self-heal");
+        const events = await secondInstance.readEvents("self-heal");
         expect(events.map((e) => e.seq)).toEqual([1, 2]);
         expect(events[1]?.event).toEqual({ type: "operator-message", text: "three" });
       } finally {

@@ -61,6 +61,22 @@ describe("chat transcript reducer", () => {
     expect(state.items[0]).toMatchObject({ type: "assistant", text: "Hello, operator." });
   });
 
+  // F7 review fix: the reducer's exhaustive `switch` (`event satisfies
+  // never`) means `operator` MUST have a case or this file fails to
+  // compile — this test pins its *behavior*, not just its existence: it's
+  // a defensive default that leaves the transcript untouched, because
+  // `ChatPage` already appends its own local "user" item the instant the
+  // operator hits send (T2.8 is expected to make this wire event the real
+  // source of truth instead; until then, rendering both would duplicate
+  // the bubble).
+  test("an operator event is swallowed (no transcript item, no state change) — ChatPage already appends its own local user bubble", () => {
+    const before = appendUserMessage(INITIAL_CHAT_STATE, "Hi Shadow.");
+    const after = applyStreamEvent(before, { event: "operator", data: { text: "Hi Shadow." } });
+
+    expect(after).toEqual(before);
+    expect(types(after.items)).toEqual(["user"]);
+  });
+
   test("a chapter.restated event is kept as its own visible item, not swallowed", () => {
     let state = INITIAL_CHAT_STATE;
     state = applyStreamEvent(state, {

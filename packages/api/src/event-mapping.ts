@@ -93,6 +93,17 @@ export type StampableAgentEvent = Exclude<ShadowEvent, { readonly type: "text-de
 export class StoredEventStamper {
   private readonly briefIds = new WeakMap<ResearchBrief, string>();
   private briefCounter = 0;
+  /**
+   * Counts lookup misses (review #9) — separate from `briefCounter` so a
+   * miss's placeholder id never collides with a real `research-started`
+   * brief's id, and so two misses in the same turn don't collide with each
+   * other either. A stored `brief-unknown` (with no suffix, the old
+   * behavior) is *permanent* replay corruption the moment a second miss
+   * ever happens in the same turn: both would render as literally the same
+   * `briefId`, indistinguishable on replay forever after — this package
+   * never rewrites `events.jsonl` once written.
+   */
+  private missCounter = 0;
 
   constructor(private readonly turnId: string) {}
 
@@ -103,8 +114,12 @@ export class StoredEventStamper {
    * `research-failed` look up the same object. A lookup miss (a brief this
    * stamper never saw `research-started` for — shouldn't happen given
    * `@shadow/agent`'s emission order, but the stamper doesn't assume it)
-   * falls back to a stable placeholder rather than throwing, matching
-   * `chat.ts`'s pre-T2.2 `?? "unknown"` fallback.
+   * falls back to a stable, per-miss-unique placeholder rather than
+   * throwing (review #9: `chat.ts`'s pre-T2.2 `?? "unknown"` fallback,
+   * de-collided and logged) — non-throwing because losing one brief's
+   * correlation should not sink the rest of the turn's events, but logged
+   * because a miss is never expected and worth a human noticing rather than
+   * silently disappearing into an indistinguishable placeholder.
    */
   stampAgentEvent(event: StampableAgentEvent): AgentStoredEvent {
     switch (event.type) {
@@ -115,7 +130,17 @@ export class StoredEventStamper {
       }
       case "research-completed":
       case "research-failed": {
-        const briefId = this.briefIds.get(event.brief) ?? `${this.turnId}/brief-unknown`;
+        const known = this.briefIds.get(event.brief);
+        if (known !== undefined) {
+          return { ...event, briefId: known };
+        }
+        const briefId = `${this.turnId}/brief-unknown-${++this.missCounter}`;
+        console.warn(
+          `StoredEventStamper: no research-started brief found for a "${event.type}" event ` +
+            `(turn ${this.turnId}) — stamping stable placeholder briefId "${briefId}" instead. ` +
+            "This should not happen given @shadow/agent's emission order; a stored placeholder " +
+            "is permanent (events.jsonl is never rewritten), so this is worth investigating.",
+        );
         return { ...event, briefId };
       }
       default:
@@ -154,6 +179,40 @@ export function turnBoundaryEnded(
   }
   return { type: "turn-boundary", phase: "ended", endReason };
 }
+
+/**
+ * Build-breaking completeness guard (F5 review fix). Every `type` a
+ * `StoredSessionEvent` can carry *except* `UnknownStoredEvent`'s (a
+ * deliberately open `string`, forward compat for a `type` this build
+ * doesn't recognize — see `events.ts`) must have an entry here, or this
+ * fails to typecheck. `AgentStoredEvent["type"]` already covers everything
+ * `@shadow/agent`'s `ShadowEvent` union produces (minus `text-delta`, which
+ * has no stored shape at all — see this module's doc); `operator-message`
+ * and `turn-boundary` are the two store-level kinds the agent layer never
+ * emits, added explicitly since `AgentStoredEvent` doesn't include them.
+ *
+ * The moment `@shadow/sessions`' `events.ts` grows a new `ShadowEvent`
+ * variant, this `satisfies` fails to compile — right here, not silently at
+ * the `switch`'s `default` case below — until the switch actually handles
+ * it, for BOTH the live and replay paths at once (they share this one
+ * switch). Without this guard, a new variant fell through to `default`
+ * (dropped, not mapped) on every path, with nothing forcing a human to
+ * notice before shipping.
+ */
+export const MAPPED_STORED_EVENT_TYPES = {
+  "operator-message": true,
+  "operator-turn-recorded": true,
+  "assistant-message": true,
+  "research-started": true,
+  "research-completed": true,
+  "research-failed": true,
+  "chapter-drafted": true,
+  "chapter-audit": true,
+  "chapter-published": true,
+  "chapter-rejected": true,
+  error: true,
+  "turn-boundary": true,
+} satisfies Record<AgentStoredEvent["type"] | "operator-message" | "turn-boundary", true>;
 
 /**
  * The full stored -> wire mapping. Used by replay (T2.7) directly, and by

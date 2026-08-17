@@ -57,7 +57,8 @@ export class FakeApiClient implements ShadowApiClient {
       this.volumes.set(seed.volume.slug, seed);
     }
     this.streamDelayMs = options.streamDelayMs ?? 0;
-    this.chatScript = options.chatScript ?? ((sessionId) => defaultChatScript(sessionId));
+    this.chatScript =
+      options.chatScript ?? ((sessionId, input) => defaultChatScript(sessionId, input));
   }
 
   async listVolumes(): Promise<readonly VolumeSummary[]> {

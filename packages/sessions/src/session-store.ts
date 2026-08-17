@@ -50,7 +50,22 @@ export interface SessionMetaPatch {
   readonly sdkSessionId?: string;
 }
 
-/** One entry in a session's transcript, as read back. `seq` is the replay cursor: strictly increasing per session, assigned by `append`, never reused or renumbered. */
+/**
+ * One entry in a session's transcript, as read back. `seq` is the replay
+ * cursor: strictly increasing per session, assigned by `append`, and unique
+ * among the records that currently survive on disk — but not eternally
+ * fixed to the event it was first assigned to. A torn tail (a record whose
+ * bytes a crash cut off mid-write) is dropped on read, not renumbered
+ * in place; the *next* successful `append` after that crash assigns the
+ * torn record's old `seq` to whatever event comes next, because it was
+ * simply the next unused number, not because anything went looking for a
+ * gap to fill. This is safe specifically because nothing downstream
+ * publishes an event to a live viewer (or persists it as "the record at
+ * this seq") until *after* `append` has returned — the torn record was
+ * never actually delivered to anyone under its original `seq` in the first
+ * place, so reassigning that number carries no data loss a reader could
+ * ever have observed.
+ */
 export interface StoredEventRecord {
   readonly seq: number;
   readonly turnId: string;
@@ -67,7 +82,18 @@ export interface SessionListFilter {
 }
 
 export interface SessionStore {
-  /** @throws {SessionAlreadyExistsError} if `meta.id` already has a session on disk. */
+  /**
+   * **TOCTOU note**, same shape as `append`'s (below): the check that
+   * `meta.id` doesn't already exist and the write that creates it are two
+   * separate operations, not one atomic one. Two truly concurrent `create`
+   * calls for the same not-yet-existing id can both pass the check and both
+   * write; this port does not defend against that itself, for the same
+   * reason `append` doesn't — `@shadow/api`'s per-session-id lock (T2.5) is
+   * what actually serializes every operation against a given id, `create`
+   * included, not just `append`.
+   *
+   * @throws {SessionAlreadyExistsError} if `meta.id` already has a session on disk.
+   */
   create(meta: SessionMeta): Promise<void>;
 
   /** `undefined` if `id` has no session — a soft miss, not an error, so a caller (e.g. T2.5's registry-then-store lookup) can chain it into a 404 without a `try`/`catch`. */
@@ -106,8 +132,12 @@ export interface SessionStore {
 
   /**
    * The transcript in `seq` order. `fromSeq`, when given, returns only
-   * records with `seq >= fromSeq` (inclusive) — the reconnect cursor T2.7's
-   * replay+follow endpoint uses (`?fromSeq=`). Tolerates a torn last line
+   * records with `seq >= fromSeq` — **inclusive**, not exclusive: passing
+   * the `seq` of a record you already have re-returns that same record. A
+   * caller that has already consumed up through `seq` N and wants only
+   * what comes *after* it (T2.7's replay+follow reconnect client, via
+   * `?fromSeq=`) must therefore pass `N + 1`, not `N` — passing `N` would
+   * re-deliver the last record it already saw. Tolerates a torn last line
    * of `events.jsonl` (returns the readable prefix, does not throw) — see
    * `SessionEventsCorruptError`'s doc for why that specific shape of
    * corruption is treated as an expected crash artifact rather than a

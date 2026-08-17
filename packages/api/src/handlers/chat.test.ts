@@ -57,6 +57,62 @@ describe("Chat — SSE", () => {
     });
   });
 
+  // F6 review fix: the live operator emission (`chat.ts`'s
+  // `wireEventsForLive(operatorMessageEvent(message))`, right after the
+  // `session` event, before any agent event) was proven untested by a
+  // revert — every other test in this file happens to still pass with that
+  // emission removed entirely, since none of them assert on the SSE
+  // stream's exact leading events. This test pins it directly: the operator
+  // event must be the first thing after `session`, must carry the sent
+  // text verbatim, and must appear exactly once per turn (not once per
+  // auto-turn, not zero times, not duplicated).
+  test("the operator event is the first thing after session, carries the sent text verbatim, and appears exactly once per turn", async () => {
+    const respond: FakeAgenticTurnResponder = () => ({ text: "Understood." });
+
+    await withScriptedApi({ respond }, async ({ baseUrl, deps }) => {
+      const volume = toVolumeSlug("design-craft");
+      await seedVolume(deps, volume);
+
+      const firstRes = await fetch(`${baseUrl}/api/chat`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ volumeSlug: "design-craft", message: "First operator message." }),
+      });
+      expect(firstRes.status).toBe(200);
+      const firstEvents = await readAllSseEvents(firstRes);
+
+      const firstSession = firstEvents[0];
+      const firstOperator = firstEvents[1];
+      if (!firstSession || !firstOperator) throw new Error("expected session and operator events");
+      expect(firstSession.event).toBe("session");
+      expect(firstOperator.event).toBe("operator");
+      expect((firstOperator.data as { text: string }).text).toBe("First operator message.");
+      expect(firstEvents.filter((e) => e.event === "operator")).toHaveLength(1);
+
+      const sessionId = (firstSession.data as { sessionId: string }).sessionId;
+
+      // A second turn on the SAME session (D6 reuse) gets its own operator
+      // event too — this is per-turn, not a one-time-per-session thing.
+      const secondRes = await fetch(`${baseUrl}/api/chat`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ sessionId, message: "Second operator message." }),
+      });
+      expect(secondRes.status).toBe(200);
+      const secondEvents = await readAllSseEvents(secondRes);
+
+      const secondSession = secondEvents[0];
+      const secondOperator = secondEvents[1];
+      if (!secondSession || !secondOperator) {
+        throw new Error("expected session and operator events");
+      }
+      expect(secondSession.event).toBe("session");
+      expect(secondOperator.event).toBe("operator");
+      expect((secondOperator.data as { text: string }).text).toBe("Second operator message.");
+      expect(secondEvents.filter((e) => e.event === "operator")).toHaveLength(1);
+    });
+  });
+
   test("an unknown sessionId is 404 session_not_found, before any SSE stream opens", async () => {
     await withScriptedApi({}, async ({ baseUrl }) => {
       const res = await fetch(`${baseUrl}/api/chat`, {

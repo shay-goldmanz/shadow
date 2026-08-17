@@ -207,6 +207,19 @@ export function applyStreamEvent(state: ChatState, event: ChatStreamEvent): Chat
     case "session":
       return { ...state, sessionId: event.data.sessionId };
 
+    case "operator":
+      // Defensive default (F7 review fix): swallowed for now — `ChatPage`
+      // already appends its own local "user" transcript item the instant
+      // the operator hits send (`appendUserMessage`), so rendering this
+      // wire event too would duplicate the bubble. T2.8 is expected to
+      // replace that local append with this wire event as the single
+      // source of truth (so a second live viewer, or a replayed session,
+      // sees the same user bubbles) — until then, this case exists so a
+      // future stream carrying `operator` doesn't fall through to the
+      // exhaustiveness check below and so the intent is on record, but it
+      // deliberately leaves `state` untouched.
+      return state;
+
     case "text": {
       const last = state.items[state.items.length - 1];
       if (last?.type === "assistant") {

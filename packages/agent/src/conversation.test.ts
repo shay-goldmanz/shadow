@@ -1779,3 +1779,298 @@ describe("ShadowConversation — in-conversation resume fallback (T2.3)", () => 
     });
   });
 });
+
+// -----------------------------------------------------------------------
+// F2 — release() during a running turn defers instead of amputating the
+// auto-continuation loop's context.
+// -----------------------------------------------------------------------
+
+describe("ShadowConversation — release() during an in-flight sendMessage defers instead of amputating context (F2 review fix)", () => {
+  test("release() called between two auto-turns of ONE sendMessage does not force a new session for the second turn, and only takes effect once the whole call completes", async () => {
+    await withVolumeHarness(async ({ evidenceStore, volumeStore, volume, root }) => {
+      await withSessionCwd(async (sessionCwd) => {
+        const research = new ControllableResearchBriefPort();
+        const respond: FakeAgenticTurnResponder = (_prompt, context) =>
+          context.turnIndex === 0
+            ? {
+                text: [
+                  "Looking into it.",
+                  "```shadow:research",
+                  JSON.stringify({ goal: "F2 gated goal", subjectDomains: ["f2.test"] }),
+                  "```",
+                ].join("\n"),
+              }
+            : { text: "All done." };
+        const sessions = new FakeAgenticSessionPort(respond);
+
+        const deps: ShadowAgentDeps = {
+          agenticSessionPort: sessions,
+          researchBriefPort: research,
+          volumeStore,
+          evidenceStore,
+          indexer: freshIndexer(root),
+          checkWorthinessClassifier: alwaysNarrativeClassifier,
+          entailmentRelevanceJudge: scriptedEntailmentJudge(),
+          claimRestater: scriptedClaimRestater(() => {
+            throw new Error("should not be called");
+          }),
+          sessionCwd,
+        };
+
+        const agent = new ShadowAgent(deps);
+        const conversation = agent.startConversation(volume);
+
+        const events: ShadowEvent[] = [];
+        const drained = (async () => {
+          for await (const event of conversation.sendMessage("Look into F2.")) {
+            events.push(event);
+          }
+        })();
+
+        // Turn 0 has completed (its research directive was parsed) and the
+        // loop is now awaiting the gated research call before turn 1 can
+        // run -- i.e. this is genuinely BETWEEN this one sendMessage call's
+        // two auto-turns, still inside the generator the whole time.
+        await research.waitForCall(0);
+
+        // release() while the call is still in flight must defer, not
+        // amputate -- `this.session` (and therefore turn 1's ability to
+        // reuse it) must survive until sendMessage actually finishes.
+        await conversation.release();
+        // Proof release hasn't taken effect yet: the session handle turn 0
+        // completed on is still there.
+        expect(conversation.sessionId).toBeDefined();
+
+        research.resolveCall(0, { findings: [], sources: [] });
+        await drained;
+
+        // Exactly one underlying AgenticSession -- turn 1 (the
+        // auto-continuation after the research directive) reused the same
+        // handle turn 0 used; the regression this guards is a second
+        // `createSession` call happening because release() had already
+        // torn `this.session` down mid-call.
+        expect(sessions.sessions).toHaveLength(1);
+        expect(sessions.sessions[0]?.prompts).toHaveLength(2);
+
+        expect(events.some((e) => e.type === "error")).toBe(false);
+
+        // release() has now taken effect: the whole sendMessage call
+        // (including its deferred release) has completed.
+        expect(conversation.sessionId).toBeUndefined();
+      });
+    });
+  });
+});
+
+// -----------------------------------------------------------------------
+// F3 — pendingResume does not survive a successful resumed first turn, or
+// release(), so a recycled handle cannot resume a stale sdk id.
+// -----------------------------------------------------------------------
+
+describe("ShadowConversation — pendingResume is cleared once the resumed first turn succeeds (F3 review fix)", () => {
+  test("release() after a successful resumed turn 1, then reuse, does not re-resume the original (now stale) sdk id", async () => {
+    await withVolumeHarness(async ({ evidenceStore, volumeStore, volume, root }) => {
+      await withSessionCwd(async (sessionCwd) => {
+        const research = new FakeResearchBriefPort(evidenceStore, () => []);
+        const sessions = new FakeAgenticSessionPort(() => ({ text: "Picking up." }));
+        const deps = buildFallbackDeps(
+          sessions,
+          research,
+          evidenceStore,
+          volumeStore,
+          root,
+          sessionCwd,
+        );
+
+        const agent = new ShadowAgent(deps);
+        const conversation = agent.startConversation(volume, {
+          resume: {
+            sdkSessionId: "original-sdk-id",
+            fallbackSummary: "should never be needed -- this turn succeeds",
+          },
+        });
+
+        await drain(conversation, "Continuing.");
+        expect(sessions.sessions).toHaveLength(1);
+        expect(sessions.sessions[0]?.options.resume).toEqual({ sessionId: "original-sdk-id" });
+
+        await conversation.release();
+        expect(conversation.sessionId).toBeUndefined();
+
+        // Reuse the SAME handle for a second sendMessage. If `pendingResume`
+        // had survived turn 1's success (the bug), this second call would
+        // try to resume "original-sdk-id" again -- exactly the stale id the
+        // real SDK has already moved past once a new one latched after turn
+        // 1. The fix means this second session is created with NO resume
+        // at all.
+        await drain(conversation, "Second message after release.");
+
+        expect(sessions.sessions).toHaveLength(2);
+        expect(sessions.sessions[1]?.options.resume).toBeUndefined();
+      });
+    });
+  });
+});
+
+// -----------------------------------------------------------------------
+// F4 — the no-conversation-found fallback never re-issues a turn that
+// already emitted output to the caller.
+// -----------------------------------------------------------------------
+
+describe("ShadowConversation — the fallback never re-issues a turn that already yielded output (F4 review fix)", () => {
+  test("a scripted delta then a no-conversation-found throw on the resumed first turn propagates -- no fallback, no duplicate deltas", async () => {
+    await withVolumeHarness(async ({ evidenceStore, volumeStore, volume, root }) => {
+      await withSessionCwd(async (sessionCwd) => {
+        const research = new FakeResearchBriefPort(evidenceStore, () => []);
+        const sessions = new FakeAgenticSessionPort(() => ({
+          events: [{ type: "text-delta", text: "partial output before the crash" }],
+          throws: noConversationFoundError("dead-sdk-id"),
+        }));
+        const deps = buildFallbackDeps(
+          sessions,
+          research,
+          evidenceStore,
+          volumeStore,
+          root,
+          sessionCwd,
+        );
+
+        const agent = new ShadowAgent(deps);
+        const conversation = agent.startConversation(volume, {
+          resume: {
+            sdkSessionId: "dead-sdk-id",
+            fallbackSummary: "should never be used -- output already reached the caller",
+          },
+        });
+
+        const events: ShadowEvent[] = [];
+        const rejection = await expectRejection(
+          (async () => {
+            for await (const event of conversation.sendMessage("Hello?")) {
+              events.push(event);
+            }
+          })(),
+          AgenticSessionError,
+        );
+        expect(isNoConversationFoundError(rejection)).toBe(true);
+
+        // No fallback: exactly one session was ever created.
+        expect(sessions.sessions).toHaveLength(1);
+
+        const deltas = events.filter((e) => e.type === "text-delta");
+        expect(deltas).toHaveLength(1);
+        expect((deltas[0] as { text: string }).text).toBe("partial output before the crash");
+      });
+    });
+  });
+});
+
+// -----------------------------------------------------------------------
+// Review #11 — three cheap conversation tests.
+// -----------------------------------------------------------------------
+
+describe("ShadowConversation — T2.3 fallback edge cases (review #11)", () => {
+  test("a no-conversation-found error on a LATER auto-turn (not the resumed first) propagates -- no fallback fires", async () => {
+    await withVolumeHarness(async ({ evidenceStore, volumeStore, volume, root }) => {
+      await withSessionCwd(async (sessionCwd) => {
+        const research = new FakeResearchBriefPort(evidenceStore, () => []);
+        const respond: FakeAgenticTurnResponder = (_prompt, context) =>
+          context.turnIndex === 0
+            ? {
+                text: [
+                  "```shadow:research",
+                  JSON.stringify({ goal: "later-turn goal", subjectDomains: ["later.test"] }),
+                  "```",
+                ].join("\n"),
+              }
+            : { throws: noConversationFoundError("some-id") };
+        const sessions = new FakeAgenticSessionPort(respond);
+        const deps = buildFallbackDeps(
+          sessions,
+          research,
+          evidenceStore,
+          volumeStore,
+          root,
+          sessionCwd,
+        );
+
+        const agent = new ShadowAgent(deps);
+        const conversation = agent.startConversation(volume, {
+          resume: { sdkSessionId: "sdk-alive", fallbackSummary: "should never be used" },
+        });
+
+        const rejection = await expectRejection(drain(conversation, "Go."), AgenticSessionError);
+        expect(isNoConversationFoundError(rejection)).toBe(true);
+
+        // Only one session ever created -- the fallback only ever applies
+        // to the resumed FIRST turn, never a later auto-continuation turn
+        // on the same (already-latched) handle.
+        expect(sessions.sessions).toHaveLength(1);
+      });
+    });
+  });
+
+  test("the fallback cannot fire twice -- if the fallback session ALSO throws no-conversation-found, it propagates rather than trying a third session", async () => {
+    await withVolumeHarness(async ({ evidenceStore, volumeStore, volume, root }) => {
+      await withSessionCwd(async (sessionCwd) => {
+        const research = new FakeResearchBriefPort(evidenceStore, () => []);
+        const sessions = new FakeAgenticSessionPort(() => ({
+          throws: noConversationFoundError("always-dead"),
+        }));
+        const deps = buildFallbackDeps(
+          sessions,
+          research,
+          evidenceStore,
+          volumeStore,
+          root,
+          sessionCwd,
+        );
+
+        const agent = new ShadowAgent(deps);
+        const conversation = agent.startConversation(volume, {
+          resume: { sdkSessionId: "dead-sdk-id", fallbackSummary: "recovered context" },
+        });
+
+        const rejection = await expectRejection(drain(conversation, "Hello?"), AgenticSessionError);
+        expect(isNoConversationFoundError(rejection)).toBe(true);
+
+        // Exactly two sessions: the doomed resumed one, and the one
+        // fallback attempt -- never a third.
+        expect(sessions.sessions).toHaveLength(2);
+        expect(sessions.sessions[0]?.options.resume).toEqual({ sessionId: "dead-sdk-id" });
+        expect(sessions.sessions[1]?.options.resume).toBeUndefined();
+      });
+    });
+  });
+
+  test("conversation.sessionId reflects the NEW session's id after a fallback rebuild, not the dead resumed id", async () => {
+    await withVolumeHarness(async ({ evidenceStore, volumeStore, volume, root }) => {
+      await withSessionCwd(async (sessionCwd) => {
+        const research = new FakeResearchBriefPort(evidenceStore, () => []);
+        const respond = failNTimesThenSucceed(1, noConversationFoundError("dead-sdk-id"), {
+          text: "Rebuilt and running.",
+        });
+        const sessions = new FakeAgenticSessionPort(respond);
+        const deps = buildFallbackDeps(
+          sessions,
+          research,
+          evidenceStore,
+          volumeStore,
+          root,
+          sessionCwd,
+        );
+
+        const agent = new ShadowAgent(deps);
+        const conversation = agent.startConversation(volume, {
+          resume: { sdkSessionId: "dead-sdk-id", fallbackSummary: "recovered context" },
+        });
+
+        await drain(conversation, "Hello?");
+
+        expect(sessions.sessions).toHaveLength(2);
+        expect(conversation.sessionId).toBe(sessions.sessions[1]?.sessionId);
+        expect(conversation.sessionId).not.toBe("dead-sdk-id");
+      });
+    });
+  });
+});

@@ -292,6 +292,18 @@ export class ShadowConversation {
    * `resume`, and `getOrCreateSession` reads this same field to decide.
    */
   private pendingResume: StartConversationOptions["resume"];
+  /**
+   * How many `sendMessage` calls are currently in flight on this handle
+   * (F2 review fix). Not just 0-or-1: nothing prevents a caller from
+   * starting a second `sendMessage` before the first has finished draining
+   * (an operator sending two messages back-to-back before the first
+   * finishes streaming, say) — this counts genuine concurrent turns, not
+   * "am I busy," so `release()` defers until every one of them has
+   * completed, not just the most recent.
+   */
+  private activeTurns = 0;
+  /** Set by `release()` when it's called while `activeTurns > 0` — see that method's doc. Consumed (and cleared) by `sendMessage`'s `finally` once `activeTurns` returns to 0. */
+  private releaseRequested = false;
 
   constructor(
     private readonly deps: ShadowAgentDeps,
@@ -344,9 +356,33 @@ export class ShadowConversation {
    * genuine non-transcript teardown (an idle subprocess kept warm, say),
    * it belongs here — T2.9's graceful-shutdown sequence is the next caller
    * of this method and needs it to leave nothing dangling.
+   *
+   * **Deferred while a turn is running (F2 review fix).** `sendMessage`'s
+   * auto-continuation loop (module doc above) calls `getOrCreateSession` at
+   * the top of *every* auto-turn iteration, not just the first — so if this
+   * ran immediately while `activeTurns > 0`, a registry eviction landing
+   * between auto-turn N and N+1 of one `sendMessage` call would silently
+   * amputate that call's own context: the very next iteration's
+   * `getOrCreateSession` would see `this.session === undefined` and mint a
+   * brand-new session with no history and no resume, mid-conversation, with
+   * nothing in this class's API surface warning the caller it happened.
+   * Deferring instead means eviction can never race a turn it doesn't know
+   * about; it only ever takes effect once this handle is genuinely idle.
+   * `pendingResume` is cleared in the same step as `this.session` (F3
+   * review fix) — see `finishRelease`.
    */
   async release(): Promise<void> {
+    if (this.activeTurns > 0) {
+      this.releaseRequested = true;
+      return;
+    }
+    this.finishRelease();
+  }
+
+  /** Actually drops this handle's session reference (and `pendingResume` — F3 review fix), either immediately from an idle `release()` or deferred from `sendMessage`'s `finally` once the last in-flight turn completes. */
+  private finishRelease(): void {
     this.session = undefined;
+    this.pendingResume = undefined;
   }
 
   /**
@@ -362,98 +398,154 @@ export class ShadowConversation {
    * the summary only ever gets prepended to a re-issued *model prompt*, so
    * it can never become a citable `operator`-kind source, and the operator
    * turn is never double-recorded.
+   *
+   * **`activeTurns`/`release()` deferral (F2 review fix).** The whole method
+   * body runs inside an `activeTurns` increment/decrement — see `release`'s
+   * doc for why: every auto-turn iteration below calls `getOrCreateSession`,
+   * which is exactly the seam a same-instant `release()` would otherwise
+   * amputate mid-call. The `finally` is what actually applies a deferred
+   * `release()` once this call (and any sibling `sendMessage` call still in
+   * flight on this same handle) has finished.
    */
   async *sendMessage(operatorText: string): AsyncGenerator<ShadowEvent, void, undefined> {
-    const operatorSource = await recordSessionTranscriptSource(
-      this.deps.evidenceStore,
-      this.volume,
-      {
-        sessionId: this.conversationId,
-        turnText: operatorText,
-      },
-    );
-    yield { type: "operator-turn-recorded", sourceId: operatorSource.id };
+    this.activeTurns += 1;
+    try {
+      const operatorSource = await recordSessionTranscriptSource(
+        this.deps.evidenceStore,
+        this.volume,
+        {
+          sessionId: this.conversationId,
+          turnText: operatorText,
+        },
+      );
+      yield { type: "operator-turn-recorded", sourceId: operatorSource.id };
 
-    const maxAutoTurns = this.deps.maxAutoTurns ?? 6;
-    let prompt = buildOperatorPrompt(operatorText, operatorSource.id);
+      const maxAutoTurns = this.deps.maxAutoTurns ?? 6;
+      let prompt = buildOperatorPrompt(operatorText, operatorSource.id);
 
-    for (let turn = 0; turn < maxAutoTurns; turn++) {
-      // True only for the very first `stream()` call this conversation will
-      // ever make on a session created with `resume` — `this.session` is
-      // still unset (no turn has ever run on this handle) and there's a
-      // `pendingResume` to lose. Every later iteration of this loop reuses
-      // the already-created `this.session` (D6), so this is `false` for
-      // every turn after the conversation's first — matching the plan's
-      // "only the first turn of a resumed conversation falls back."
-      const isResumingFirstTurn = this.session === undefined && this.pendingResume !== undefined;
-      const session = await this.getOrCreateSession();
+      for (let turn = 0; turn < maxAutoTurns; turn++) {
+        // True only for the very first `stream()` call this conversation
+        // will ever make on a session created with `resume` — `this.session`
+        // is still unset (no turn has ever run on this handle) and there's a
+        // `pendingResume` to lose. Every later iteration of this loop reuses
+        // the already-created `this.session` (D6), so this is `false` for
+        // every turn after the conversation's first — matching the plan's
+        // "only the first turn of a resumed conversation falls back."
+        const isResumingFirstTurn = this.session === undefined && this.pendingResume !== undefined;
+        const session = await this.getOrCreateSession();
 
-      let finalText: string;
-      let turnFailed: boolean;
-      try {
-        ({ finalText, turnFailed } = yield* this.runModelTurn(session, prompt));
-      } catch (error) {
-        const fallbackSummary = this.pendingResume?.fallbackSummary;
-        if (
-          !isResumingFirstTurn ||
-          fallbackSummary === undefined ||
-          !isNoConversationFoundError(error)
-        ) {
-          // Not T2.3's fallback case: a non-first-turn failure (shouldn't
-          // happen — this handle resumes its own id after the first turn),
-          // a first turn that wasn't resumed at all, a resumed first turn
-          // with no `fallbackSummary` to fall back with (documented
-          // behavior — no fallback possible), or a resumed first turn that
-          // failed for any other reason (a transient failure already
-          // retried *with* resume intact by the decorator before reaching
-          // here — see `StartConversationOptions.resume`'s doc). Propagate
-          // as an ordinary error; `resume` stays intact on `this.session`
-          // (still `undefined` here, so the next call to `getOrCreateSession`
-          // — if the caller retries this same conversation — tries the same
-          // resume again, unchanged).
-          throw error;
+        let finalText: string;
+        let turnFailed: boolean;
+        // F4 review fix: tracks whether `runModelTurn` yielded anything to
+        // the caller before it threw. A mutable box, not a return value,
+        // because a thrown generator never reaches its `return` — this is
+        // the only channel available to smuggle that fact past the throw.
+        const yieldedAnything = { value: false };
+        try {
+          ({ finalText, turnFailed } = yield* this.runModelTurn(session, prompt, yieldedAnything));
+        } catch (error) {
+          const fallbackSummary = this.pendingResume?.fallbackSummary;
+          if (
+            !isResumingFirstTurn ||
+            fallbackSummary === undefined ||
+            !isNoConversationFoundError(error) ||
+            // F4 review fix: the failed attempt already reached the caller
+            // with real output (at least one delta, or the turn's own
+            // `{ type: "error" }` event) — re-issuing the same turn against
+            // a fallback session would duplicate whatever the caller already
+            // saw. Mirrors `RetryingAgenticSession`'s structural rule (T1.3):
+            // once anything has reached the caller, the attempt is no longer
+            // retryable, it can only propagate.
+            yieldedAnything.value
+          ) {
+            // Not T2.3's fallback case: a non-first-turn failure (shouldn't
+            // happen — this handle resumes its own id after the first turn),
+            // a first turn that wasn't resumed at all, a resumed first turn
+            // with no `fallbackSummary` to fall back with (documented
+            // behavior — no fallback possible), a resumed first turn that
+            // failed for any other reason (a transient failure already
+            // retried *with* resume intact by the decorator before reaching
+            // here — see `StartConversationOptions.resume`'s doc), or a
+            // resumed first turn that already yielded output before it
+            // threw. Propagate as an ordinary error; `resume` stays intact
+            // on `this.session` (still `undefined` here, so the next call to
+            // `getOrCreateSession` — if the caller retries this same
+            // conversation — tries the same resume again, unchanged).
+            throw error;
+          }
+
+          // T2.3 in-conversation fallback: the resumed transcript genuinely
+          // doesn't exist on this machine (deleted, expired, moved), and
+          // nothing was yielded to the caller yet, so re-issuing the turn is
+          // safe. Drop the dead handle (`close()` here is a documented no-op
+          // for this exact shape — a thrown, pre-"done" failure latches
+          // neither `ownSessionId` nor `failedSessionIds` on the underlying
+          // session, real adapter or fake alike — kept anyway for
+          // defense-in-depth against a future SDK that partially persists
+          // before throwing), recreate without `resume`, and re-issue the
+          // *same* turn with the summary prepended to the model prompt only
+          // (this class doc, `buildFallbackPrompt`).
+          await this.session?.close?.();
+          this.session = undefined;
+          this.pendingResume = undefined;
+
+          const fallbackSession = await this.getOrCreateSession();
+          const fallbackPrompt = buildFallbackPrompt(fallbackSummary, prompt);
+          ({ finalText, turnFailed } = yield* this.runModelTurn(
+            fallbackSession,
+            fallbackPrompt,
+            yieldedAnything,
+          ));
         }
 
-        // T2.3 in-conversation fallback: the resumed transcript genuinely
-        // doesn't exist on this machine (deleted, expired, moved). Drop the
-        // dead handle (`close()` here is a documented no-op for this exact
-        // shape — a thrown, pre-"done" failure latches neither `ownSessionId`
-        // nor `failedSessionIds` on the underlying session, real adapter or
-        // fake alike — kept anyway for defense-in-depth against a future SDK
-        // that partially persists before throwing), recreate without
-        // `resume`, and re-issue the *same* turn with the summary prepended
-        // to the model prompt only (this class doc, `buildFallbackPrompt`).
-        await this.session?.close?.();
-        this.session = undefined;
-        this.pendingResume = undefined;
+        // F3 review fix: once a resumed first turn has completed without
+        // hitting the no-conversation-found fallback above, resume is
+        // spent — either the SDK's `ownSessionId` genuinely latched onto
+        // this handle (an ordinary successful turn), or it legitimately
+        // failed some other way that the fallback branch already decided
+        // not to retry. Either way, `pendingResume` must not survive to a
+        // later `release()`-then-reuse of this same handle: the alternative
+        // is silently re-resuming a sdk id the SDK itself has already moved
+        // past (see `pendingResume`'s field doc / `finishRelease`).
+        // Deliberately gated on `!turnFailed`, not unconditional: an
+        // `isError` result never latches `ownSessionId` (the real
+        // adapter's contract — see `ClaudeAgentSdkSession`), so resume is
+        // NOT actually spent in that case, and a later retry of this same
+        // conversation should still be allowed to try it again.
+        if (isResumingFirstTurn && !turnFailed) {
+          this.pendingResume = undefined;
+        }
 
-        const fallbackSession = await this.getOrCreateSession();
-        const fallbackPrompt = buildFallbackPrompt(fallbackSummary, prompt);
-        ({ finalText, turnFailed } = yield* this.runModelTurn(fallbackSession, fallbackPrompt));
-      }
-      if (turnFailed) return;
+        if (turnFailed) return;
 
-      yield { type: "assistant-message", text: finalText };
+        yield { type: "assistant-message", text: finalText };
 
-      const directives = parseShadowDirectives(finalText);
-      if (directives.research.length === 0 && directives.chapters.length === 0) {
-        return;
-      }
+        const directives = parseShadowDirectives(finalText);
+        if (directives.research.length === 0 && directives.chapters.length === 0) {
+          return;
+        }
 
-      const followUps: string[] = [];
-      for await (const event of this.runResearchDirectives(directives.research, followUps)) {
-        yield event;
-      }
-      for (const directive of directives.chapters) {
-        for await (const event of this.runChapterDirective(directive, followUps)) {
+        const followUps: string[] = [];
+        for await (const event of this.runResearchDirectives(directives.research, followUps)) {
           yield event;
         }
+        for (const directive of directives.chapters) {
+          for await (const event of this.runChapterDirective(directive, followUps)) {
+            yield event;
+          }
+        }
+
+        prompt = followUps.join("\n\n");
       }
 
-      prompt = followUps.join("\n\n");
+      throw new AutoTurnBudgetExceededError(maxAutoTurns);
+    } finally {
+      this.activeTurns -= 1;
+      if (this.activeTurns === 0 && this.releaseRequested) {
+        this.releaseRequested = false;
+        this.finishRelease();
+      }
     }
-
-    throw new AutoTurnBudgetExceededError(maxAutoTurns);
   }
 
   /**
@@ -464,21 +556,31 @@ export class ShadowConversation {
    * without duplicating the event-mapping. A thrown failure (including the
    * SDK's no-conversation-found error) propagates out of this generator
    * uncaught; `sendMessage` is the layer that decides whether to catch it.
+   *
+   * @param yieldedAnything F4 review fix: set to `true` the moment this
+   *   generator yields its first event, *before* the throw that might
+   *   follow it — a mutable box rather than a return value because a
+   *   generator that throws never reaches its own `return`, so this is the
+   *   only way `sendMessage`'s `catch` can learn "did the caller already
+   *   see real output from this attempt" once control reaches it.
    */
   private async *runModelTurn(
     session: AgenticSession,
     prompt: string,
+    yieldedAnything: { value: boolean },
   ): AsyncGenerator<ShadowEvent, { finalText: string; turnFailed: boolean }, undefined> {
     let finalText = "";
     let turnFailed = false;
 
     for await (const event of session.stream(prompt)) {
       if (event.type === "text-delta") {
+        yieldedAnything.value = true;
         yield { type: "text-delta", text: event.text };
       } else if (event.type === "done") {
         finalText = event.result.text;
         if (event.result.isError) {
           turnFailed = true;
+          yieldedAnything.value = true;
           yield {
             type: "error",
             error: `Shadow's turn failed (stopReason: ${event.result.stopReason ?? "unknown"})`,

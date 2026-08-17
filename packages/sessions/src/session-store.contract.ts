@@ -300,6 +300,44 @@ export function runSessionStoreContractTests(
         const { store } = harness;
         await expectRejection(store.delete("missing"), SessionNotFoundError);
       });
+
+      // Review #10: create-after-delete id reuse. The regression this guards
+      // (F1 review fix): a filesystem implementation caching append state
+      // per session id must invalidate that cache on delete, or a recreated
+      // session at the same id would silently inherit the deleted session's
+      // `lastSeq` instead of starting fresh at 1.
+      test("create-after-delete: reusing a deleted id starts a genuinely fresh session, seq restarts at 1", async () => {
+        const { store } = harness;
+        await store.create(makeMeta("reused-id"));
+        await store.append("reused-id", [makeEvent(), makeEvent(), makeEvent()]);
+        await store.delete("reused-id");
+
+        await store.create(makeMeta("reused-id", { title: "Second life" }));
+        expect(await store.readEvents("reused-id")).toEqual([]);
+
+        const stamped = await store.append("reused-id", [makeEvent()]);
+        expect(stamped.map((r) => r.seq)).toEqual([1]);
+        expect((await store.get("reused-id"))?.title).toBe("Second life");
+      });
+    });
+
+    // Review #10: list order after `update` bumps `lastActiveAt`.
+    describe("list order reflects update (review #10)", () => {
+      test("updating lastActiveAt moves a session to the top of list()", async () => {
+        const { store } = harness;
+        await store.create(makeMeta("stays-put", { lastActiveAt: "2026-01-01T00:00:00.000Z" }));
+        await store.create(makeMeta("gets-bumped", { lastActiveAt: "2026-01-01T00:00:00.000Z" }));
+
+        expect((await store.list()).map((m) => m.id)).toEqual(["gets-bumped", "stays-put"]);
+
+        await store.update("gets-bumped", { lastActiveAt: "2026-01-05T00:00:00.000Z" });
+
+        expect((await store.list()).map((m) => m.id)).toEqual(["gets-bumped", "stays-put"]);
+
+        await store.update("stays-put", { lastActiveAt: "2026-01-06T00:00:00.000Z" });
+
+        expect((await store.list()).map((m) => m.id)).toEqual(["stays-put", "gets-bumped"]);
+      });
     });
   });
 }

@@ -65,11 +65,10 @@ export class SessionAlreadyExistsError extends ShadowSessionsError {
  * mid-write, and a crash can only ever tear the *last* line (nothing
  * appends into the middle of the file). `readEvents` therefore treats a
  * torn last line as an expected crash artifact and silently returns the
- * readable prefix (see `filesystem-session-store.ts`'s
- * `readEventRecords`), but a corrupt line anywhere else has no such
- * explanation — it did not come from an interrupted `append`, so something
- * else touched the file, and this error exists so that failure mode is
- * never mistaken for the tolerated one.
+ * readable prefix (see `read-event-log.ts`'s `readEventLog`), but a corrupt
+ * line anywhere else has no such explanation — it did not come from an
+ * interrupted `append`, so something else touched the file, and this error
+ * exists so that failure mode is never mistaken for the tolerated one.
  */
 export class SessionEventsCorruptError extends ShadowSessionsError {
   override readonly name = "SessionEventsCorruptError";

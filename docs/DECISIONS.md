@@ -132,6 +132,10 @@ session-cost argument rests on — did not function.
 exist because persistence means on-disk transcripts that must be cleaned up, and the API binds
 disposal to conversation eviction.
 
+*(`dispose()` no longer exists as of T2.4 — replaced by `release()`, which drops only the
+in-memory handle and deletes nothing; the formal D6b amendment recording this inversion is
+T2.6's job, not written here.)*
+
 **Why 918 tests missed it, and the rule that follows.** `FakeAgenticSessionPort` could not fail
 the way the real SDK does — a fake that only models the happy path will confirm any bug that
 lives in the unhappy one. The fake now throws on a resumed non-persisted session, exactly as

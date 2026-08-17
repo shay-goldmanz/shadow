@@ -303,7 +303,31 @@ describe("StoredEventStamper — briefId assignment/correlation", () => {
       brief: brief("never started"),
       result,
     });
-    expect(completed).toMatchObject({ briefId: "turn-abc/brief-unknown" });
+    expect(completed).toMatchObject({ briefId: "turn-abc/brief-unknown-1" });
+  });
+
+  // Review #9: a stored "brief-unknown" placeholder is permanent replay
+  // corruption the moment a second miss happens in the same turn — two
+  // misses rendering as the literal same briefId would be indistinguishable
+  // on replay forever after. Each miss must mint its own unique id.
+  test("two lookup misses in the same turn get distinct placeholder briefIds, not the same one twice", () => {
+    const stamper = new StoredEventStamper("turn-xyz");
+    const result: ResearchResult = { findings: [], sources: [] };
+    const firstMiss = stamper.stampAgentEvent({
+      type: "research-completed",
+      brief: brief("never started 1"),
+      result,
+    });
+    const secondMiss = stamper.stampAgentEvent({
+      type: "research-failed",
+      brief: brief("never started 2"),
+      error: "boom",
+    });
+    expect(firstMiss).toMatchObject({ briefId: "turn-xyz/brief-unknown-1" });
+    expect(secondMiss).toMatchObject({ briefId: "turn-xyz/brief-unknown-2" });
+    expect((firstMiss as { briefId: string }).briefId).not.toBe(
+      (secondMiss as { briefId: string }).briefId,
+    );
   });
 
   test("non-research events pass through unchanged", () => {

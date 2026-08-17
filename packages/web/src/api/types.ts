@@ -537,6 +537,13 @@ export interface RepairDecision {
  */
 export type ChatStreamEvent =
   | { readonly event: "session"; readonly data: { readonly sessionId: string } }
+  // T2.2's new wire event (F7 review fix — the web types/fake were built
+  // before it existed). The user bubble: emitted once per turn, right
+  // after `session` and before any agent event (`@shadow/api`'s
+  // `handlers/chat.ts` synthesizes it — `@shadow/agent` never emits an
+  // `operator-message` `ShadowEvent`). See `event-mapping.ts`'s module doc
+  // for the full live/replay story.
+  | { readonly event: "operator"; readonly data: { readonly text: string } }
   | { readonly event: "text"; readonly data: { readonly delta: string } }
   | {
       readonly event: "research.started";
