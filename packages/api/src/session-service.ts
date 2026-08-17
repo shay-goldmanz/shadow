@@ -74,6 +74,7 @@ import {
   ServiceShuttingDownError,
   SessionBusyError,
   SessionNotFoundError,
+  SessionTranscriptDeletionError,
   TurnQueueBusyError,
 } from "./errors.ts";
 import {
@@ -263,6 +264,37 @@ export class SessionService {
    * still queued behind it in the same session's FIFO.
    */
   private readonly inFlightTurns = new Set<Promise<void>>();
+  /**
+   * Session ids currently mid-`deleteSession` — reserved in the SAME
+   * synchronous block as that method's own `hasActivity` check (no `await`
+   * in between), cleared in a `finally` once deletion, whatever its
+   * outcome, is done. **F2 review fix (T3.1).** `hasActivity` alone is only
+   * checked ONCE, synchronously, at the very top of `deleteSession` — but
+   * that method then awaits four more times before it's actually finished
+   * (`registry.remove`, the `deleteStoredSession` loop, `store.delete`,
+   * and the id-collecting work around them). A `resolveSessionId`/
+   * `enqueueTurn` call that starts anywhere in that window would otherwise
+   * still find a live registry entry or a store row neither of which have
+   * been removed yet, reserve a turn, and mint a BRAND NEW SDK session
+   * under an id `deleteSession`'s own `meta` snapshot — read before any of
+   * this started — never saw and will never delete: an orphaned transcript
+   * plus a registry handle nothing tears back down (probe-confirmed live,
+   * two variants: a store whose `get` is gated, and one whose `delete` is
+   * gated, both letting a racing enqueue land squarely inside the window).
+   * Re-checking `hasActivity` after `store.get` is NOT a fix on its own —
+   * the race is entirely about `deleteSession`'s own later awaits, which
+   * `hasActivity` has no way to reflect until a turn has actually started
+   * running (by which point the damage — a second `AgenticSession` handle
+   * minted, a transcript written — is already done). This set is the
+   * mechanism: consulted by both `resolveSessionId` and `enqueueTurn`, at
+   * every point either one resumes after an `await`, so nothing between
+   * "delete reserved this id" and "delete finished with it" can ever slip a
+   * turn through. A racing caller sees `404 session_not_found` — the same
+   * answer it would get a moment later once the delete actually finishes
+   * (this module's own `enqueueTurn`/`resolveSessionId` docs have the full
+   * 404-vs-409 reasoning).
+   */
+  private readonly deletingSessionIds = new Set<string>();
 
   /**
    * The cache of live `ShadowConversation` handles (T2.4's demoted
@@ -300,8 +332,14 @@ export class SessionService {
    * partially started): `ServiceShuttingDownError` (503) once `shutdown()`
    * has begun (T2.9 — checked first, before touching the store at all),
    * `SessionNotFoundError` (404) if `target.sessionId` is absent from both
-   * the registry and the store, `TurnQueueBusyError` (409) if that session
-   * already has `maxQueuedTurnsPerSession` turns queued ahead of this one.
+   * the registry and the store, OR if a `deleteSession` call for that id is
+   * currently in flight (F2 review fix — `deletingSessionIds`'s doc: a
+   * session mid-deletion is treated the same as one already gone, since
+   * that is exactly what it will be by the time a turn reserved now would
+   * actually run; `409` is reserved for `deleteSession`'s own busy check,
+   * not for a turn racing the OTHER direction), `TurnQueueBusyError` (409)
+   * if that session already has `maxQueuedTurnsPerSession` turns queued
+   * ahead of this one.
    * All three are typed `ShadowApiError`s (`errors.ts`) — `error-mapping.ts`
    * needs no new table row for any of them: its `error instanceof
    * ShadowApiError` branch already maps a subclass's own `status`/`code`
@@ -316,6 +354,17 @@ export class SessionService {
 
     const resolved = await this.resolveSessionId(target);
     const sessionId = resolved.sessionId;
+
+    // F2 review fix: consulted once more here, synchronously, immediately
+    // after `resolveSessionId`'s own `await` resolves and strictly before
+    // `tryReserve` — the "gated store delete" probe the review reproduced
+    // live exercises exactly this gap (a delete that reserved this id
+    // *after* `resolveSessionId` already returned it, but before this turn
+    // got as far as reserving a queue slot). See `deletingSessionIds`'s doc
+    // for why one check inside `resolveSessionId` isn't enough on its own.
+    if (this.deletingSessionIds.has(sessionId)) {
+      throw new SessionNotFoundError(sessionId);
+    }
 
     // Synchronous check-and-reserve (`session-lock.ts`'s module doc) —
     // nothing awaits between resolving `sessionId` above and this call that
@@ -404,11 +453,30 @@ export class SessionService {
       return { sessionId: randomUUID(), pendingVolume: target.volume };
     }
     const { sessionId } = target;
+    // F2 review fix: checked FIRST, before the registry/store even get a
+    // look — a `deleteSession` call for this id already passed its own
+    // `hasActivity` check and reserved it here, synchronously, the instant
+    // it did (`deletingSessionIds`'s own doc). A racing enqueue must never
+    // trust a registry hit or a store row that delete is actively in the
+    // process of tearing down.
+    if (this.deletingSessionIds.has(sessionId)) {
+      throw new SessionNotFoundError(sessionId);
+    }
     if (this.registry.get(sessionId)) {
       return { sessionId };
     }
     const meta = await this.store.get(sessionId);
     if (!meta) {
+      throw new SessionNotFoundError(sessionId);
+    }
+    // Re-checked: a delete could have reserved this id (synchronously, in
+    // its own `hasActivity`-then-add block) WHILE the `store.get` above was
+    // in flight — the "gated store get" probe the review reproduced live.
+    // Without this second check, `meta` here is a snapshot that's already
+    // stale by the time this method returns: the row it just read might be
+    // gone (or about to be) before a turn queued on the strength of it ever
+    // gets to run.
+    if (this.deletingSessionIds.has(sessionId)) {
       throw new SessionNotFoundError(sessionId);
     }
     return { sessionId };
@@ -873,11 +941,10 @@ export class SessionService {
    * every SDK transcript the session ever produced, live or failed
    * (`meta.sdkSessionId` plus every `meta.failedSdkSessionIds` entry — F7
    * review fix, closing `docs/DECISIONS.md` D6b's "orphaned twice over"
-   * gap), together — no orphans left in any direction. Publishes `{kind:
-   * "ended"}` on the bus afterward so an open `?follow=true` stream
-   * (`handlers/session-events.ts`) closes instead of sitting inertly
-   * subscribed to an id the store no longer knows (T2.7's documented seam,
-   * `session-bus.ts`'s module doc).
+   * gap). Publishes `{kind: "ended"}` on the bus afterward so an open
+   * `?follow=true` stream (`handlers/session-events.ts`) closes instead of
+   * sitting inertly subscribed to an id the store no longer knows (T2.7's
+   * documented seam, `session-bus.ts`'s module doc).
    *
    * **409 `SessionBusyError` if a turn is currently running or queued**
    * (`SessionLock.hasActivity` — the same predicate `ConversationRegistry`'s
@@ -889,40 +956,95 @@ export class SessionService {
    * entry always implies a store row, so checking the store alone is
    * sufficient).
    *
-   * **Order matters for crash-safety.** SDK transcripts are deleted BEFORE
-   * the store row: if this method (or the process) dies between the two, the
-   * store row survives and a retried `DELETE` on the same id finds the
-   * session still there — safe to try again, since a repeat
-   * `deleteStoredSession` call for an id already gone is a documented no-op
-   * (`AgenticSessionPort.deleteStoredSession`'s doc). The reverse order would
-   * leave a store row nothing could ever re-target once the SDK ids it
-   * pointed at were already forgotten. Registry release happens first and is
-   * best-effort (mirrors `ConversationRegistry.evict()`'s own stance,
-   * `.catch(() => {})`) — dropping the in-memory handle early is never
-   * itself a data-loss risk, only ever a wasted rehydrate if a later step
-   * fails and the operator retries.
+   * **F2 review fix: reserves `sessionId` in `deletingSessionIds` in the
+   * SAME synchronous block as the `hasActivity` check above** — before this,
+   * the two were the same synchronous moment but nothing PERSISTED that
+   * fact anywhere `enqueueTurn`/`resolveSessionId` could see; every `await`
+   * this method makes after that point (four of them) was a window a racing
+   * turn could reserve a slot in, mint a brand-new SDK session under this
+   * id, and have that transcript — and the registry handle it lives in —
+   * survive this delete untouched, because the `meta` snapshot below was
+   * already taken before any of it happened. See `deletingSessionIds`'s own
+   * doc for the full mechanism and the two probe variants (gated store
+   * `get`, gated store `delete`) that reproduced this live. Cleared in a
+   * `finally` regardless of outcome.
+   *
+   * **F1 review fix: SDK-transcript deletion failures no longer block the
+   * store row from being removed.** `AgenticSessionPort.deleteStoredSession`
+   * already tolerates "this id's transcript was never written" as a no-op
+   * (that method's own doc — the real SDK's `deleteSession` throws there,
+   * not the no-op this method used to assume it was); what's collected here
+   * is only a GENUINE failure past that tolerance. Before this fix, the
+   * first such failure — including the poisoned-not-found case, before the
+   * port-level tolerance existed — aborted this whole method via a thrown
+   * `AgenticSessionError`, BEFORE `store.delete` ever ran: the store row
+   * survived forever, and every retried `DELETE` hit the exact same
+   * failure, making the session permanently undeletable. Every id is now
+   * attempted regardless of an earlier one's failure, the store row is
+   * deleted unconditionally once that loop finishes, and only THEN —
+   * store row and registry entry already gone, bus already told any open
+   * follow stream to close — does a genuine failure surface, as
+   * `SessionTranscriptDeletionError` (500). **Honest retry story:** that
+   * error means the delete you asked for already fully happened from the
+   * operator's point of view (the session is gone from every list, a
+   * repeat `DELETE` on the same id now just 404s) — what's left is an
+   * orphaned SDK transcript on disk, not something retrying this endpoint
+   * can fix.
+   *
+   * **Order matters for crash-safety.** SDK transcripts are attempted BEFORE
+   * the store row is deleted: if this method (or the process) dies before
+   * `store.delete` runs, the store row survives and a retried `DELETE` on
+   * the same id finds the session still there — safe to try again, since a
+   * repeat `deleteStoredSession` call for an id already gone is a
+   * documented no-op. The reverse order would leave a store row nothing
+   * could ever re-target once the SDK ids it pointed at were already
+   * forgotten. Registry release happens first and is best-effort (mirrors
+   * `ConversationRegistry.evict()`'s own stance, `.catch(() => {})`) —
+   * dropping the in-memory handle early is never itself a data-loss risk,
+   * only ever a wasted rehydrate if a later step fails and the operator
+   * retries.
    */
   async deleteSession(sessionId: string): Promise<void> {
     if (this.lock.hasActivity(sessionId)) {
       throw new SessionBusyError(sessionId);
     }
-    const meta = await this.store.get(sessionId);
-    if (!meta) {
-      throw new SessionNotFoundError(sessionId);
+    // F2 review fix: reserved in the SAME synchronous block as the
+    // `hasActivity` check above — see `deletingSessionIds`'s doc.
+    this.deletingSessionIds.add(sessionId);
+    try {
+      const meta = await this.store.get(sessionId);
+      if (!meta) {
+        throw new SessionNotFoundError(sessionId);
+      }
+
+      await this.registry.remove(sessionId);
+
+      const idsToDelete = new Set<string>();
+      if (meta.sdkSessionId !== undefined) idsToDelete.add(meta.sdkSessionId);
+      for (const id of meta.failedSdkSessionIds ?? []) idsToDelete.add(id);
+
+      // F1 review fix: collect per-id failures instead of letting the
+      // first one abort the loop (and this whole method) — see this
+      // method's own doc.
+      const failedIds: string[] = [];
+      for (const id of idsToDelete) {
+        try {
+          await this.agenticSessionPort.deleteStoredSession(id);
+        } catch {
+          failedIds.push(id);
+        }
+      }
+
+      await this.store.delete(sessionId);
+
+      this.bus.publish(sessionId, { kind: "ended" });
+
+      if (failedIds.length > 0) {
+        throw new SessionTranscriptDeletionError(sessionId, failedIds);
+      }
+    } finally {
+      this.deletingSessionIds.delete(sessionId);
     }
-
-    await this.registry.remove(sessionId);
-
-    const idsToDelete = new Set<string>();
-    if (meta.sdkSessionId !== undefined) idsToDelete.add(meta.sdkSessionId);
-    for (const id of meta.failedSdkSessionIds ?? []) idsToDelete.add(id);
-    for (const id of idsToDelete) {
-      await this.agenticSessionPort.deleteStoredSession(id);
-    }
-
-    await this.store.delete(sessionId);
-
-    this.bus.publish(sessionId, { kind: "ended" });
   }
 
   /**

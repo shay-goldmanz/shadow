@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import type { ShadowApiClient } from "./api/client.ts";
 import { ChapterPage } from "./pages/ChapterPage.tsx";
 import { ChatPage } from "./pages/ChatPage.tsx";
@@ -36,13 +36,45 @@ import { ThemeToggle } from "./theme/ThemeToggle.tsx";
  * the very rendering already in flight. `replace: true` is used for
  * exactly this ONE transition in the whole app (nowhere else calls it) —
  * `mintedSessionIdRef` remembers the session id minted that way so the key
- * computed below stays `"new"` through it, the same key the id-less mount
+ * computed below stays stable through it, the same key the id-less mount
  * already had.
+ *
+ * ## F3 review fix: a fresh key per id-less visit, not a fixed "new"
+ *
+ * Every id-less chat mount used to share the literal key "new" — fine for
+ * the self-mint transition above (the whole point: same key, no remount),
+ * but wrong for the OTHER way a chat route loses its session id: deleting
+ * the currently-open session (`SessionList`'s `handleDelete`) navigates to
+ * `{chat, slug}` with no `sessionId`. If that delete happened to land while
+ * `mintedSessionIdRef` was still holding this exact session's id (the brief
+ * window between the self-mint's own render and the `useEffect` below
+ * clearing it — probe-confirmed live), the OLD key was already "new" (the
+ * self-mint branch) and the NEW key would ALSO be "new" (the id-less-route
+ * branch) — no key change, no remount, `ChatPage` keeps running against a
+ * `sessionId` the store no longer has a row for: a stale transcript on
+ * screen, and the next send POSTs a dead id. `newChatNonce` closes this the
+ * ordinary React way: bumped in `navigate` whenever a chat route THAT HAD A
+ * SESSION (self-minted or resumed — anything with `route.sessionId !==
+ * undefined`) is about to be replaced by an id-less one, so that
+ * transition's key always differs from whatever key the session-carrying
+ * route was using, remount guaranteed regardless of `mintedSessionIdRef`'s
+ * exact state at that instant. Every id-less key below is
+ * `new-${newChatNonce}` rather than a bare "new" for the same reason — a
+ * stable suffix per "chat session" the nonce hasn't moved past, not a magic
+ * constant three different render paths have to agree on by convention.
+ * The two existing invariants this app relies on both still hold: the
+ * self-mint transition never bumps the nonce (`next.sessionId !==
+ * undefined`, so `isLeavingSessionForIdLessChat` below is false for it),
+ * and an A→B navigation between two real session ids remounts exactly as
+ * before (their keys are the ids themselves, untouched by the nonce).
  */
 export function App({ client }: { readonly client: ShadowApiClient }) {
   const [route, rawNavigate] = useHashRoute();
 
   const mintedSessionIdRef = useRef<string | undefined>(undefined);
+  // F3 review fix: bumped whenever `navigate` leaves a chat route that had a
+  // session for an id-less one — see this component's doc.
+  const [newChatNonce, setNewChatNonce] = useState(0);
 
   const navigate = useCallback(
     (next: Route, options?: NavigateOptions) => {
@@ -56,6 +88,19 @@ export function App({ client }: { readonly client: ShadowApiClient }) {
       if (isSelfMintedReplace) {
         mintedSessionIdRef.current = next.sessionId;
       }
+      // F3 review fix: any transition off a session-carrying chat route
+      // (self-minted or resumed) onto an id-less one needs a fresh mount —
+      // not scoped to "same slug" or "was a delete" specifically, since any
+      // such transition (delete-the-open-session today; a future
+      // "start over" action) needs the same fresh transcript state.
+      const isLeavingSessionForIdLessChat =
+        route.name === "chat" &&
+        route.sessionId !== undefined &&
+        next.name === "chat" &&
+        next.sessionId === undefined;
+      if (isLeavingSessionForIdLessChat) {
+        setNewChatNonce((n) => n + 1);
+      }
       rawNavigate(next, options);
     },
     [route, rawNavigate],
@@ -64,9 +109,9 @@ export function App({ client }: { readonly client: ShadowApiClient }) {
   // Consumes the one-shot exemption the render immediately after it took
   // effect. Mutating a ref never itself triggers a re-render, so this only
   // ever matters the NEXT time `route` genuinely changes — by which point
-  // the self-mint has already done its one job (keeping the key at "new"
-  // for the render where `route.sessionId` first became defined) and
-  // clearing it here can't retroactively change a key already computed.
+  // the self-mint has already done its one job (keeping the key stable for
+  // the render where `route.sessionId` first became defined) and clearing
+  // it here can't retroactively change a key already computed.
   useEffect(() => {
     if (
       route.name === "chat" &&
@@ -77,12 +122,17 @@ export function App({ client }: { readonly client: ShadowApiClient }) {
     }
   }, [route]);
 
+  const isSelfMintedSession =
+    route.name === "chat" &&
+    route.sessionId !== undefined &&
+    route.sessionId === mintedSessionIdRef.current;
+
   const chatKey =
-    route.name === "chat"
-      ? route.sessionId !== undefined && route.sessionId === mintedSessionIdRef.current
-        ? "new"
-        : (route.sessionId ?? "new")
-      : undefined;
+    route.name !== "chat"
+      ? undefined
+      : isSelfMintedSession || route.sessionId === undefined
+        ? `new-${newChatNonce}`
+        : route.sessionId;
 
   return (
     <div className="app-shell">

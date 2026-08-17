@@ -21,6 +21,13 @@ import type { NavigateOptions, Route } from "../routing/useHashRoute.ts";
  * mutation's own response/success, matching `VolumeListPage`'s
  * call-then-update convention — no refetch needed for those, since this
  * component already holds the authoritative list.
+ *
+ * **F9 note:** a second tab's rename/delete of a session this list also
+ * shows is a deliberate scope decision, not an oversight — this component
+ * never polls and has no cross-tab bus to listen on, so a row here can go
+ * stale (a title another tab just changed, a session another tab just
+ * deleted) until something local re-triggers its own fetch. Out of scope
+ * for T3.2's single-tab session management.
  */
 export function SessionList({
   client,
@@ -145,6 +152,16 @@ function SessionRow({
   const suppressBlurRef = useRef(false);
 
   function startEdit(): void {
+    // F4 review fix: an Enter/Escape commit from a PREVIOUS edit sets this
+    // flag but the input unmounting when `editing` flips to `false` never
+    // fires a real blur event to consume it (jsdom and real browsers alike
+    // — an unmount is not a blur) — so without this reset, the flag
+    // survives into the NEXT edit on this row and silently swallows that
+    // edit's own blur-commit (`onBlur` below sees `suppressBlurRef.current
+    // === true`, assumes it's the tail of an Enter/Escape it already
+    // handled, and skips `commit()` entirely). Reset here, at the one point
+    // every edit — first or Nth — actually begins.
+    suppressBlurRef.current = false;
     setDraft(session.title ?? "");
     setRenameError(undefined);
     setEditing(true);

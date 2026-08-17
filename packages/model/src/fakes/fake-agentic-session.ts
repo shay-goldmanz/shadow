@@ -158,18 +158,28 @@ export class FakeAgenticSession implements AgenticSession {
   private turnIndex = 0;
   private closed = false;
   /**
-   * Mirrors `ClaudeAgentSdkSession.failedSessionIds`: ids from `isError`
-   * scripts, which are never latched into `ownSessionId` (T1.1) but are
-   * still reported back via `AgenticTurnResult.sessionId` and are what
-   * `close()` cleans up below — EXCEPT this handle's own `options.resume`
-   * target (F3 review fix, see the id-assignment branch below), which is
-   * never added here even if an `isError` script fires on the first turn.
-   * Inspectable for tests that want to assert on the "deletable" set
-   * directly rather than only through `close()`'s side effects; cleared by
-   * a successful `close()` (idempotency, F3 review fix), so read it before
-   * calling `close()` if the pre-clear contents matter to the assertion.
+   * Mirrors `ClaudeAgentSdkSession`'s own `_failedSessionIds`: ids from
+   * `isError` scripts, which are never latched into `ownSessionId` (T1.1)
+   * but are still reported back via `AgenticTurnResult.sessionId` and are
+   * what `close()` cleans up below — EXCEPT this handle's own
+   * `options.resume` target (F3 review fix, see the id-assignment branch
+   * below), which is never added here even if an `isError` script fires on
+   * the first turn.
+   *
+   * F8 review fix (T3.1): a `Set`, not an array — dedup semantics matching
+   * the real adapter's own internal `_failedSessionIds` exactly (a repeated
+   * `isError` script reporting the same assigned id twice must not inflate
+   * the count this fake reports), with `failedSessionIds` below exposing a
+   * fresh read-only array copy per call, same as
+   * `ClaudeAgentSdkSession.failedSessionIds`'s getter — a caller can never
+   * mutate this handle's internal set through the returned reference.
    */
-  readonly failedSessionIds: string[] = [];
+  private readonly _failedSessionIds = new Set<string>();
+
+  /** Read-only view of `_failedSessionIds` — see that field's doc. Cleared by a successful `close()` (idempotency, F3 review fix), so read it before calling `close()` if the pre-clear contents matter to the assertion. */
+  get failedSessionIds(): readonly string[] {
+    return [...this._failedSessionIds];
+  }
   private readonly _deletedSessionIds: string[] = [];
   /** Mirrors `ClaudeAgentSdkSession.ownSessionDeleted` — makes `close()` idempotent (F3 review fix). */
   private ownSessionDeleted = false;
@@ -252,7 +262,7 @@ export class FakeAgenticSession implements AgenticSession {
       // the id it was asked to resume, and that id is the operator's
       // pre-existing transcript, not one this handle orphaned.
       if (this.assignedSessionId !== this.options.resume?.sessionId) {
-        this.failedSessionIds.push(this.assignedSessionId);
+        this._failedSessionIds.add(this.assignedSessionId);
       }
     } else {
       // Session reuse, faked: the id is assigned once and never changes for
@@ -287,7 +297,7 @@ export class FakeAgenticSession implements AgenticSession {
     this.closed = true;
     if (this.options.persistSession === false) return;
 
-    const ids = new Set(this.failedSessionIds);
+    const ids = new Set(this._failedSessionIds);
     if (this.ownSessionId !== undefined && !this.ownSessionDeleted) {
       ids.add(this.ownSessionId);
     }
@@ -296,7 +306,7 @@ export class FakeAgenticSession implements AgenticSession {
     for (const id of ids) {
       this._deletedSessionIds.push(id);
     }
-    this.failedSessionIds.length = 0;
+    this._failedSessionIds.clear();
     if (this.ownSessionId !== undefined) {
       this.ownSessionDeleted = true;
     }

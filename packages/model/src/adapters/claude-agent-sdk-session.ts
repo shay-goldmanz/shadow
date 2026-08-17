@@ -88,6 +88,30 @@ export function createClaudeAgentSdkSessionPort(
       try {
         await deleteSessionFn(sdkSessionId);
       } catch (error) {
+        // F1 review fix (T3.1): the installed SDK's `deleteSession` does NOT
+        // no-op for a transcript that was never written — it THROWS, an
+        // `Error` reading `Session <id> not found in any project directory`
+        // (or `... for <dir>` when `dir` was given). Verified against the
+        // installed package directly (`@anthropic-ai/claude-agent-sdk`'s
+        // `deleteSession`/its internal `m$`), since there is no typed
+        // "not found" error class exported to `instanceof` against — this
+        // port's own doc used to claim the opposite (a no-op), which is
+        // exactly how a session whose first turn failed before the CLI ever
+        // persisted anything (`SessionMeta.failedSdkSessionIds`) became
+        // permanently undeletable: `DELETE` would reach this call, it would
+        // throw, and the store row survived forever behind it.
+        //
+        // Tolerated here, matched conservatively against THIS id's own
+        // message prefix (not a bare `/not found/` substring, which could
+        // just as easily swallow an unrelated failure that happens to
+        // mention the phrase) — every other failure still wraps and rethrows
+        // exactly as before.
+        if (
+          error instanceof Error &&
+          error.message.startsWith(`Session ${sdkSessionId} not found`)
+        ) {
+          return;
+        }
         throw new AgenticSessionError(`failed to delete persisted session ${sdkSessionId}`, error);
       }
     },

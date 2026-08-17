@@ -510,6 +510,56 @@ describe("createClaudeAgentSdkSessionPort — deleteStoredSession (T2.4)", () =>
 
     await expectRejection(port.deleteStoredSession("some-id"), AgenticSessionError);
   });
+
+  // F1 review fix (T3.1): the real SDK's `deleteSession` throws — not a
+  // no-op — for a transcript that was never written (verified against the
+  // installed package directly; see `../adapters/claude-agent-sdk-session.ts`'s
+  // `deleteStoredSession` doc). A session whose first turn failed before the
+  // CLI ever persisted anything left exactly this id in
+  // `SessionMeta.failedSdkSessionIds` with no matching transcript on disk —
+  // this pins the tolerance that keeps that session deletable.
+  test("tolerates the SDK's own not-found error for a transcript that was never written", async () => {
+    const port = createClaudeAgentSdkSessionPort(
+      {},
+      {
+        deleteSession: (async (sessionId: string) => {
+          throw new Error(`Session ${sessionId} not found in any project directory`);
+          // biome-ignore lint/suspicious/noExplicitAny: test double, mirrors the real SDK's own thrown message
+        }) as any,
+      },
+    );
+
+    // Resolves cleanly — no throw at all, not even wrapped.
+    await port.deleteStoredSession("poisoned-id");
+  });
+
+  test("tolerates the SDK's dir-scoped not-found message too", async () => {
+    const port = createClaudeAgentSdkSessionPort(
+      {},
+      {
+        deleteSession: (async (sessionId: string) => {
+          throw new Error(`Session ${sessionId} not found in project directory for /some/dir`);
+          // biome-ignore lint/suspicious/noExplicitAny: test double
+        }) as any,
+      },
+    );
+
+    await port.deleteStoredSession("poisoned-id-2");
+  });
+
+  test("does NOT tolerate a not-found message for a DIFFERENT session id (conservative match)", async () => {
+    const port = createClaudeAgentSdkSessionPort(
+      {},
+      {
+        deleteSession: (async () => {
+          throw new Error("Session some-other-id not found in any project directory");
+          // biome-ignore lint/suspicious/noExplicitAny: test double
+        }) as any,
+      },
+    );
+
+    await expectRejection(port.deleteStoredSession("this-id"), AgenticSessionError);
+  });
 });
 
 describe("createClaudeAgentSdkSessionPort — guardrail", () => {

@@ -37,7 +37,14 @@ import {
   noConversationFoundError,
   ZERO_USAGE,
 } from "@shadow/model";
-import type { SessionStore, StoredEventRecord } from "@shadow/sessions";
+import type {
+  NewStoredEvent,
+  SessionListFilter,
+  SessionMeta,
+  SessionMetaPatch,
+  SessionStore,
+  StoredEventRecord,
+} from "@shadow/sessions";
 import { expectRejection, InMemorySessionStore } from "@shadow/sessions/test-helpers";
 import { SessionNotFoundError, TurnQueueBusyError } from "./errors.ts";
 import type { SessionBusMessage } from "./session-bus.ts";
@@ -735,6 +742,252 @@ describe("SessionService — crash-while-queued semantics", () => {
       await controllable.waitForStart(1);
       controllable.release(1);
       await drainToEnd(second.events);
+    });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// F2 review fix: the busy check (`SessionLock.hasActivity`) runs synchronously
+// at the top of `deleteSession`, but four more `await`s follow before the
+// method actually finishes — a `store` decorator that can pause `get`/
+// `delete` mid-call is what turns "this window exists" into something a test
+// can land a racing `enqueueTurn` inside, deterministically, on every run.
+// ---------------------------------------------------------------------------
+
+/**
+ * A `SessionStore` decorator whose `get`/`delete` can each be gated
+ * one-shot: the NEXT call to that method still does its real work
+ * immediately (so `onXGated` fires only once the underlying read/write has
+ * already happened, not before), but the RETURN to the caller is held open
+ * until the test calls the matching `releaseX()`. One-shot by design — every
+ * OTHER call to the same method (including `deleteSession`'s own internal
+ * `store.get`, made moments after a racing caller's `store.get` was armed)
+ * passes straight through, un-gated, so a test can pin down exactly ONE
+ * call's timing without accidentally blocking every other call to the same
+ * method for the rest of the harness.
+ */
+class GatedGetDeleteStore implements SessionStore {
+  // Deliberately two fields per gate, not one: `armedX` is cleared the
+  // instant the ONE call it targets consumes it (one-shot — every other
+  // call to the same method passes straight through), but `releaseXFn`
+  // stays put until the test actually calls `releaseX()` — a `release`
+  // callback captured off an already-cleared `armedX` field would be lost,
+  // making `releaseX()` a silent no-op for exactly the call it was meant to
+  // unblock.
+  private armedGet: { readonly promise: Promise<void> } | undefined;
+  private releaseGetFn: (() => void) | undefined;
+  private armedDelete: { readonly promise: Promise<void> } | undefined;
+  private releaseDeleteFn: (() => void) | undefined;
+  /** Fires once the NEXT armed `get()` call has already read its result and is now paused before returning it. */
+  onGetGated: (() => void) | undefined;
+  /** Fires once the NEXT armed `delete()` call is paused, strictly BEFORE it has removed anything from the underlying store. */
+  onDeleteGated: (() => void) | undefined;
+
+  constructor(private readonly inner: SessionStore) {}
+
+  /** Arms exactly the next `get()` call to pause (after reading, before returning) until `releaseGet()`. */
+  armNextGet(): void {
+    let release!: () => void;
+    const promise = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    this.armedGet = { promise };
+    this.releaseGetFn = release;
+  }
+  releaseGet(): void {
+    this.releaseGetFn?.();
+  }
+
+  /** Arms exactly the next `delete()` call to pause (before removing anything) until `releaseDelete()`. */
+  armNextDelete(): void {
+    let release!: () => void;
+    const promise = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    this.armedDelete = { promise };
+    this.releaseDeleteFn = release;
+  }
+  releaseDelete(): void {
+    this.releaseDeleteFn?.();
+  }
+
+  create(meta: SessionMeta): Promise<void> {
+    return this.inner.create(meta);
+  }
+
+  async get(id: string): Promise<SessionMeta | undefined> {
+    // Reads NOW — proving what follows is purely about DELIVERING an
+    // already-fetched result later, not about delaying the read itself
+    // (the exact shape of "this call already saw a live meta" the F2 probe
+    // needs).
+    const result = await this.inner.get(id);
+    const gate = this.armedGet;
+    if (gate) {
+      this.armedGet = undefined; // one-shot
+      this.onGetGated?.();
+      await gate.promise;
+    }
+    return result;
+  }
+
+  list(filter?: SessionListFilter): Promise<SessionMeta[]> {
+    return this.inner.list(filter);
+  }
+
+  update(id: string, patch: SessionMetaPatch): Promise<void> {
+    return this.inner.update(id, patch);
+  }
+
+  append(id: string, events: readonly NewStoredEvent[]): Promise<StoredEventRecord[]> {
+    return this.inner.append(id, events);
+  }
+
+  readEvents(id: string, fromSeq?: number): Promise<StoredEventRecord[]> {
+    return this.inner.readEvents(id, fromSeq);
+  }
+
+  async delete(id: string): Promise<void> {
+    const gate = this.armedDelete;
+    if (gate) {
+      this.armedDelete = undefined; // one-shot
+      this.onDeleteGated?.();
+      await gate.promise;
+    }
+    return this.inner.delete(id);
+  }
+}
+
+interface GatedStoreHarness {
+  readonly service: SessionService;
+  readonly store: GatedGetDeleteStore;
+  readonly sessions: FakeAgenticSessionPort;
+  readonly volume: VolumeSlug;
+}
+
+/** `GatedGetDeleteStore`-backed harness — `FakeAgenticSessionPort` (auto-completing turns; nothing in these tests needs a turn itself gated, only the STORE). */
+async function withGatedStoreSessionService<T>(
+  fn: (harness: GatedStoreHarness) => Promise<T>,
+): Promise<T> {
+  const root = await mkdtemp(join(tmpdir(), "shadow-session-service-gated-store-"));
+  try {
+    const volumeStore = new FileSystemVolumeStore(root);
+    const evidenceStore = new FileSystemEvidenceStore(volumeStore);
+    const indexer = new StructuralIndexer({ rootDir: root });
+    const sessions = new FakeAgenticSessionPort();
+    const volume = toVolumeSlug("design-craft");
+    await volumeStore.createVolume({ slug: volume, title: "Design Craft" });
+
+    const shadowAgent = new ShadowAgent({
+      agenticSessionPort: sessions,
+      researchBriefPort: unusedResearchBriefPort,
+      volumeStore,
+      evidenceStore,
+      indexer,
+      checkWorthinessClassifier: alwaysNarrativeClassifier,
+      entailmentRelevanceJudge: scriptedEntailmentJudge(),
+      claimRestater: neverRepairClaimRestater(),
+      sessionCwd: root,
+    });
+
+    const store = new GatedGetDeleteStore(new InMemorySessionStore());
+    const service = new SessionService({ store, shadowAgent, agenticSessionPort: sessions });
+
+    return await fn({ service, store, sessions, volume });
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+}
+
+describe("SessionService — F2 review fix: the busy check alone is outside the per-session lock", () => {
+  test("gated store get: a racing enqueue whose resolveSessionId already fetched a LIVE meta is still rejected once delete reserves the id before that read is delivered", async () => {
+    await withGatedStoreSessionService(async ({ service, store, sessions, volume }) => {
+      const now = new Date().toISOString();
+      await store.create({
+        id: "cold-session-a",
+        volume,
+        title: null,
+        createdAt: now,
+        lastActiveAt: now,
+      });
+
+      // Arms `resolveSessionId`'s own `store.get` (the FIRST call made for
+      // this id, since the registry has no entry for a cold session) —
+      // it reads the still-live meta immediately, then pauses before
+      // handing it back. Also arms `store.delete` so `deleteSession`
+      // itself pauses too, strictly AFTER reserving `deletingSessionIds`
+      // but BEFORE actually removing the row — without this second gate,
+      // `deleteSession` would run to completion (clearing
+      // `deletingSessionIds` in its own `finally`) before the racing
+      // `get()` is ever released, and the very re-check this test exists
+      // to exercise would find nothing left to catch.
+      store.armNextGet();
+      const gotGatedGet = new Promise<void>((resolve) => {
+        store.onGetGated = resolve;
+      });
+      store.armNextDelete();
+      const gotGatedDelete = new Promise<void>((resolve) => {
+        store.onDeleteGated = resolve;
+      });
+
+      const enqueuePromise = service.enqueueTurn({ sessionId: "cold-session-a" }, "racing turn");
+      await gotGatedGet; // resolveSessionId's read already happened; delivery is paused
+
+      // Started, NOT awaited yet: reserves `deletingSessionIds`
+      // synchronously, then pauses right before `store.delete` actually
+      // removes the row.
+      const deletePromise = service.deleteSession("cold-session-a");
+      await gotGatedDelete;
+
+      // NOW deliver the stale (already-fetched, pre-delete) meta back to
+      // the paused `resolveSessionId` call, with `deletingSessionIds`
+      // STILL populated (delete hasn't finished) — without the F2 fix,
+      // this meta looking "live" would let the racing turn proceed
+      // straight to `tryReserve` and mint a brand-new SDK session under an
+      // id the delete's own snapshot never saw.
+      store.releaseGet();
+      await expectRejection(enqueuePromise, SessionNotFoundError);
+      // No orphaned SDK session was ever minted for the racing turn.
+      expect(sessions.sessions).toHaveLength(0);
+
+      store.releaseDelete();
+      await deletePromise;
+      expect(await store.get("cold-session-a")).toBeUndefined();
+    });
+  });
+
+  test("gated store delete: a racing enqueue is rejected the instant delete reserves the id — even while store.delete() itself is still in flight (the row technically still exists)", async () => {
+    await withGatedStoreSessionService(async ({ service, store, sessions, volume }) => {
+      const now = new Date().toISOString();
+      await store.create({
+        id: "cold-session-b",
+        volume,
+        title: null,
+        createdAt: now,
+        lastActiveAt: now,
+      });
+
+      store.armNextDelete();
+      const gotGatedDelete = new Promise<void>((resolve) => {
+        store.onDeleteGated = resolve;
+      });
+
+      const deletePromise = service.deleteSession("cold-session-b");
+      await gotGatedDelete; // deleteSession has reserved the id and is paused strictly before the row is actually removed
+
+      // The row is STILL physically present in the underlying store right
+      // now — proof that `deletingSessionIds`, not incidental store state,
+      // is what rejects this, not the row simply already being gone.
+      expect(await store.get("cold-session-b")).toBeDefined();
+
+      await expectRejection(
+        service.enqueueTurn({ sessionId: "cold-session-b" }, "racing turn"),
+        SessionNotFoundError,
+      );
+      expect(sessions.sessions).toHaveLength(0);
+
+      store.releaseDelete();
+      await deletePromise;
+      expect(await store.get("cold-session-b")).toBeUndefined();
     });
   });
 });

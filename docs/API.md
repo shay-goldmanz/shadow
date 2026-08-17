@@ -178,8 +178,12 @@ events as they happen, across idle gaps between turns — a `turn-boundary` fini
 close condition, so a second tab watching a session doesn't go blind the moment the turn it
 happened to catch finishes. It closes on client disconnect, the server process exiting, or the
 session being deleted (`DELETE /api/sessions/:id`, below) — deletion publishes a close signal on
-the session's internal bus before the store row is removed, so an open follow stream ends instead
-of sitting inertly subscribed to an id that no longer exists.
+the session's internal bus *after* the store row (and every SDK transcript) is gone, so an open
+follow stream ends instead of sitting inertly subscribed to an id that no longer exists. A follow
+stream that loses the race the other way — subscribing, or reading a stored record, in the exact
+gap where a delete's own signal already passed by — closes cleanly too, the same way: no wire
+event, just a stream that ends rather than one left dangling on an id nothing will ever announce
+gone to it again.
 
 **Every event derived from a stored record carries `seq` in its `data`** — replayed or freshly
 live, identically — which is what makes `seq` usable as a reconnect cursor regardless of which
@@ -237,20 +241,36 @@ volume — the same shape either way, so filtering is a no-cost narrowing, not a
 
 **`PATCH /api/sessions/:id { title }`** sets the title, overriding whatever was there — including
 the first-turn default (the operator's first message, first line, clipped to ~60 chars, set once
-`POST /api/chat`'s first turn completes). `title` is required and must be a non-empty string; a
-missing/non-string/empty title is `400 invalid_request`. `404 session_not_found` if `:id` is
-unknown.
+`POST /api/chat`'s first turn completes). `title` is required and must be a non-empty string once
+trimmed — the stored value is `title.trim()`, not the raw wire value — and at most 200 characters
+(measured after trimming); a missing/non-string/empty(-after-trim) title, or one over 200
+characters, is `400 invalid_request`. `404 session_not_found` if `:id` is unknown.
 
 **`DELETE /api/sessions/:id`** removes the session's store directory, its live registry handle (if
 any — a cold session has none), and every SDK transcript it ever produced — the successful one
 (`sdkSessionId`) and every failed first-turn one (`failedSdkSessionIds`: a first turn that failed
 via an `isError` result can still have left a transcript on disk under an id that never became
-`sdkSessionId`; deleting only the latter would leave that one permanently unreachable). All of it
-goes together, or none of it does:
+`sdkSessionId`; deleting only the latter would leave that one permanently unreachable).
+
+**Order, honestly: SDK transcripts are attempted first, the store row goes last, and the two are
+NOT all-or-nothing.** A transcript whose delete fails because it was never actually written (a
+first turn that failed before the CLI persisted anything) is tolerated as a no-op at the model
+layer — that case can never block anything. A GENUINE transcript-deletion failure past that
+tolerance does not, either: every id is still attempted, the store row is still deleted once that
+pass finishes, and only then does the failure surface, as `500 session_transcript_deletion_failed`
+— by which point the session is already gone from every list and a retried `DELETE` on the same id
+just 404s. That response means "the delete happened; an SDK transcript may be orphaned on disk,"
+not "try again." This ordering is also what makes an interrupted delete (a crash between the two
+steps) safe to retry at all: a repeat `deleteStoredSession` call for an id already gone is itself a
+no-op, so replaying this endpoint after a crash before `store.delete` ran picks up cleanly where it
+left off.
 
 - **`409 session_busy`** if the session currently has a turn running or queued — delete once it
   settles (poll `GET /api/sessions/:id/events`, or just retry).
-- **`404 session_not_found`** if `:id` is unknown.
+- **`404 session_not_found`** if `:id` is unknown — including a session another `DELETE` is
+  *currently* in the middle of removing: a turn that tries to start against that id in the narrow
+  window while deletion is in flight gets this same 404, not a 409, since by the time it would
+  actually run the session really will be gone.
 - Works identically for a **cold session** (no live registry handle, e.g. evicted or untouched
   since the last server restart) — deletion is driven entirely from the stored `SessionMeta`, never
   through a live conversation handle, so there is nothing a cold session lacks that this needs.
@@ -311,9 +331,10 @@ transport concerns that have no pillar to originate from:
 
 | code | status | from | meaning |
 |---|---|---|---|
-| `session_not_found` | 404 | `POST /api/chat`, `GET /api/sessions/:id/events`, `PATCH`/`DELETE /api/sessions/:id` | `sessionId`/`:id` is unknown to both the live registry and the on-disk store |
+| `session_not_found` | 404 | `POST /api/chat`, `GET /api/sessions/:id/events`, `PATCH`/`DELETE /api/sessions/:id` | `sessionId`/`:id` is unknown to both the live registry and the on-disk store, OR a `DELETE` for that id is currently in flight |
 | `turn_queue_busy` | 409 | `POST /api/chat` | this session already has 4 turns queued ahead of this one (multiple tabs racing one session); back off and retry, or wait for the in-flight turn |
 | `session_busy` | 409 | `DELETE /api/sessions/:id` | this session has a turn running or queued; delete once it settles |
+| `session_transcript_deletion_failed` | 500 | `DELETE /api/sessions/:id` | the session itself was deleted successfully (store row and registry entry gone); at least one of its SDK transcripts failed to delete and may be orphaned on disk. Not retryable — a repeat `DELETE` on the same id now 404s |
 | `shutting_down` | 503 | `POST /api/chat` | the server is winding down in-flight turns and is not accepting new ones; retry once it has restarted |
 
 ## Not in scope

@@ -107,6 +107,7 @@
  */
 
 import type { StoredEventRecord } from "@shadow/sessions";
+import { SessionNotFoundError as StoreSessionNotFoundError } from "@shadow/sessions";
 import type { BunRequest } from "bun";
 import type { ApiDeps } from "../deps.ts";
 import { InvalidRequestError, SessionNotFoundError } from "../errors.ts";
@@ -180,6 +181,21 @@ export async function getSessionEvents(
     unsubscribe = deps.sessionService.subscribeToSession(sessionId, (message) => {
       channel?.push(message);
     });
+    // F7-review fix (a): the session could have been deleted in the gap
+    // between the `hasSession` check above and this `subscribeToSession`
+    // call — deletion publishes `{ kind: "ended" }` on the bus (T3.1)
+    // BEFORE this subscription ever existed to hear it, so without this
+    // re-check the stream below would open and then follow a session
+    // that's already gone, forever (no "ended" message is ever coming for
+    // it now). Re-checked here, still before the `Response`/stream is ever
+    // created, so a session lost in exactly this window gets the SAME
+    // ordinary 404 the top-of-handler check would have given it had the
+    // race landed the other way, instead of an SSE connection with nothing
+    // left to tell it to close.
+    if (!(await deps.sessionService.hasSession(sessionId))) {
+      unsubscribe();
+      throw new SessionNotFoundError(sessionId);
+    }
   }
 
   const stream = new ReadableStream<Uint8Array>({
@@ -270,10 +286,23 @@ export async function getSessionEvents(
           }
         }
       } catch (error) {
-        // Reachable only for a failure in THIS handler's own consumption
-        // (mirrors chat.ts's identical catch — the store/bus themselves
-        // don't throw mid-stream for anything this handler causes).
-        if (!closed) {
+        // F7-review fix (b): a `SessionStore`-level `SessionNotFoundError`
+        // (`@shadow/sessions`'s own class — distinct from this package's
+        // `../errors.ts` one of the same name, imported above as
+        // `StoreSessionNotFoundError`) means the session was deleted
+        // mid-replay: the store row vanished between this stream starting
+        // and `readEvents` actually reading it. That is the exact same
+        // "the session is gone" outcome the bus's `{ kind: "ended" }`
+        // message closes cleanly for above — just observed through a
+        // thrown error instead of a bus message, since a delete's publish
+        // can only reach a subscriber whose `readEvents` call has already
+        // returned. Closed the same way: no wire event, just a clean end —
+        // reporting this as `internal_error` (every other failure here
+        // still does) would misrepresent an ordinary delete race as a
+        // server fault.
+        if (error instanceof StoreSessionNotFoundError) {
+          // Fall through to `finally` below, which closes cleanly.
+        } else if (!closed) {
           send("error", {
             message: error instanceof Error ? error.message : String(error),
             code: "internal_error",
@@ -295,11 +324,13 @@ export async function getSessionEvents(
         close();
       }
     },
-    // Client disconnect (nav away, tab close, aborted fetch) — the only
-    // close condition this endpoint reacts to today (see this module's doc
-    // for the session-deletion seam T3.1 will need to add a second one).
-    // Ending the channel unblocks a `for await` that would otherwise wait
-    // forever for a message that may never come.
+    // Client disconnect (nav away, tab close, aborted fetch) — one of the
+    // three close conditions this endpoint reacts to (this module's
+    // "Close conditions" doc has the other two: the process exiting, and
+    // session deletion, both handled above in `start()`'s own `try`/`catch`
+    // rather than through this `cancel()` callback at all). Ending the
+    // channel unblocks a `for await` that would otherwise wait forever for
+    // a message that may never come.
     async cancel() {
       closed = true;
       unsubscribe?.();

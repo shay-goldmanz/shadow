@@ -32,7 +32,8 @@ import type {
   AgenticTurnResult,
   FakeAgenticTurnResponder,
 } from "@shadow/model";
-import { FakeStructuredGenerationPort, ZERO_USAGE } from "@shadow/model";
+import { FakeAgenticSessionPort, FakeStructuredGenerationPort, ZERO_USAGE } from "@shadow/model";
+import type { SessionStore } from "@shadow/sessions";
 import { InMemorySessionStore } from "@shadow/sessions/test-helpers";
 import type { ApiDeps } from "../deps.ts";
 import { createServer } from "../server.ts";
@@ -267,6 +268,72 @@ describe("PATCH /api/sessions/:id", () => {
     });
   });
 
+  // F6 review fix: the stored title is trimmed, and capped at
+  // `MAX_SESSION_TITLE_LENGTH` (200 chars, measured after trimming).
+  test("F6: stores title.trim(), not the raw wire value", async () => {
+    await withApi(async ({ baseUrl, deps, sessionStore }) => {
+      const volume = toVolumeSlug("design-craft");
+      await seedVolume(deps, volume);
+      await sessionStore.create({
+        id: "sess-trim",
+        volume,
+        title: null,
+        createdAt: "2026-01-01T00:00:00.000Z",
+        lastActiveAt: "2026-01-01T00:00:00.000Z",
+      });
+
+      const res = await fetch(`${baseUrl}/api/sessions/sess-trim`, {
+        method: "PATCH",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ title: "   padded title   " }),
+      });
+      expect(res.status).toBe(200);
+      const body = (await res.json()) as { session: { title: string } };
+      expect(body.session.title).toBe("padded title");
+
+      expect((await sessionStore.get("sess-trim"))?.title).toBe("padded title");
+    });
+  });
+
+  test("F6: 400 invalid_request for a title over 200 characters (measured after trimming)", async () => {
+    await withApi(async ({ baseUrl, deps, sessionStore }) => {
+      const volume = toVolumeSlug("design-craft");
+      await seedVolume(deps, volume);
+      await sessionStore.create({
+        id: "sess-cap",
+        volume,
+        title: "original",
+        createdAt: "2026-01-01T00:00:00.000Z",
+        lastActiveAt: "2026-01-01T00:00:00.000Z",
+      });
+
+      // Exactly 200 (after trim) is still allowed — the cap is inclusive.
+      const exactlyAtCap = `  ${"a".repeat(200)}  `;
+      const okRes = await fetch(`${baseUrl}/api/sessions/sess-cap`, {
+        method: "PATCH",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ title: exactlyAtCap }),
+      });
+      expect(okRes.status).toBe(200);
+      expect((await sessionStore.get("sess-cap"))?.title).toHaveLength(200);
+
+      // One character over is rejected.
+      const overCap = `  ${"a".repeat(201)}  `;
+      const overRes = await fetch(`${baseUrl}/api/sessions/sess-cap`, {
+        method: "PATCH",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ title: overCap }),
+      });
+      expect(overRes.status).toBe(400);
+      const body = (await overRes.json()) as { error: { code: string } };
+      expect(body.error.code).toBe("invalid_request");
+
+      // The rejected PATCH left the title exactly as the earlier, valid one
+      // set it — not silently clipped, not reverted, not touched at all.
+      expect((await sessionStore.get("sess-cap"))?.title).toHaveLength(200);
+    });
+  });
+
   test("404 session_not_found for an unknown id", async () => {
     await withApi(async ({ baseUrl }) => {
       const res = await fetch(`${baseUrl}/api/sessions/nonexistent-id`, {
@@ -393,9 +460,15 @@ describe("DELETE /api/sessions/:id", () => {
       expect(deleteRes.status).toBe(200);
 
       expect(await sessionStore.get(sessionId)).toBeUndefined();
-      expect(sessions.deletedStoredSessionIds).toContain(failedId);
-      expect(sessions.deletedStoredSessionIds).toContain(
-        requireDefined(afterSuccess?.sdkSessionId),
+      // Review finding #8a: the EXACT deleted-id set, not just `toContain`
+      // — `toContain` alone would pass even if a THIRD, unexpected id also
+      // got deleted (a bug that leaked more than intended), or if this same
+      // id appeared more than once in the underlying calls. Sorted because
+      // `deletedStoredSessionIds`' own order follows `Set` iteration over
+      // `idsToDelete` in `deleteSession`, which is not a contract this test
+      // needs to pin.
+      expect(sessions.deletedStoredSessionIds.toSorted()).toEqual(
+        [failedId, requireDefined(afterSuccess?.sdkSessionId)].toSorted(),
       );
     });
   });
@@ -594,6 +667,205 @@ describe("DELETE /api/sessions/:id — 409 while busy", () => {
 
       const secondRes = await secondResPromise;
       await readAllSseEvents(secondRes);
+    });
+  });
+
+  // F8-review remainder: the full sequence `docs/API.md`'s DELETE entry
+  // documents — "409 while running/queued; delete once it settles (poll, or
+  // just retry)" — exercised end to end rather than only its two halves
+  // separately.
+  test("409 while running, then 200 once the turn settles — the full sequence, matching docs/API.md's own retry story", async () => {
+    await withGatedApi(async ({ baseUrl, sessions }) => {
+      const firstRes = await postChat(baseUrl, { volumeSlug: "design-craft", message: "op-1" });
+      const sessionId = sessionIdFrom(
+        await readSseEventsUntil(firstRes, (events) => events.length >= 1),
+      );
+      const controllable = await waitForControllableSession(sessions, 0);
+      await controllable.waitForStart(0);
+
+      const busyRes = await fetch(`${baseUrl}/api/sessions/${sessionId}`, { method: "DELETE" });
+      expect(busyRes.status).toBe(409);
+      const busyBody = (await busyRes.json()) as { error: { code: string } };
+      expect(busyBody.error.code).toBe("session_busy");
+
+      controllable.release(0);
+
+      // "delete once it settles ... or just retry" — poll the SAME endpoint
+      // until it stops 409-ing, exactly the retry story the docs describe,
+      // rather than reaching into the service's internals to learn the
+      // precise instant the turn's own bookkeeping finished.
+      const deadline = Date.now() + 3000;
+      let settledRes: Response | undefined;
+      for (;;) {
+        const res = await fetch(`${baseUrl}/api/sessions/${sessionId}`, { method: "DELETE" });
+        if (res.status !== 409) {
+          settledRes = res;
+          break;
+        }
+        if (Date.now() > deadline) {
+          throw new Error("timed out waiting for the busy session to become deletable");
+        }
+        await new Promise((resolve) => setTimeout(resolve, 5));
+      }
+
+      expect(settledRes.status).toBe(200);
+      expect(await settledRes.json()).toEqual({ deleted: true });
+
+      // Retrying the SAME delete now 404s — the row really is gone.
+      const retryRes = await fetch(`${baseUrl}/api/sessions/${sessionId}`, { method: "DELETE" });
+      expect(retryRes.status).toBe(404);
+    });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// F1 review fix: a genuine (non-not-found) SDK-transcript-deletion failure
+// must not block the store row from being removed. Needs a port that can
+// fail `deleteStoredSession` for one specific id without affecting the
+// others — `FakeAgenticSessionPort`'s own `deleteStoredSession` never
+// throws, so this wraps it.
+// ---------------------------------------------------------------------------
+
+/**
+ * Wraps `FakeAgenticSessionPort` so `deleteStoredSession` genuinely fails
+ * (NOT the not-found shape the model-layer adapter already tolerates before
+ * `SessionService` would ever see it — see
+ * `packages/model/src/adapters/claude-agent-sdk-session.ts`'s own doc) for
+ * ids in `failIds`. Only `deleteStoredSession` differs from the inner port;
+ * `createSession` passes straight through, so ordinary turns behave exactly
+ * as `FakeAgenticSessionPort` alone would.
+ */
+class FlakyDeleteAgenticSessionPort implements AgenticSessionPort {
+  readonly deletedStoredSessionIds: string[] = [];
+  private readonly failIds: Set<string>;
+
+  constructor(
+    private readonly inner: FakeAgenticSessionPort,
+    failIds: readonly string[],
+  ) {
+    this.failIds = new Set(failIds);
+  }
+
+  createSession(options?: AgenticSessionOptions): AgenticSession {
+    return this.inner.createSession(options);
+  }
+
+  async deleteStoredSession(sdkSessionId: string): Promise<void> {
+    if (this.failIds.has(sdkSessionId)) {
+      throw new Error("simulated genuine transcript-deletion failure (not a not-found shape)");
+    }
+    this.deletedStoredSessionIds.push(sdkSessionId);
+  }
+}
+
+interface FlakyDeleteHarness {
+  readonly baseUrl: string;
+  readonly sessionStore: SessionStore;
+  readonly flaky: FlakyDeleteAgenticSessionPort;
+}
+
+async function withFlakyDeleteApi<T>(
+  failIds: readonly string[],
+  fn: (harness: FlakyDeleteHarness) => Promise<T>,
+): Promise<T> {
+  const root = await mkdtemp(join(tmpdir(), "shadow-sessions-delete-flaky-"));
+  try {
+    const volumeStore = new FileSystemVolumeStore(root);
+    const evidenceStore = new FileSystemEvidenceStore(volumeStore);
+    const indexer = new StructuralIndexer({ rootDir: root });
+    const inner = new FakeAgenticSessionPort();
+    const flaky = new FlakyDeleteAgenticSessionPort(inner, failIds);
+    const volume = toVolumeSlug("design-craft");
+    await volumeStore.createVolume({ slug: volume, title: "Design Craft" });
+
+    const shadowAgent = new ShadowAgent({
+      agenticSessionPort: inner,
+      researchBriefPort: unusedResearchBriefPort,
+      volumeStore,
+      evidenceStore,
+      indexer,
+      checkWorthinessClassifier: alwaysNarrativeClassifier,
+      entailmentRelevanceJudge: scriptedEntailmentJudge(),
+      claimRestater: neverRepairClaimRestater(),
+      sessionCwd: root,
+    });
+
+    const sessionStore = new InMemorySessionStore();
+    // Deliberately NOT the same port instance `shadowAgent` uses — a real
+    // `SessionService` always shares one (`SessionServiceDeps.agenticSessionPort`'s
+    // own doc explains why), but this test double needs turns to behave
+    // ordinarily while ONLY `deleteStoredSession` misbehaves, which sharing
+    // one instance can't express.
+    const sessionService = new SessionService({
+      store: sessionStore,
+      shadowAgent,
+      agenticSessionPort: flaky,
+    });
+
+    const deps: ApiDeps = {
+      volumeStore,
+      evidenceStore,
+      indexer,
+      checkWorthinessClassifier: alwaysNarrativeClassifier,
+      entailmentRelevanceJudge: scriptedEntailmentJudge(),
+      claimRestater: neverRepairClaimRestater(),
+      structuredGenerationPort: new FakeStructuredGenerationPort(),
+      missLog: new InMemoryMissLog(),
+      shadowAgent,
+      sessionService,
+      conversations: sessionService.registry,
+    };
+
+    const server = createServer(deps, { port: 0, hostname: "localhost" });
+    try {
+      return await fn({
+        baseUrl: server.url.toString().replace(/\/$/, ""),
+        sessionStore,
+        flaky,
+      });
+    } finally {
+      void server.stop(true);
+    }
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+}
+
+describe("DELETE /api/sessions/:id — F1 review fix: transcript-deletion failures don't block the row", () => {
+  test("a genuinely failing SDK delete for one id still deletes the store row AND the other id; the failure surfaces as 500 session_transcript_deletion_failed; a retry now 404s", async () => {
+    await withFlakyDeleteApi(["poisoned-transcript"], async ({ baseUrl, sessionStore, flaky }) => {
+      const now = new Date().toISOString();
+      await sessionStore.create({
+        id: "sess-flaky",
+        volume: toVolumeSlug("design-craft"),
+        title: null,
+        createdAt: now,
+        lastActiveAt: now,
+      });
+      await sessionStore.update("sess-flaky", {
+        sdkSessionId: "healthy-transcript",
+        failedSdkSessionIds: ["poisoned-transcript"],
+      });
+
+      const deleteRes = await fetch(`${baseUrl}/api/sessions/sess-flaky`, { method: "DELETE" });
+      expect(deleteRes.status).toBe(500);
+      const body = (await deleteRes.json()) as { error: { code: string; message: string } };
+      expect(body.error.code).toBe("session_transcript_deletion_failed");
+      expect(body.error.message).toContain("poisoned-transcript");
+
+      // The whole point of F1: a genuine per-id failure does NOT block the
+      // row from being removed — the delete already fully happened from
+      // the operator's point of view.
+      expect(await sessionStore.get("sess-flaky")).toBeUndefined();
+      // The healthy id really was attempted and deleted too — only the
+      // poisoned one failed; every id is attempted regardless of an
+      // earlier one's outcome.
+      expect(flaky.deletedStoredSessionIds).toEqual(["healthy-transcript"]);
+
+      // Honest retry story: the row is gone, so retrying the SAME DELETE
+      // now just 404s — there is nothing left for it to do.
+      const retryRes = await fetch(`${baseUrl}/api/sessions/sess-flaky`, { method: "DELETE" });
+      expect(retryRes.status).toBe(404);
     });
   });
 });

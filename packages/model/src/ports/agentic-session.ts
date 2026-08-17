@@ -203,8 +203,21 @@ export interface AgenticSessionPort {
    * works regardless — wraps the Agent SDK's `deleteSession` directly, and
    * is the sole deletion path callers should use going forward
    * (`ShadowConversation.release()` no longer deletes anything; see its
-   * doc). A no-op if `sdkSessionId` was never persisted, per the SDK's own
-   * `deleteSession` contract.
+   * doc).
+   *
+   * **F1 review fix (T3.1): this is a no-op for an id whose transcript was
+   * never written, but only because the real adapter makes it one — the
+   * underlying SDK's own `deleteSession` does NOT no-op there, it throws.**
+   * A failed first turn can leave an id in `SessionMeta.failedSdkSessionIds`
+   * (T1.1/F7) with no transcript ever having been persisted for it (the CLI
+   * failed before writing anything); the real adapter
+   * (`../adapters/claude-agent-sdk-session.ts`) catches exactly that "not
+   * found" shape and resolves normally, so a caller here can rely on this
+   * method behaving as documented regardless of which of those two cases it
+   * hit. Any OTHER failure (permissions, disk, a genuinely unexpected error)
+   * still rejects with `AgenticSessionError`, which `SessionService.deleteSession`
+   * (`@shadow/api`) is the one place that decides how to handle — see that
+   * method's doc for the resulting partial-failure story.
    */
   deleteStoredSession(sdkSessionId: string): Promise<void>;
 }

@@ -137,6 +137,41 @@ describe("SessionList", () => {
     expect(await findByText("committed on blur")).toBeTruthy();
   });
 
+  // F4 review fix — probe-confirmed: `suppressBlurRef` was set by
+  // Enter/Escape but nothing ever reset it, because unmounting the input
+  // (when `editing` flips back to `false`) never fires a real blur event to
+  // consume it. The flag survived into the NEXT edit on the same row and
+  // silently ate ITS blur-commit.
+  test("rename via Enter, then rename the SAME row via blur — the second edit's blur-commit is not swallowed", async () => {
+    const client = new FakeApiClient({ streamDelayMs: 0 });
+    await seedSession(client, "first title");
+
+    const { navigate } = recordingNavigate();
+    const { findByText, findByLabelText } = render(
+      <SessionList client={client} slug={SLUG} currentSessionId={undefined} navigate={navigate} />,
+    );
+
+    // First edit: committed via Enter — the handler that sets
+    // `suppressBlurRef.current = true`, so the blur that follows the
+    // input's unmount doesn't ALSO commit.
+    fireEvent.click(await findByText("Rename"));
+    const firstInput = (await findByLabelText(/Rename "first title"/)) as HTMLInputElement;
+    fireEvent.change(firstInput, { target: { value: "second title" } });
+    fireEvent.keyDown(firstInput, { key: "Enter" });
+    expect(await findByText("second title")).toBeTruthy();
+
+    // Second edit on the SAME row, this time committed via blur — before
+    // the fix, the leftover flag from the FIRST edit ate this commit
+    // silently: `onBlur` saw `suppressBlurRef.current === true`, cleared it,
+    // and returned without ever calling `commit()`.
+    fireEvent.click(await findByText("Rename"));
+    const secondInput = (await findByLabelText(/Rename "second title"/)) as HTMLInputElement;
+    fireEvent.change(secondInput, { target: { value: "third title" } });
+    fireEvent.blur(secondInput);
+
+    expect(await findByText("third title")).toBeTruthy();
+  });
+
   test("Escape cancels the rename without sending a PATCH", async () => {
     const client = new FakeApiClient({ streamDelayMs: 0 });
     await seedSession(client, "keep this title");

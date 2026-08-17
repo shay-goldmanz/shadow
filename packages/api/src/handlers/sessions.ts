@@ -54,22 +54,47 @@ interface UpdateSessionBody {
   readonly title?: unknown;
 }
 
+/** F6 review fix (T3.1): the cap `PATCH`'s `title` is validated against — see `updateSession`'s doc. */
+export const MAX_SESSION_TITLE_LENGTH = 200;
+
 /**
  * `PATCH /api/sessions/:id { title }` — overrides `finishTurn`'s first-turn
  * default title (T2.5) for good. `title` is required and must be a
- * non-empty string, same validation shape `createVolume` uses for its own
- * required `title` field; 404 `session_not_found` if `:id` is unknown
- * (`SessionService.updateTitle`).
+ * non-empty string once trimmed, same validation shape `createVolume` uses
+ * for its own required `title` field; 404 `session_not_found` if `:id` is
+ * unknown (`SessionService.updateTitle`).
+ *
+ * **F6 review fix:** the stored title is `title.trim()`, not the raw wire
+ * value — matching `defaultTitleFrom`'s own first-turn default
+ * (`session-service.ts`), which is already trimmed via `.trim()` on the
+ * first line it extracts, so an operator-set title and the default it
+ * overrides are held to the same "no incidental leading/trailing
+ * whitespace" standard. Capped at `MAX_SESSION_TITLE_LENGTH` (200)
+ * characters, measured AFTER trimming — a title beyond that is `400
+ * invalid_request`, not silently clipped (clipping would let two very
+ * different operator-typed titles collide on the same stored value with no
+ * feedback that anything was lost); the untrimmed-empty check runs first so
+ * an all-whitespace body still gets the more specific "must be non-empty"
+ * message rather than a confusing pass on the length check.
  */
 export async function updateSession(
   deps: ApiDeps,
   req: BunRequest<"/api/sessions/:id">,
 ): Promise<Response> {
   const body = (await req.json()) as UpdateSessionBody;
-  if (typeof body.title !== "string" || body.title.trim().length === 0) {
+  if (typeof body.title !== "string") {
     throw new InvalidRequestError("title is required and must be a non-empty string");
   }
-  const meta = await deps.sessionService.updateTitle(req.params.id, body.title);
+  const trimmed = body.title.trim();
+  if (trimmed.length === 0) {
+    throw new InvalidRequestError("title is required and must be a non-empty string");
+  }
+  if (trimmed.length > MAX_SESSION_TITLE_LENGTH) {
+    throw new InvalidRequestError(
+      `title must be at most ${MAX_SESSION_TITLE_LENGTH} characters (got ${trimmed.length})`,
+    );
+  }
+  const meta = await deps.sessionService.updateTitle(req.params.id, trimmed);
   return jsonResponse({ session: toSessionSummary(meta) });
 }
 

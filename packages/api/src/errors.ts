@@ -138,6 +138,39 @@ export class SessionBusyError extends ShadowApiError {
 }
 
 /**
+ * `SessionService.deleteSession` (F1 review fix, T3.1) removed the store
+ * row, the registry entry, and published the "ended" bus signal
+ * successfully, but at least one of this session's underlying SDK
+ * transcripts failed to delete for a reason OTHER than "it was already
+ * gone" (`@shadow/model`'s `deleteStoredSession` tolerates that specific
+ * case silently — it never reaches here; see that method's doc). Genuine
+ * fault, 5xx: the delete itself is NOT reversible or retryable the way a
+ * `409 session_busy` is — the store row really is gone, so a retried
+ * `DELETE` on the same id now just 404s. Surfaced anyway (rather than
+ * swallowed) because an orphaned transcript is exactly the "undeletable
+ * forever" shape this whole review fix exists to prevent recurring in a new
+ * form — an operator/log consumer that sees this knows there is disk
+ * cleanup to investigate, even though the session itself is gone from every
+ * list.
+ */
+export class SessionTranscriptDeletionError extends ShadowApiError {
+  override readonly name = "SessionTranscriptDeletionError";
+  readonly status = 500;
+  readonly code = "session_transcript_deletion_failed";
+
+  constructor(
+    public readonly sessionId: string,
+    public readonly failedSdkSessionIds: readonly string[],
+  ) {
+    super(
+      `Session ${JSON.stringify(sessionId)} was deleted, but ${failedSdkSessionIds.length} of ` +
+        `its SDK transcript(s) could not be removed and may be orphaned: ` +
+        `${failedSdkSessionIds.join(", ")}`,
+    );
+  }
+}
+
+/**
  * `GET /api/volumes/:slug/index` (or `/api/lint`) was called before the
  * volume was ever indexed — `VolumeStore.readIndex`/`readCorpusIndex`
  * returned `undefined`. Not a fault: `POST /api/volumes/:slug/reindex`

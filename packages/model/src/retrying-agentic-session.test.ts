@@ -561,4 +561,25 @@ describe("RetryingAgenticSession — passthrough (T1.3)", () => {
     await session.close();
     expect(inner.isClosed).toBe(true);
   });
+
+  // F8 review fix (T3.1): `failedSessionIds` is a live passthrough
+  // (`retrying-agentic-session.ts`'s own doc — "no bookkeeping of its own"),
+  // exercised here with a genuinely failed inner id rather than just an
+  // empty-array default, so this actually proves delegation and not just
+  // that both sides start empty.
+  test("failedSessionIds delegates to the underlying session, including a genuinely failed id", async () => {
+    const inner = createFakeSession(() => ({
+      isError: true,
+      text: "",
+      stopReason: "overloaded_error",
+    }));
+    const session = new RetryingAgenticSession(inner, noRetryPolicy, fakeSleep().sleep);
+
+    expect(session.failedSessionIds).toEqual([]);
+    const result = await runToCompletion(session, "hi");
+
+    expect(result.isError).toBe(true);
+    expect(inner.failedSessionIds).toHaveLength(1);
+    expect(session.failedSessionIds).toEqual(inner.failedSessionIds);
+  });
 });

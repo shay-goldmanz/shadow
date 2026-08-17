@@ -45,6 +45,7 @@ import type {
   SessionStore,
   StoredEventRecord,
 } from "@shadow/sessions";
+import { SessionNotFoundError as StoreSessionNotFoundError } from "@shadow/sessions";
 import { InMemorySessionStore } from "@shadow/sessions/test-helpers";
 import type { ApiDeps } from "../deps.ts";
 import { createServer } from "../server.ts";
@@ -120,6 +121,21 @@ class GatedReadEventsStore implements SessionStore {
    * happened yet.
    */
   onReadEventsCalled: (() => void) | undefined;
+  /**
+   * F7-review remainder (a)'s test: arms exactly the NEXT `get()` call to
+   * read its result immediately, then pause BEFORE returning it, until
+   * `releaseGet()`. One-shot — every other `get()` call (including
+   * `getSessionEvents`'s own SECOND `hasSession` check, the fix under
+   * test) passes straight through unaffected. Mirrors
+   * `session-service.test.ts`'s `GatedGetDeleteStore` — same "read now,
+   * deliver later" shape, needed for the same reason: proving a check that
+   * runs AFTER this call returns still catches a delete that completed
+   * WHILE the return was held back.
+   */
+  private armedGet: { readonly promise: Promise<void> } | undefined;
+  private releaseGetFn: (() => void) | undefined;
+  /** Fires once the armed `get()` call has already read its result and is now paused before returning it. */
+  onGetGated: (() => void) | undefined;
 
   constructor(private readonly inner: SessionStore) {}
 
@@ -139,11 +155,31 @@ class GatedReadEventsStore implements SessionStore {
     this.pendingReadError = error;
   }
 
+  /** Arms exactly the next `get()` call to pause (after reading, before returning) until `releaseGet()`. */
+  armNextGet(): void {
+    let release!: () => void;
+    const promise = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    this.armedGet = { promise };
+    this.releaseGetFn = release;
+  }
+  releaseGet(): void {
+    this.releaseGetFn?.();
+  }
+
   create(meta: SessionMeta): Promise<void> {
     return this.inner.create(meta);
   }
-  get(id: string): Promise<SessionMeta | undefined> {
-    return this.inner.get(id);
+  async get(id: string): Promise<SessionMeta | undefined> {
+    const result = await this.inner.get(id);
+    const gate = this.armedGet;
+    if (gate) {
+      this.armedGet = undefined; // one-shot
+      this.onGetGated?.();
+      await gate.promise;
+    }
+    return result;
   }
   list(filter?: SessionListFilter): Promise<SessionMeta[]> {
     return this.inner.list(filter);
@@ -886,6 +922,103 @@ describe("GET /api/sessions/:id/events?follow=true — F5: bus unsubscribe on th
 
       // The fix under test: the bus listener this request's
       // `subscribeToSession` registered is gone, not leaked.
+      expect(deps.sessionService.listenerCountForTest(sessionId)).toBe(0);
+    });
+  });
+});
+
+describe("GET /api/sessions/:id/events?follow=true — F7-review remainder (a): a delete completing in the hasSession-then-subscribe gap closes cleanly", () => {
+  test("a delete that finishes AFTER the pre-stream check but BEFORE subscribeToSession is caught by the post-subscribe re-check — 404, not a stream left open forever", async () => {
+    await withGatedApi(async ({ baseUrl, sessions, store, deps }) => {
+      const firstChat = postChatOnGatedHarness(baseUrl, {
+        volumeSlug: "design-craft",
+        message: "turn one",
+      });
+      await waitUntil(() => sessions.sessions.length > 0);
+      const controllable = sessions.sessions[0];
+      if (!controllable) throw new Error("expected a controllable session");
+      await controllable.waitForStart(0);
+      controllable.release(0);
+      const firstChatEvents = await readAllSseEvents(await firstChat);
+      const sessionId = dataOf<{ sessionId: string }>(firstChatEvents[0]).sessionId;
+
+      // Cold: the registry entry is dropped directly, so BOTH `hasSession`
+      // checks below genuinely have to consult the store (a registry hit
+      // would short-circuit either one before it ever touches `get`) — the
+      // shape this fix's race needs.
+      await deps.conversations.remove(sessionId);
+
+      // Arms the PRE-STREAM `hasSession` check's own `store.get`: it reads
+      // the still-live meta immediately, then pauses before returning it —
+      // one-shot, so the fix's own SECOND `hasSession` call (after
+      // subscribing) passes straight through un-gated and sees whatever is
+      // actually true by then.
+      store.armNextGet();
+      const gotGatedGet = new Promise<void>((resolve) => {
+        store.onGetGated = resolve;
+      });
+
+      const followPromise = fetch(`${baseUrl}/api/sessions/${sessionId}/events?follow=true`);
+      await gotGatedGet; // the pre-stream check's read already happened; delivery is paused
+
+      // Runs to completion WHILE that read is still paused: the row is
+      // fully gone, and — since `subscribeToSession` hasn't run yet — its
+      // `{ kind: "ended" }` publish reaches zero listeners and is gone
+      // forever; no subscription that starts after this point will ever
+      // see it.
+      const deleteRes = await fetch(`${baseUrl}/api/sessions/${sessionId}`, { method: "DELETE" });
+      expect(deleteRes.status).toBe(200);
+
+      // NOW deliver the stale "session exists" answer to the paused
+      // pre-stream check. Without the F7-review fix, the handler would
+      // proceed to subscribe (too late — the "ended" message already fired
+      // to nobody) and open a follow stream with nothing left that will
+      // ever tell it to close.
+      store.releaseGet();
+
+      const res = await followPromise;
+      expect(res.status).toBe(404);
+      const body = (await res.json()) as { error: { code: string } };
+      expect(body.error.code).toBe("session_not_found");
+
+      // No bus listener survives — the fix unsubscribes before throwing.
+      expect(deps.sessionService.listenerCountForTest(sessionId)).toBe(0);
+    });
+  });
+});
+
+describe("GET /api/sessions/:id/events?follow=true — F7-review remainder (b): a mid-replay SessionNotFoundError closes cleanly, not as an internal_error", () => {
+  test("readEvents throwing @shadow/sessions' own SessionNotFoundError (the session deleted mid-replay) ends the stream with no wire event and no leaked bus listener", async () => {
+    await withGatedApi(async ({ baseUrl, sessions, store, deps }) => {
+      const firstChat = postChatOnGatedHarness(baseUrl, {
+        volumeSlug: "design-craft",
+        message: "turn one",
+      });
+      await waitUntil(() => sessions.sessions.length > 0);
+      const controllable = sessions.sessions[0];
+      if (!controllable) throw new Error("expected a controllable session");
+      await controllable.waitForStart(0);
+      controllable.release(0);
+      const firstChatEvents = await readAllSseEvents(await firstChat);
+      const sessionId = dataOf<{ sessionId: string }>(firstChatEvents[0]).sessionId;
+
+      // Stands in for "the session was deleted mid-replay" — the EXACT
+      // error `@shadow/sessions`' own `readEvents` genuinely throws for a
+      // row that vanished between `hasSession`'s (now twice-checked)
+      // existence proof and this call actually reading the store.
+      store.throwOnNextRead(new StoreSessionNotFoundError(sessionId));
+
+      const res = await fetch(`${baseUrl}/api/sessions/${sessionId}/events?follow=true`);
+      expect(res.status).toBe(200); // the failure happens INSIDE the stream, after headers are already committed
+
+      // Before this fix: this exact shape hit the generic `catch` below and
+      // sent an `error`/`internal_error` wire event — misreporting an
+      // ordinary delete race as a server fault. The fix: no wire event at
+      // all, just a clean end, the same as the bus's own `{ kind: "ended" }`
+      // close.
+      const events = await readAllSseEvents(res);
+      expect(events).toEqual([]);
+
       expect(deps.sessionService.listenerCountForTest(sessionId)).toBe(0);
     });
   });

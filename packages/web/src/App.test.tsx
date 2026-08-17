@@ -153,3 +153,48 @@ describe("App — F6 review fix: ChatPage keyed by the route's session id", () =
     expect(transcriptHasText("belief A")).toBe(false);
   });
 });
+
+describe("App — F3 review fix: deleting the currently-open self-minted session forces a fresh mount", () => {
+  test("new chat -> send (self-mints) -> delete the open session -> remounted with no stale sessionId; the next send mints a BRAND NEW session, not the deleted one", async () => {
+    const client = new TrackingClient({ streamDelayMs: 0 });
+    location.hash = "#/v/design-inspiration/chat";
+    const { getByLabelText, getByText, findByText } = render(
+      <ThemeProvider>
+        <App client={client} />
+      </ThemeProvider>,
+    );
+
+    send(getByLabelText, getByText, "first belief");
+    expect(await findByText("Audit failed")).toBeTruthy();
+    expect(location.hash).toBe("#/v/design-inspiration/chat/sess_1");
+    expect(document.querySelectorAll(".chat-transcript__item--user").length).toBe(1);
+
+    // Delete the now-open (self-minted) session, straight from the session
+    // list — the probe scenario this fix exists for: this can land inside
+    // the brief window between the self-mint's own render and the ref-
+    // clearing effect that follows it, where the OLD key and the NEW
+    // (id-less) key used to collide at the literal string "new".
+    fireEvent.click(await findByText("Delete"));
+    fireEvent.click(await findByText("Confirm"));
+
+    await waitFor(() => {
+      expect(location.hash).toBe("#/v/design-inspiration/chat");
+    });
+
+    // Fresh transcript: the deleted session's own bubble is gone — a stale,
+    // unremounted instance would still be showing it right now.
+    await waitFor(() => {
+      expect(document.querySelectorAll(".chat-transcript__item--user").length).toBe(0);
+    });
+
+    // The direct proof of a genuine remount: a fresh `ChatPage` instance has
+    // a fresh, `undefined` `sessionIdRef`, so the NEXT send mints a
+    // brand-new session (`sess_2`) instead of resuming the deleted `sess_1`
+    // a stale instance would still be holding onto.
+    send(getByLabelText, getByText, "second belief, after the delete");
+    await waitFor(() => {
+      expect(location.hash).toBe("#/v/design-inspiration/chat/sess_2");
+    });
+    expect(document.querySelectorAll(".chat-transcript__item--user").length).toBe(1);
+  });
+});
