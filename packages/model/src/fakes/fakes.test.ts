@@ -2,8 +2,13 @@ import { describe, expect, test } from "bun:test";
 import { z } from "zod";
 import { AgenticSessionError, StructuredGenerationError } from "../errors.ts";
 import { runToCompletion } from "../ports/agentic-session.ts";
+import { turnFailureFromThrown } from "../ports/retry-policy.ts";
 import { expectRejection } from "../test-helpers.ts";
-import { FakeAgenticSessionPort } from "./fake-agentic-session.ts";
+import {
+  FakeAgenticSessionPort,
+  failNTimesThenSucceed,
+  noConversationFoundError,
+} from "./fake-agentic-session.ts";
 import { FakeStructuredGenerationPort } from "./fake-structured-generation.ts";
 
 describe("FakeStructuredGenerationPort", () => {
@@ -265,6 +270,116 @@ describe("FakeAgenticSessionPort", () => {
       await session.close?.();
       const fake = port.sessions[0];
       expect(fake?.deletedSessionIds).toEqual([]);
+    });
+  });
+
+  describe("FakeAgenticTurnScript.throws (T1.2: scripting the thrown-error channel)", () => {
+    test("a script with `throws` set throws that value instead of yielding a result, and records the prompt anyway", async () => {
+      const boom = new AgenticSessionError("simulated transient failure");
+      const port = new FakeAgenticSessionPort(() => ({ throws: boom }));
+      const session = port.createSession();
+
+      const rejection = await expectRejection(
+        runToCompletion(session, "hello"),
+        AgenticSessionError,
+      );
+      expect(rejection).toBe(boom);
+      expect(port.sessions[0]?.prompts).toEqual(["hello"]);
+      // No session id was ever produced — a thrown failure gives the real
+      // adapter nothing to latch or track either (see the fake's own
+      // `stream()` comment on this branch).
+      expect(session.sessionId).toBeUndefined();
+      expect(port.sessions[0]?.failedSessionIds).toEqual([]);
+    });
+
+    test("every other script field is ignored when `throws` is set — nothing is yielded before the throw", async () => {
+      const port = new FakeAgenticSessionPort(() => ({
+        throws: new AgenticSessionError("boom"),
+        text: "should never be seen",
+        events: [{ type: "text-delta", text: "should never be yielded" }],
+      }));
+      const session = port.createSession();
+
+      const events: string[] = [];
+      await expectRejection(
+        (async () => {
+          for await (const event of session.stream("hello")) {
+            events.push(event.type);
+          }
+        })(),
+        AgenticSessionError,
+      );
+      expect(events).toEqual([]);
+    });
+  });
+
+  describe("failNTimesThenSucceed (T1.2: scripting fail-N-then-succeed)", () => {
+    test("throws the given error on the first N calls, then returns the success script on every call after", async () => {
+      const boom = new AgenticSessionError("Overloaded (please retry)");
+      const port = new FakeAgenticSessionPort(
+        failNTimesThenSucceed(2, boom, { text: "recovered" }),
+      );
+      const session = port.createSession();
+
+      await expectRejection(runToCompletion(session, "one"), AgenticSessionError);
+      await expectRejection(runToCompletion(session, "two"), AgenticSessionError);
+      const third = await runToCompletion(session, "three");
+      expect(third.isError).toBe(false);
+      expect(third.text).toBe("recovered");
+
+      // And stays succeeded — the counter doesn't reset.
+      const fourth = await runToCompletion(session, "four");
+      expect(fourth.text).toBe("recovered");
+    });
+
+    test("failCount: 0 succeeds immediately — the edge case of 'no failures scripted'", async () => {
+      const port = new FakeAgenticSessionPort(
+        failNTimesThenSucceed(0, new Error("never thrown"), { text: "ok" }),
+      );
+      const session = port.createSession();
+      const result = await runToCompletion(session, "hello");
+      expect(result.text).toBe("ok");
+    });
+
+    test("the thrown value round-trips through turnFailureFromThrown exactly as the real classification path would see it", async () => {
+      const boom = new AgenticSessionError("API Error: 529 Overloaded");
+      const port = new FakeAgenticSessionPort(failNTimesThenSucceed(1, boom));
+      const session = port.createSession();
+
+      try {
+        await runToCompletion(session, "one");
+        expect.unreachable("expected the first call to throw");
+      } catch (error) {
+        const failure = turnFailureFromThrown(error);
+        expect(failure).toEqual({
+          kind: "thrown",
+          message: "API Error: 529 Overloaded",
+          error: boom,
+        });
+      }
+    });
+  });
+
+  describe("noConversationFoundError (T1.2: the faithful no-conversation-found shape)", () => {
+    test("produces an AgenticSessionError whose message matches the real CLI's verified text", () => {
+      const error = noConversationFoundError("session-xyz");
+      expect(error).toBeInstanceOf(AgenticSessionError);
+      expect(error.message).toBe("No conversation found with session ID: session-xyz");
+    });
+
+    test("scripted as a `throws` entry, it surfaces to a caller exactly like the real adapter's resume-of-a-gone-session failure", async () => {
+      const port = new FakeAgenticSessionPort(() => ({
+        throws: noConversationFoundError("stale-session-id"),
+      }));
+      const session = port.createSession();
+
+      const rejection = await expectRejection(
+        runToCompletion(session, "resume me"),
+        AgenticSessionError,
+      );
+      expect(rejection.message).toContain(
+        "No conversation found with session ID: stale-session-id",
+      );
     });
   });
 });

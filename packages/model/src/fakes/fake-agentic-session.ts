@@ -19,6 +19,11 @@
  *    stayed green. Without this, the fake is a *more* permissive model of
  *    the SDK than the SDK itself — see the class doc on
  *    `AgenticSessionOptions.persistSession` for the incident.
+ *
+ * T1.2 grows this fake with transient-failure and no-conversation-found
+ * scripting (`FakeAgenticTurnScript.throws`, `failNTimesThenSucceed`,
+ * `noConversationFoundError` below) — a prerequisite for T1.3's retrying
+ * decorator and T2.5's resume-fallback tests, neither built here.
  */
 
 import { AgenticSessionError } from "../errors.ts";
@@ -40,6 +45,59 @@ export interface FakeAgenticTurnScript {
   readonly subagentsEnabled?: boolean;
   /** Extra events to yield before the final `done` event (e.g. scripted `tool-use`/`tool-result`/`text-delta`). `done` is always appended automatically. */
   readonly events?: readonly AgenticStreamEvent[];
+  /**
+   * If set, this turn throws `throws` instead of producing a result —
+   * mirrors the `"thrown"` failure channel out of the real
+   * `ClaudeAgentSdkSession.stream()` (T1.2's `TurnFailure`,
+   * `../ports/retry-policy.ts` — e.g. a transient transport failure, or
+   * `noConversationFoundError` below). When set, every other field on this
+   * script is ignored: nothing is yielded (no partial output before the
+   * throw — this fake only ever models a whole-turn failure, not a
+   * fail-after-first-delta one, since that shape is T1.3's concern to
+   * script once its decorator exists), but the prompt is still recorded in
+   * `session.prompts` — the turn really was sent before it failed.
+   */
+  readonly throws?: unknown;
+}
+
+/**
+ * Builds a `FakeAgenticTurnResponder` that throws `error` on the first
+ * `failCount` calls, then returns `succeedWith` on every call after — the
+ * transient-then-recovers shape `conservativeRetryPolicy` exists to paper
+ * over (`../ports/retry-policy.ts`, T1.2/T1.3): 529/overloaded,
+ * rate-limited, or a transient 5xx that clears up within a couple of
+ * retries. The call counter is shared by every session this responder is
+ * attached to (mirroring `FakeAgenticSessionPort`'s single `respond`
+ * callback, shared across all sessions it creates) — pass a fresh call to
+ * this function per test unless sharing across sessions is the point.
+ */
+export function failNTimesThenSucceed(
+  failCount: number,
+  error: unknown,
+  succeedWith: FakeAgenticTurnScript = {},
+): FakeAgenticTurnResponder {
+  let calls = 0;
+  return () => {
+    calls += 1;
+    return calls <= failCount ? { throws: error } : succeedWith;
+  };
+}
+
+/**
+ * The real Claude Agent SDK CLI's error text when `resume`/`continue` names
+ * a session id the CLI has no transcript for — thrown out of the raw
+ * `query()` generator, never surfaced as an `isError` result. Verified live
+ * (see `ClaudeAgentSdkSession.stream`'s `persistSession: false` guard
+ * comment, `../adapters/claude-agent-sdk-session.ts`, which reproduces the
+ * same text for the one case that guard can trigger offline). This helper
+ * is for scripting the general case that guard doesn't cover: Tier 2
+ * resuming a session id that once existed on disk but no longer does
+ * (deleted, expired, moved machines) — the shape `conservativeRetryPolicy`
+ * (`../ports/retry-policy.ts`) must never retry, so Tier 2's resume
+ * fallback sees it on the first attempt.
+ */
+export function noConversationFoundError(sessionId: string): AgenticSessionError {
+  return new AgenticSessionError(`No conversation found with session ID: ${sessionId}`);
 }
 
 export type FakeAgenticTurnResponder = (
@@ -138,6 +196,14 @@ export class FakeAgenticSession implements AgenticSession {
       sessionId: this.ownSessionId,
     });
     this.turnIndex += 1;
+
+    if (script.throws !== undefined) {
+      // Mirrors the real adapter's thrown-error channel: nothing is
+      // yielded, and no session id is touched — a turn that failed before
+      // ever producing a `result` message gives the real adapter no id to
+      // latch or track either. See `FakeAgenticTurnScript.throws`'s doc.
+      throw script.throws;
+    }
 
     for (const event of script.events ?? []) {
       yield event;

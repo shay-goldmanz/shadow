@@ -29,7 +29,7 @@ import {
   FileSystemEvidenceStore,
 } from "@shadow/evidence";
 import { FileMissLog, StructuralIndexer } from "@shadow/indexing";
-import { createModel } from "@shadow/model";
+import { createModel, type RetryPolicy } from "@shadow/model";
 import {
   AgenticSearchProvider,
   createRetrievalTransport,
@@ -43,6 +43,16 @@ export interface BuildRealApiDepsOptions {
   readonly root?: string;
   /** Model defaults (e.g. `model` name) forwarded to `@shadow/model`'s `createModel`. */
   readonly model?: string;
+  /**
+   * Retry policy for agentic session turns, forwarded to `createModel`
+   * (`@shadow/model/ports/retry-policy.ts`). The swap point T1.2's plan
+   * entry names: pass `noRetryPolicy` here to disable retries entirely, or
+   * a custom `RetryPolicy` to change the behavior — one line, this call
+   * site only. Omit for `createModel`'s default (`conservativeRetryPolicy`).
+   * T1.3's decorator is what will actually consult this; `createModel`
+   * only resolves and threads it for now.
+   */
+  readonly retryPolicy?: RetryPolicy;
 }
 
 /** Build a fully real `ApiDeps` — live filesystem store, live evidence store, live model ports (subscription auth only, D5), live web retrieval. Used only by `start.ts`; never imported by a test. */
@@ -56,6 +66,7 @@ export function buildRealApiDeps(options: BuildRealApiDepsOptions = {}): ApiDeps
   const { structuredGeneration, agenticSession } = createModel({
     structuredGeneration: options.model ? { model: options.model } : undefined,
     agenticSession: options.model ? { model: options.model } : undefined,
+    retryPolicy: options.retryPolicy,
   });
 
   const checkWorthinessClassifier = new BatchedCheckWorthinessClassifier(structuredGeneration);
