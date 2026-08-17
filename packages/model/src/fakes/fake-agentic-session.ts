@@ -77,6 +77,16 @@ export class FakeAgenticSession implements AgenticSession {
   private accumulatedUsage: TokenUsage = ZERO_USAGE;
   private turnIndex = 0;
   private closed = false;
+  /**
+   * Mirrors `ClaudeAgentSdkSession.failedSessionIds`: ids from `isError`
+   * scripts, which are never latched into `ownSessionId` (T1.1) but are
+   * still reported back via `AgenticTurnResult.sessionId` and are what
+   * `close()` cleans up below. Inspectable for tests that want to assert
+   * on the "deletable" set directly rather than only through `close()`'s
+   * side effects.
+   */
+  readonly failedSessionIds: string[] = [];
+  private readonly _deletedSessionIds: string[] = [];
 
   constructor(
     private readonly assignedSessionId: string,
@@ -93,13 +103,23 @@ export class FakeAgenticSession implements AgenticSession {
   }
 
   async *stream(prompt: string): AsyncGenerator<AgenticStreamEvent, void, undefined> {
-    if (this.turnIndex > 0 && this.options.persistSession === false) {
+    // Mirrors `ClaudeAgentSdkSession.stream` (T1.1): derived from a
+    // *successful* session id, not a count of turns sent, so a turn that
+    // fails via an `isError` script still looks like a first turn to the
+    // next `stream()` call on this handle — see the id-assignment branch
+    // below, which is the other half of this.
+    const isFirstTurn = this.ownSessionId === undefined;
+
+    if (!isFirstTurn && this.options.persistSession === false) {
       // Mirrors `ClaudeAgentSdkSession.stream`'s eager guard, which mirrors
       // the real CLI: a session created with `persistSession: false` was
       // never written to `~/.claude/projects/`, so a `resume` on turn 2+
       // has nothing to find. Verified live: the real error reads
       // `No conversation found with session ID: <id>` — reproduced here in
       // shape, not byte-for-byte, since this fake never talks to a CLI.
+      // Keyed off `ownSessionId` rather than `turnIndex`: a first turn that
+      // failed (no `ownSessionId` latched) gets to retry as a first turn
+      // too, not trip this guard.
       throw new AgenticSessionError(
         `No conversation found with session ID: ${this.ownSessionId} ` +
           "(fake: this session was created with persistSession: false and cannot be resumed " +
@@ -124,9 +144,18 @@ export class FakeAgenticSession implements AgenticSession {
     }
 
     const usage = script.usage ?? ZERO_USAGE;
-    // Session reuse, faked: the id is assigned once and never changes for
-    // the lifetime of this handle, matching the real adapter's contract.
-    this.ownSessionId = this.assignedSessionId;
+    const isError = script.isError ?? false;
+    if (isError) {
+      // Mirrors the real adapter: an error result's session id is never
+      // latched into `ownSessionId` (that would make the next `stream()`
+      // wrongly believe this handle has a successful session to resume),
+      // but it's still tracked as something `close()` should clean up.
+      this.failedSessionIds.push(this.assignedSessionId);
+    } else {
+      // Session reuse, faked: the id is assigned once and never changes for
+      // the lifetime of this handle, matching the real adapter's contract.
+      this.ownSessionId = this.assignedSessionId;
+    }
     this.accumulatedUsage = addUsage(this.accumulatedUsage, usage);
 
     const result: AgenticTurnResult = {
@@ -134,19 +163,41 @@ export class FakeAgenticSession implements AgenticSession {
       usage,
       sessionId: this.assignedSessionId,
       stopReason: script.stopReason ?? "end_turn",
-      isError: script.isError ?? false,
+      isError,
       subagentsEnabled: script.subagentsEnabled ?? false,
     };
     yield { type: "done", result };
   }
 
-  /** Mirrors `ClaudeAgentSdkSession.close`: marks the session unusable for a further turn. Inspectable via `closed` for tests that want to assert cleanup happened. */
+  /**
+   * Mirrors `ClaudeAgentSdkSession.close`: marks the session unusable for a
+   * further turn, and — unless this session was created with
+   * `persistSession: false` — records which session id(s) would have been
+   * deleted (this handle's own `ownSessionId`, plus any `failedSessionIds`)
+   * into `deletedSessionIds`. There is no real transcript to delete offline,
+   * so this is the fake's inspectable stand-in for spying on
+   * `deleteSession`.
+   */
   async close(): Promise<void> {
     this.closed = true;
+    if (this.options.persistSession === false) return;
+
+    const ids = new Set(this.failedSessionIds);
+    if (this.ownSessionId !== undefined) {
+      ids.add(this.ownSessionId);
+    }
+    for (const id of ids) {
+      this._deletedSessionIds.push(id);
+    }
   }
 
   /** Whether `close()` has been called — for tests asserting cleanup. */
   get isClosed(): boolean {
     return this.closed;
+  }
+
+  /** Session id(s) `close()` has "deleted" so far — see `close()`'s doc. */
+  get deletedSessionIds(): readonly string[] {
+    return this._deletedSessionIds;
   }
 }

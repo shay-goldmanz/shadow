@@ -177,7 +177,13 @@ function extractTextDelta(
 class ClaudeAgentSdkSession implements AgenticSession {
   private ownSessionId: string | undefined;
   private accumulatedUsage: TokenUsage = ZERO_USAGE;
-  private turnsSent = 0;
+  /**
+   * Session ids an error `result` reported (`is_error: true`) but that were
+   * never latched into `ownSessionId` — see the `case "result"` branch
+   * below. The CLI may still have written a transcript for that session id
+   * before failing, so `close()` deletes these too, not just `ownSessionId`.
+   */
+  private readonly failedSessionIds = new Set<string>();
 
   constructor(
     private readonly queryFn: QueryFn,
@@ -195,7 +201,13 @@ class ClaudeAgentSdkSession implements AgenticSession {
   }
 
   async *stream(prompt: string): AsyncGenerator<AgenticStreamEvent, void, undefined> {
-    const isFirstTurn = this.turnsSent === 0;
+    // Derived from a *successful* session id, not a count of turns sent: a
+    // failed first turn must still look like a first turn to the retry that
+    // follows it (fresh `resume`/`continueMostRecent` bootstrap, not
+    // `resume: undefined` masquerading as "nothing to resume"). See
+    // `case "result"` below for the other half of this — `ownSessionId` is
+    // only ever assigned from a non-error result.
+    const isFirstTurn = this.ownSessionId === undefined;
 
     if (!isFirstTurn && this.options.persistSession === false) {
       // `persistSession: false` and resume are mutually exclusive by
@@ -210,7 +222,11 @@ class ClaudeAgentSdkSession implements AgenticSession {
       // proved live: Shadow's chat session (`@shadow/agent`'s
       // `conversation.ts`) set `persistSession: false` while relying on
       // resume-based multi-turn continuation (D6) — the fix there was to
-      // stop setting it, not to work around this guard.
+      // stop setting it, not to work around this guard. Keying this off
+      // `ownSessionId` rather than a turn count also means a persisted-
+      // false session whose first turn *failed* gets to retry as a first
+      // turn too — a resumed second turn only exists once a turn has
+      // actually succeeded.
       throw new AgenticSessionError(
         "This AgenticSession was created with persistSession: false and cannot be resumed " +
           "for a second turn: non-persisted sessions are never written to " +
@@ -220,7 +236,6 @@ class ClaudeAgentSdkSession implements AgenticSession {
           "the resulting on-disk transcript.",
       );
     }
-    this.turnsSent += 1;
 
     const queryOptions = buildQueryOptions(this.defaults, this.options, {
       ownSessionId: this.ownSessionId,
@@ -286,7 +301,21 @@ class ClaudeAgentSdkSession implements AgenticSession {
         }
         case "result": {
           const usage = sumModelUsage(message.modelUsage);
-          this.ownSessionId = message.session_id;
+          if (message.is_error) {
+            // Do NOT latch an error result's session id into `ownSessionId`
+            // — 529/overloaded and friends report `is_error: true` here,
+            // and latching would make the *next* `stream()` call believe
+            // this handle already has a successful session to resume, when
+            // in fact the caller's original `resume`/`continueMostRecent`
+            // bootstrap should be retried instead. The CLI may still have
+            // persisted a transcript under this id before failing, so it's
+            // tracked for `close()` to clean up rather than discarded.
+            if (message.session_id) {
+              this.failedSessionIds.add(message.session_id);
+            }
+          } else {
+            this.ownSessionId = message.session_id;
+          }
           this.accumulatedUsage = addUsage(this.accumulatedUsage, usage);
           const result: AgenticTurnResult = {
             text: message.subtype === "success" ? message.result : "",
@@ -312,23 +341,36 @@ class ClaudeAgentSdkSession implements AgenticSession {
   }
 
   /**
-   * Deletes this session's persisted transcript from `~/.claude/projects/`
-   * via the SDK's `deleteSession`. A no-op when there is nothing to delete:
-   * no turn has completed yet (`ownSessionId` still `undefined`), or this
-   * session was created with `persistSession: false` (nothing was ever
-   * written for it). Deliberately not called automatically anywhere in
-   * this package — this port has no notion of "the caller is done with
-   * this conversation," so a long-lived caller (Shadow chat, D6) that
-   * wants sessions to not accumulate indefinitely on disk must call this
-   * itself once it retires a handle.
+   * Deletes this session's persisted transcript(s) from
+   * `~/.claude/projects/` via the SDK's `deleteSession` — this handle's own
+   * successful session id (`ownSessionId`), *and* any id an errored turn on
+   * this handle reported (`failedSessionIds`): a persisted-but-errored turn
+   * can still have written a transcript the caller has no other way to
+   * reach, since that id was never exposed as `sessionId`. A no-op when
+   * there is nothing to delete: no turn ever completed or failed with a
+   * session id, or this session was created with `persistSession: false`
+   * (nothing was ever written for it, successful or not). Deliberately not
+   * called automatically anywhere in this package — this port has no
+   * notion of "the caller is done with this conversation," so a long-lived
+   * caller (Shadow chat, D6) that wants sessions to not accumulate
+   * indefinitely on disk must call this itself once it retires a handle.
    */
   async close(): Promise<void> {
-    if (!this.ownSessionId || this.options.persistSession === false) return;
+    if (this.options.persistSession === false) return;
+
+    const idsToDelete = new Set(this.failedSessionIds);
+    if (this.ownSessionId !== undefined) {
+      idsToDelete.add(this.ownSessionId);
+    }
+    if (idsToDelete.size === 0) return;
+
     try {
-      await this.deleteSessionFn(this.ownSessionId);
+      for (const id of idsToDelete) {
+        await this.deleteSessionFn(id);
+      }
     } catch (error) {
       throw new AgenticSessionError(
-        `failed to delete persisted session ${this.ownSessionId}`,
+        `failed to delete persisted session(s): ${[...idsToDelete].join(", ")}`,
         error,
       );
     }

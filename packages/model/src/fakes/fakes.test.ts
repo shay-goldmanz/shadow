@@ -162,6 +162,67 @@ describe("FakeAgenticSessionPort", () => {
     });
   });
 
+  describe("first turn derived from a successful session id, not a turn count (T1.1)", () => {
+    test("a turn that fails via a THROWN responder is not latched — the next stream() call is still treated as a first turn", async () => {
+      let calls = 0;
+      const port = new FakeAgenticSessionPort((prompt) => {
+        calls += 1;
+        if (calls === 1) {
+          throw new Error("simulated transport failure");
+        }
+        return { text: `echo: ${prompt}` };
+      });
+      const session = port.createSession();
+
+      await expectRejection(runToCompletion(session, "first turn"), Error);
+      expect(session.sessionId).toBeUndefined();
+
+      const second = await runToCompletion(session, "retry");
+      expect(second.isError).toBe(false);
+      expect(session.sessionId).toBeDefined();
+    });
+
+    test("a turn scripted with isError: true is not latched into sessionId, but is reported on the result and tracked as failed", async () => {
+      const port = new FakeAgenticSessionPort((prompt, { turnIndex }) => ({
+        text: turnIndex === 0 ? "boom" : `echo: ${prompt}`,
+        isError: turnIndex === 0,
+      }));
+      const session = port.createSession();
+
+      const first = await runToCompletion(session, "first turn");
+      expect(first.isError).toBe(true);
+      expect(first.sessionId).toBeDefined(); // still reported to the caller...
+      expect(session.sessionId).toBeUndefined(); // ...but not latched as this handle's own session
+      const fake = port.sessions[0];
+      expect(fake?.failedSessionIds).toEqual([first.sessionId]);
+
+      const second = await runToCompletion(session, "retry");
+      expect(second.isError).toBe(false);
+      expect(session.sessionId).toBeDefined();
+    });
+
+    test("persistSession: false guard is keyed off ownSessionId, not a turn count: a failed first turn does not trip it, but a genuine successful second turn still does", async () => {
+      const port = new FakeAgenticSessionPort((_prompt, { turnIndex }) => ({
+        isError: turnIndex === 0,
+      }));
+      const session = port.createSession({ persistSession: false });
+
+      const first = await runToCompletion(session, "one");
+      expect(first.isError).toBe(true);
+      expect(session.sessionId).toBeUndefined();
+
+      // Retry after the failure is still a "first turn" as far as the guard
+      // is concerned — it must not throw here.
+      const second = await runToCompletion(session, "two");
+      expect(second.isError).toBe(false);
+      expect(session.sessionId).toBeDefined();
+
+      // A further turn is now a genuine second turn on a non-persisted
+      // session — the guard fires.
+      await expectRejection(runToCompletion(session, "three"), AgenticSessionError);
+    });
+  });
+
   describe("close()", () => {
     test("marks the session closed, inspectable via isClosed", async () => {
       const port = new FakeAgenticSessionPort();
@@ -180,6 +241,30 @@ describe("FakeAgenticSessionPort", () => {
       await session.close?.();
 
       await expectRejection(runToCompletion(session, "two"), AgenticSessionError);
+    });
+
+    test("after an errored first turn, close() 'deletes' the failed transcript even though it was never latched into sessionId (T1.1)", async () => {
+      const port = new FakeAgenticSessionPort((_prompt, { turnIndex }) => ({
+        isError: turnIndex === 0,
+      }));
+      const session = port.createSession();
+
+      const first = await runToCompletion(session, "one");
+      expect(session.sessionId).toBeUndefined();
+
+      await session.close?.();
+      const fake = port.sessions[0];
+      expect(fake?.deletedSessionIds).toEqual([first.sessionId]);
+    });
+
+    test("close() on persistSession: false records nothing — nothing was ever persisted, successful or failed", async () => {
+      const port = new FakeAgenticSessionPort();
+      const session = port.createSession({ persistSession: false });
+      await runToCompletion(session, "one");
+
+      await session.close?.();
+      const fake = port.sessions[0];
+      expect(fake?.deletedSessionIds).toEqual([]);
     });
   });
 });

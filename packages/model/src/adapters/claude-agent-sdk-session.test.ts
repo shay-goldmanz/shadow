@@ -63,6 +63,32 @@ function resultMessage(sessionId: string): SDKMessage {
   };
 }
 
+function errorResultMessage(sessionId: string): SDKMessage {
+  return {
+    type: "result",
+    subtype: "error_during_execution",
+    duration_ms: 1,
+    duration_api_ms: 1,
+    is_error: true,
+    num_turns: 1,
+    stop_reason: null,
+    total_cost_usd: 0,
+    usage: {
+      input_tokens: 1,
+      output_tokens: 1,
+      cache_creation_input_tokens: 0,
+      cache_read_input_tokens: 0,
+      server_tool_use: { web_search_requests: 0 },
+      // biome-ignore lint/suspicious/noExplicitAny: NonNullableUsage requires every BetaUsage field non-nullable; only fields our adapter reads matter for this test.
+    } as any,
+    modelUsage: {},
+    permission_denials: [],
+    errors: ["overloaded_error"],
+    uuid: randomUUID(),
+    session_id: sessionId,
+  };
+}
+
 /** Records every call's options and yields a scripted init+result pair. Each call gets a fresh sessionId unless the test wants otherwise. */
 function makeRecordingQueryFn(options: {
   readonly apiKeySource?: string;
@@ -149,6 +175,101 @@ describe("createClaudeAgentSdkSessionPort — session reuse (D6)", () => {
   });
 });
 
+describe("createClaudeAgentSdkSessionPort — first turn derived from a successful session id (T1.1)", () => {
+  test("first turn fails via a THROWN error → second stream() still passes the original `resume` options, not `resume: undefined`", async () => {
+    const calls: Array<{ prompt: string; options: Options | undefined }> = [];
+    let callIndex = 0;
+    const queryFn: QueryFn = ({ prompt, options }) => {
+      calls.push({ prompt, options });
+      const thisCall = callIndex++;
+      return (async function* () {
+        if (thisCall === 0) {
+          throw new Error("simulated transport failure (e.g. 529 overloaded)");
+        }
+        const sessionId = "second-attempt-session";
+        yield initMessage({ sessionId });
+        yield resultMessage(sessionId);
+      })();
+    };
+    const port = createClaudeAgentSdkSessionPort({}, { query: queryFn });
+    const session = port.createSession({ resume: { sessionId: "original-resume-target" } });
+
+    await expectRejection(runToCompletion(session, "first turn"), Error);
+    expect(session.sessionId).toBeUndefined();
+
+    await runToCompletion(session, "retry");
+    expect(calls).toHaveLength(2);
+    // Both calls bootstrap from the caller's ORIGINAL resume target — the
+    // failed attempt never got a chance to become this handle's "own"
+    // session, so there is nothing else for the retry to resume.
+    expect(calls[0]?.options?.resume).toBe("original-resume-target");
+    expect(calls[1]?.options?.resume).toBe("original-resume-target");
+    expect(session.sessionId).toBe("second-attempt-session");
+  });
+
+  test("first turn fails via an `isError` RESULT (not a throw) → second stream() still passes the original `resume` options; the error result's session_id is never latched", async () => {
+    const failedSessionId = "failed-session-id";
+    let callIndex = 0;
+    const calls: Array<{ prompt: string; options: Options | undefined }> = [];
+    const queryFn: QueryFn = ({ prompt, options }) => {
+      calls.push({ prompt, options });
+      const thisCall = callIndex++;
+      return (async function* () {
+        if (thisCall === 0) {
+          yield initMessage({ sessionId: failedSessionId });
+          yield errorResultMessage(failedSessionId);
+          return;
+        }
+        const sessionId = "second-attempt-session";
+        yield initMessage({ sessionId });
+        yield resultMessage(sessionId);
+      })();
+    };
+    const port = createClaudeAgentSdkSessionPort({}, { query: queryFn });
+    const session = port.createSession({ resume: { sessionId: "original-resume-target" } });
+
+    const first = await runToCompletion(session, "first turn");
+    expect(first.isError).toBe(true);
+    expect(first.sessionId).toBe(failedSessionId); // reported to the caller...
+    expect(session.sessionId).toBeUndefined(); // ...but NOT latched as this handle's own session
+
+    await runToCompletion(session, "retry");
+    expect(calls).toHaveLength(2);
+    expect(calls[0]?.options?.resume).toBe("original-resume-target");
+    // The retry is still treated as a first turn: it bootstraps from the
+    // caller's original resume target, not from the failed result's id.
+    expect(calls[1]?.options?.resume).toBe("original-resume-target");
+    expect(session.sessionId).toBe("second-attempt-session");
+  });
+
+  test("success → the second call resumes this handle's own (successful) session id", async () => {
+    const fixedSessionId = randomUUID();
+    const { queryFn, calls } = makeRecordingQueryFn({ sessionIdForCall: () => fixedSessionId });
+    const port = createClaudeAgentSdkSessionPort({}, { query: queryFn });
+    const session = port.createSession();
+
+    const first = await runToCompletion(session, "first turn");
+    expect(first.isError).toBe(false);
+    expect(session.sessionId).toBe(fixedSessionId);
+
+    await runToCompletion(session, "second turn");
+    expect(calls[1]?.options?.resume).toBe(fixedSessionId);
+  });
+
+  test("`persistSession: false` guard still fires on a genuine (successful) second turn, keyed off ownSessionId rather than a turn count", async () => {
+    const { queryFn, calls } = makeRecordingQueryFn({});
+    const port = createClaudeAgentSdkSessionPort({}, { query: queryFn });
+    const session = port.createSession({ persistSession: false });
+
+    await runToCompletion(session, "first turn");
+    expect(session.sessionId).toBeDefined();
+    expect(calls).toHaveLength(1);
+
+    await expectRejection(runToCompletion(session, "second turn"), AgenticSessionError);
+    expect(calls).toHaveLength(1);
+  });
+});
+
 describe("createClaudeAgentSdkSessionPort — persistSession: false cannot be resumed", () => {
   test("a second turn on a handle created with persistSession: false throws AgenticSessionError WITHOUT calling query() again — the contradiction this port now refuses to reach the subprocess for", async () => {
     const { queryFn, calls } = makeRecordingQueryFn({});
@@ -217,6 +338,43 @@ describe("createClaudeAgentSdkSessionPort — close()", () => {
 
     await session.close?.();
     expect(deleteCalls).toEqual([]);
+  });
+
+  test("after an errored (but persisted) first turn, close() deletes the failed transcript even though it was never latched as this handle's own session (T1.1)", async () => {
+    const failedSessionId = "failed-session-id";
+    let callIndex = 0;
+    const queryFn: QueryFn = () => {
+      const thisCall = callIndex++;
+      return (async function* () {
+        yield initMessage({ sessionId: failedSessionId });
+        if (thisCall === 0) {
+          yield errorResultMessage(failedSessionId);
+        } else {
+          yield resultMessage(failedSessionId);
+        }
+      })();
+    };
+    const deleteCalls: string[] = [];
+    const port = createClaudeAgentSdkSessionPort(
+      {},
+      {
+        query: queryFn,
+        // biome-ignore lint/suspicious/noExplicitAny: test double, only the sessionId argument matters
+        deleteSession: (async (sessionId: string) => {
+          deleteCalls.push(sessionId);
+        }) as any,
+      },
+    );
+    const session = port.createSession();
+
+    const first = await runToCompletion(session, "first turn");
+    expect(first.isError).toBe(true);
+    expect(session.sessionId).toBeUndefined(); // not latched — nothing for `close()` to find via `sessionId` alone
+
+    await session.close?.();
+    // ...yet the transcript the errored turn wrote is still deleted: the
+    // failed result's session_id was tracked separately for exactly this.
+    expect(deleteCalls).toEqual([failedSessionId]);
   });
 
   test("is a no-op for a session created with persistSession: false — nothing was ever written to delete", async () => {
