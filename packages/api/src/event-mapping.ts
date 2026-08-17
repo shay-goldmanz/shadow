@@ -375,3 +375,59 @@ export function wireEventsForLive(event: StoredSessionEvent): readonly WireEvent
   if (event.type === "assistant-message") return [];
   return wireEventsFromStored(event);
 }
+
+/**
+ * The `text-delta` bus message -> wire event mapping — the one raw
+ * `ShadowEvent` this module otherwise never sees (neither
+ * `wireEventsFromStored` nor `wireEventsForLive` takes one; see this
+ * module's doc for why `@shadow/sessions` never stores it). Both live
+ * viewers (`chat.ts`, the turn's own enqueuer) and T2.7's replay+follow
+ * (any session-wide subscriber) forward `SessionBusMessage`'s `text-delta`
+ * case through this one function, so a chunk reads identically on the wire
+ * no matter which viewer receives it.
+ */
+export function textDeltaWireEvent(text: string): WireEvent {
+  return { event: "text", data: { delta: text } };
+}
+
+/**
+ * If `event` is a `turn-boundary(ended, error)` record, the ONE place a
+ * *thrown* failure's message/code survive for the wire (see this module's
+ * `turn-boundary` case above — `wireEventsFromStored`/`wireEventsForLive`
+ * both return `[]` for every `turn-boundary`, on purpose: the boundary
+ * record itself has no wire representation in `docs/API.md`'s SSE table).
+ * This is the deliberate exception both `chat.ts` (live) and T2.7's
+ * replay+follow need to synthesize identically, so it lives here once
+ * instead of being hand-rolled twice. `undefined` for every other
+ * `turn-boundary` phase/endReason (`started`, `ended/completed`,
+ * `ended/interrupted`) — nothing to do for those.
+ */
+export function errorEventForBoundary(event: StoredSessionEvent): WireEvent | undefined {
+  if (event.type !== "turn-boundary") return undefined;
+  // Same `UnknownStoredEvent` overlap `research-completed`/`chapter-audit`
+  // already document above: `type: string` on `UnknownStoredEvent` makes a
+  // plain `case`/`if` narrow to `TurnBoundaryEvent | UnknownStoredEvent`,
+  // not just the real variant, so `.phase`/`.endReason`/`.message`/`.code`
+  // would otherwise widen to the index signature's `unknown`.
+  const boundary = event as Extract<StoredSessionEvent, { readonly type: "turn-boundary" }>;
+  if (boundary.phase !== "ended" || boundary.endReason !== "error") return undefined;
+  return { event: "error", data: { message: boundary.message, code: boundary.code } };
+}
+
+/**
+ * Injects `seq` into a `WireEvent`'s `data` (object spread) — T2.7's wire
+ * encoding for `GET /api/sessions/:id/events`: every event derived from a
+ * `StoredEventRecord` carries `data.seq` set to that record's `seq`,
+ * identically whether it arrived via replay or via the live tail, which is
+ * what makes `seq` usable as a reconnect cursor (`?fromSeq=`) regardless of
+ * which path delivered the last event a client saw. Scoped to that one
+ * endpoint's own wire contract, not retrofitted onto `chat.ts`'s
+ * `POST /api/chat` stream (a separate, already-shipped wire contract this
+ * task has no reason to change). Live `text-delta` chunks
+ * (`textDeltaWireEvent`) have no backing record and therefore no `seq` at
+ * all — see this module's doc for why `text-delta` is the one `ShadowEvent`
+ * `@shadow/sessions` never stores.
+ */
+export function withSeq(wire: WireEvent, seq: number): WireEvent {
+  return { event: wire.event, data: { ...(wire.data as Record<string, unknown>), seq } };
+}

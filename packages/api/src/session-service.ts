@@ -57,6 +57,7 @@ import type {
   SessionMeta,
   SessionMetaPatch,
   SessionStore,
+  StoredEventRecord,
   StoredSessionEvent,
   TurnBoundaryEndReason,
 } from "@shadow/sessions";
@@ -434,6 +435,64 @@ export class SessionService {
     });
     this.registry.set(sessionId, conversation);
     return { conversation, meta };
+  }
+
+  /**
+   * Whether `sessionId` is known to this service — present in the registry
+   * (a live handle) OR the store (on disk, cold or warm) — WITHOUT
+   * rehydrating it. T2.7's replay+follow endpoint uses this for its 404
+   * check: PLAN.md's T2.7 entry is explicit that "replay is read-only;
+   * rehydration happens on the next turn," so this deliberately mirrors
+   * `resolveSessionId`'s registry-then-store existence check rather than
+   * `ensureConversation`'s (which constructs a conversation on a miss).
+   * A registry hit already implies a store hit (nothing ever registers a
+   * conversation without first confirming its store row exists —
+   * `ensureConversation`'s own doc) — checked separately anyway so this
+   * reads as the same existence contract every other entry point uses,
+   * not a proof obligation callers have to trust.
+   */
+  async hasSession(sessionId: string): Promise<boolean> {
+    if (this.registry.get(sessionId)) return true;
+    return (await this.store.get(sessionId)) !== undefined;
+  }
+
+  /**
+   * The stored transcript from `fromSeq` onward (inclusive — see
+   * `SessionStore.readEvents`'s doc: a reconnecting client that has already
+   * consumed through `seq` N passes `N + 1`, not `N`). Read-only: never
+   * rehydrates, never touches the registry — T2.7's replay step, and the
+   * reason a cold session's replay leaves the registry exactly as empty as
+   * it found it.
+   */
+  async readEvents(sessionId: string, fromSeq?: number): Promise<StoredEventRecord[]> {
+    return this.store.readEvents(sessionId, fromSeq);
+  }
+
+  /**
+   * Session-wide subscribe — the "small, natural extension" this module's
+   * doc flagged as the seam T2.7 would need. Unlike `enqueueTurn`'s bus
+   * subscription (filtered to one `turnId`, torn down the instant that
+   * turn's boundary arrives), this delivers every `SessionBusMessage`
+   * published for `sessionId` from this call onward, across every turn —
+   * queued, running, or not even enqueued yet — for as long as the caller
+   * holds the returned unsubscribe function unused. Text-deltas flow
+   * through too (the same `bus.publish` call `runTurn` already makes for
+   * them reaches every subscriber, not just the enqueuing turn's own), so a
+   * live follow viewer sees streaming text exactly as the turn's own
+   * enqueuer does. Returns an idempotent unsubscribe function
+   * (`SessionEventBus.subscribe`'s contract).
+   *
+   * No existence check here on purpose — `hasSession` is the one place
+   * that decides "does this session exist," and a caller (T2.7's handler)
+   * is expected to have already checked it before subscribing. Subscribing
+   * to an unknown session id is harmless (an empty listener set that never
+   * fires), just not what any real caller wants.
+   */
+  subscribeToSession(
+    sessionId: string,
+    listener: (message: SessionBusMessage) => void,
+  ): () => void {
+    return this.bus.subscribe(sessionId, listener);
   }
 
   /**

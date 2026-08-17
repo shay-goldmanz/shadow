@@ -48,7 +48,7 @@ import { toVolumeSlug } from "@shadow/core";
 import type { BunRequest } from "bun";
 import type { ApiDeps } from "../deps.ts";
 import { InvalidRequestError } from "../errors.ts";
-import { wireEventsForLive } from "../event-mapping.ts";
+import { errorEventForBoundary, textDeltaWireEvent, wireEventsForLive } from "../event-mapping.ts";
 import type { EnqueuedTurn, EnqueueTarget } from "../session-service.ts";
 import { encodeSseEvent } from "../sse.ts";
 
@@ -159,8 +159,10 @@ export async function postChat(deps: ApiDeps, req: BunRequest<"/api/chat">): Pro
           if (closed) break; // client disconnected (cancel()) mid-turn — stop reading, the turn keeps running server-side regardless
           if (msg.kind === "text-delta") {
             // No stored shape at all (`@shadow/sessions` never persists
-            // deltas) — forwarded straight to the wire.
-            send("text", { delta: msg.text });
+            // deltas) — forwarded straight to the wire via the same
+            // mapping T2.7's replay+follow uses for its own live tail.
+            const wire = textDeltaWireEvent(msg.text);
+            send(wire.event, wire.data);
             continue;
           }
           const { event } = msg.record;
@@ -171,9 +173,11 @@ export async function postChat(deps: ApiDeps, req: BunRequest<"/api/chat">): Pro
             // failure's message/code survive for the wire (T2.1's schema;
             // an agent-emitted `{type:"error"}` event, by contrast, is an
             // ordinary stored event already handled by `wireEventsForLive`
-            // below).
-            if (event.phase === "ended" && event.endReason === "error") {
-              send("error", { message: event.message, code: event.code });
+            // below). `errorEventForBoundary` is the shared synthesis T2.7's
+            // replay+follow reuses for the identical case.
+            const errorWire = errorEventForBoundary(event);
+            if (errorWire) {
+              send(errorWire.event, errorWire.data);
               errorSent = true;
             }
             continue;
