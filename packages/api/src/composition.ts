@@ -35,8 +35,9 @@ import {
   createRetrievalTransport,
   PerBriefResearchAgent,
 } from "@shadow/research";
-import { ConversationRegistry } from "./conversation-registry.ts";
+import { FileSystemSessionStore } from "@shadow/sessions";
 import type { ApiDeps } from "./deps.ts";
+import { SessionService } from "./session-service.ts";
 
 export interface BuildRealApiDepsOptions {
   /** The `VolumeStore`/`EvidenceStore` root. @default `~/.shadow` (D4). */
@@ -115,6 +116,13 @@ export function buildRealApiDeps(options: BuildRealApiDepsOptions = {}): ApiDeps
     sessionCwd: root,
   });
 
+  // `FileSystemSessionStore` at `<root>/sessions/` (T2.1) — the same `root`
+  // every other store here is rooted at, so the API and the CLI stay
+  // pointed at one corpus (see `sessionCwd`'s comment above for the exact
+  // incident this mirrors for chat's own working directory).
+  const sessionStore = new FileSystemSessionStore(root);
+  const sessionService = new SessionService({ store: sessionStore, shadowAgent });
+
   return {
     volumeStore,
     evidenceStore,
@@ -131,6 +139,7 @@ export function buildRealApiDeps(options: BuildRealApiDepsOptions = {}): ApiDeps
     // exactly the split T2.7 already fixed on the CLI side.
     missLog: new FileMissLog(join(root, "misses.jsonl")),
     shadowAgent,
-    conversations: new ConversationRegistry(),
+    sessionService,
+    conversations: sessionService.registry,
   };
 }

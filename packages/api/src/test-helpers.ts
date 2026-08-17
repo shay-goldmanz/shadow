@@ -33,9 +33,11 @@ import {
   FakeStructuredGenerationPort,
 } from "@shadow/model";
 import type { ResearchBrief, ResearchBriefPort, ResearchResult } from "@shadow/research";
-import { ConversationRegistry } from "./conversation-registry.ts";
+import type { SessionStore } from "@shadow/sessions";
+import { InMemorySessionStore } from "@shadow/sessions/test-helpers";
 import type { ApiDeps } from "./deps.ts";
 import { createServer } from "./server.ts";
+import { SessionService } from "./session-service.ts";
 
 /** Always says every unmarked sentence is narrative — the common case for a harness that isn't specifically exercising the check-worthiness sweep. */
 export const alwaysNarrativeClassifier: CheckWorthinessClassifier = {
@@ -80,6 +82,8 @@ export interface TestHarness {
   readonly baseUrl: string;
   /** The fake session port backing `deps.shadowAgent`'s conversations — for tests that assert on session reuse. */
   readonly sessions: FakeAgenticSessionPort;
+  /** The `SessionStore` backing `deps.sessionService` — an `InMemorySessionStore` (`@shadow/sessions/test-helpers`), for tests that assert on stored transcripts directly rather than only through the wire. */
+  readonly sessionStore: SessionStore;
 }
 
 export interface WithApiOptions {
@@ -114,6 +118,9 @@ export async function withApi<T>(fn: (harness: TestHarness) => Promise<T>): Prom
       sessionCwd: root,
     });
 
+    const sessionStore = new InMemorySessionStore();
+    const sessionService = new SessionService({ store: sessionStore, shadowAgent });
+
     const deps: ApiDeps = {
       volumeStore,
       evidenceStore,
@@ -126,7 +133,8 @@ export async function withApi<T>(fn: (harness: TestHarness) => Promise<T>): Prom
       structuredGenerationPort: new FakeStructuredGenerationPort(),
       missLog: new InMemoryMissLog(),
       shadowAgent,
-      conversations: new ConversationRegistry(),
+      sessionService,
+      conversations: sessionService.registry,
     };
 
     const server = createServer(deps, { port: 0, hostname: "localhost" });
@@ -137,6 +145,7 @@ export async function withApi<T>(fn: (harness: TestHarness) => Promise<T>): Prom
         server,
         baseUrl: server.url.toString().replace(/\/$/, ""),
         sessions,
+        sessionStore,
       });
     } finally {
       void server.stop(true);
@@ -179,6 +188,9 @@ export async function withScriptedApi<T>(
       sessionCwd: root,
     });
 
+    const sessionStore = new InMemorySessionStore();
+    const sessionService = new SessionService({ store: sessionStore, shadowAgent });
+
     const deps: ApiDeps = {
       volumeStore,
       evidenceStore,
@@ -189,7 +201,8 @@ export async function withScriptedApi<T>(
       structuredGenerationPort: new FakeStructuredGenerationPort(),
       missLog: new InMemoryMissLog(),
       shadowAgent,
-      conversations: new ConversationRegistry(),
+      sessionService,
+      conversations: sessionService.registry,
     };
 
     const server = createServer(deps, { port: 0, hostname: "localhost" });
@@ -200,6 +213,7 @@ export async function withScriptedApi<T>(
         server,
         baseUrl: server.url.toString().replace(/\/$/, ""),
         sessions,
+        sessionStore,
       });
     } finally {
       void server.stop(true);

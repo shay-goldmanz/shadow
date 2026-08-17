@@ -74,6 +74,28 @@ export class SessionNotFoundError extends ShadowApiError {
 }
 
 /**
+ * `SessionService.enqueueTurn` (T2.5) was called for a session that already
+ * has the maximum number of turns (`SessionLock`'s bound, `session-lock.ts`)
+ * queued behind the one currently running. Operator-visible, not a fault:
+ * PLAN.md's Tier 2 concurrency model calls this out by name — "queue bound:
+ * 4 pending; beyond that `409 turn_queue_busy`" — as an expected outcome of
+ * multiple tabs racing one session, not a server error. The client should
+ * back off and retry, or simply wait for its own in-flight turn to finish
+ * before sending another (today's UI already disables input while its own
+ * turn streams, so this is reachable only from a second tab or a client
+ * that doesn't honor that).
+ */
+export class TurnQueueBusyError extends ShadowApiError {
+  override readonly name = "TurnQueueBusyError";
+  readonly status = 409;
+  readonly code = "turn_queue_busy";
+
+  constructor(public readonly sessionId: string) {
+    super(`Too many turns already queued for session ${JSON.stringify(sessionId)}`);
+  }
+}
+
+/**
  * `GET /api/volumes/:slug/index` (or `/api/lint`) was called before the
  * volume was ever indexed — `VolumeStore.readIndex`/`readCorpusIndex`
  * returned `undefined`. Not a fault: `POST /api/volumes/:slug/reindex`

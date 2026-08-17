@@ -1,44 +1,55 @@
 /**
- * `POST /api/chat` (`docs/API.md` §Chat). Drives one `ShadowConversation`
- * turn and streams its `ShadowEvent`s back as SSE.
+ * `POST /api/chat` (`docs/API.md` §Chat). Enqueues one turn on
+ * `deps.sessionService` (T2.5) and streams it back as SSE — this handler is
+ * "the first viewer of the turn it enqueued" (PLAN.md's Tier 2 intro), not
+ * the thing driving the turn: `SessionService.enqueueTurn` owns creating/
+ * rehydrating the session, appending the operator/boundary records, and
+ * draining `ShadowConversation.sendMessage()`; this handler only maps what
+ * it observes onto the wire and manages its own SSE controller.
  *
- * ## Session reuse (D6) and the divergence in what "sessionId" means
+ * ## The turn survives this handler going away
  *
- * `docs/API.md` ties the `session` SSE event to D6's session-reuse
- * argument (the ~18k-token preamble cost), which suggests the underlying
- * `AgenticSession`'s own id. That id (`ShadowConversation.sessionId`,
- * `@shadow/agent`) is `undefined` until the *first* model turn completes —
- * unusable as "the first event" of a turn that hasn't started yet. What
- * actually makes D6 reuse happen in this codebase is holding the same
- * `ShadowConversation` *instance* in memory and calling `sendMessage`
- * again on it (`conversation.ts`'s `getOrCreateSession` caches `this.session`
- * across calls). So this handler exposes `ShadowConversation.id` — stable
- * from construction, before any turn runs — as the wire `sessionId`, and
- * keeps a bounded `sessionId -> ShadowConversation` registry
- * (`ApiDeps.conversations`, `ConversationRegistry`) so a client that echoes
- * it back resumes the same instance, and therefore the same underlying
- * `AgenticSession`. Flagged for `docs/API.md` to confirm or correct.
+ * Before T2.5, `cancel()` called `iterator.return()` on the conversation's
+ * own generator, killing the turn the instant a client disconnected. Now
+ * `cancel()` only stops iterating `enqueued.events` (a generator over a
+ * session-bus subscription, `session-service.ts`'s `drainChannel`) — its
+ * `finally` unsubscribes this one viewer, nothing more. The turn keeps
+ * draining server-side regardless of whether this handler, or any other
+ * viewer, is still watching (this module's whole reason for existing under
+ * T2.5, vs. the old request-scoped design).
+ *
+ * ## Session id resolution stays a pre-stream, ordinary HTTP concern
+ *
+ * `resolveTarget` below does exactly what `resolveConversation` used to:
+ * validate the request shape and, for a new conversation, confirm the
+ * volume exists (`docs/API.md`'s `volume_not_found`) — all BEFORE the SSE
+ * stream opens, so those failures stay ordinary JSON error responses
+ * (`error-mapping.ts`), not in-band `error` SSE events. `SessionService`
+ * itself resolves `{sessionId}` existence (`session_not_found`) and the
+ * turn-queue bound (`turn_queue_busy`) inside `enqueueTurn`, which this
+ * handler awaits before opening the stream — same pre-stream guarantee,
+ * just resolved one layer down.
  *
  * ## Mapping ShadowEvent -> docs/API.md's SSE table
  *
  * The mapping itself — every `ShadowEvent` case, every wire field, and why
- * each gap from `docs/API.md`'s table is what it is — now lives in
+ * each gap from `docs/API.md`'s table is what it is — lives in
  * `../event-mapping.ts` (T2.2), shared with replay (T2.7). This handler's
- * job is just the live-specific wiring around it: stream `text-delta`s
- * straight through (they have no stored shape at all), stamp every other
- * event through a per-turn `StoredEventStamper` (brief-id correlation,
- * `../event-mapping.ts`), and run the stamped result through
- * `wireEventsForLive`.
+ * job is just the live-specific wiring around it: forward `text-delta`
+ * chunks straight through (they have no stored shape at all), and run every
+ * other observed record's stored event through `wireEventsForLive`. The
+ * `operator-message` record and `turn-boundary(started)` record —
+ * synthesized by `SessionService` itself, at run start — arrive through the
+ * exact same subscription as everything else, so this handler no longer
+ * synthesizes the operator wire event itself the way it used to.
  */
 
-import { randomUUID } from "node:crypto";
-import type { ShadowConversation, ShadowEvent } from "@shadow/agent";
 import { toVolumeSlug } from "@shadow/core";
 import type { BunRequest } from "bun";
 import type { ApiDeps } from "../deps.ts";
-import { toErrorResponse } from "../error-mapping.ts";
-import { InvalidRequestError, SessionNotFoundError } from "../errors.ts";
-import { operatorMessageEvent, StoredEventStamper, wireEventsForLive } from "../event-mapping.ts";
+import { InvalidRequestError } from "../errors.ts";
+import { wireEventsForLive } from "../event-mapping.ts";
+import type { EnqueuedTurn, EnqueueTarget } from "../session-service.ts";
 import { encodeSseEvent } from "../sse.ts";
 
 interface ChatBody {
@@ -47,17 +58,12 @@ interface ChatBody {
   readonly sessionId?: unknown;
 }
 
-async function resolveConversation(
-  deps: ApiDeps,
-  body: ChatBody,
-): Promise<{ conversation: ShadowConversation; sessionId: string }> {
+async function resolveTarget(deps: ApiDeps, body: ChatBody): Promise<EnqueueTarget> {
   if (body.sessionId !== undefined) {
     if (typeof body.sessionId !== "string") {
       throw new InvalidRequestError("sessionId must be a string when provided");
     }
-    const conversation = deps.conversations.get(body.sessionId);
-    if (!conversation) throw new SessionNotFoundError(body.sessionId);
-    return { conversation, sessionId: body.sessionId };
+    return { sessionId: body.sessionId };
   }
 
   if (typeof body.volumeSlug !== "string" || body.volumeSlug.trim().length === 0) {
@@ -65,10 +71,7 @@ async function resolveConversation(
   }
   const volume = toVolumeSlug(body.volumeSlug);
   await deps.volumeStore.getVolume(volume); // 404 volume_not_found if it doesn't exist
-
-  const conversation = deps.shadowAgent.startConversation(volume);
-  deps.conversations.set(conversation.id, conversation);
-  return { conversation, sessionId: conversation.id };
+  return { volume };
 }
 
 export async function postChat(deps: ApiDeps, req: BunRequest<"/api/chat">): Promise<Response> {
@@ -78,24 +81,26 @@ export async function postChat(deps: ApiDeps, req: BunRequest<"/api/chat">): Pro
   }
   const message = body.message;
 
-  // Validation and session lookup happen here, BEFORE the stream opens —
-  // failures here are ordinary JSON error responses (`error-mapping.ts`),
-  // not in-band SSE `error` events, because headers/status can still
-  // change at this point. Only failures *during* the turn itself (inside
-  // the `ReadableStream`, below) become in-band `error` events, per
-  // `docs/API.md`: "error — terminal for this turn."
-  const { conversation, sessionId } = await resolveConversation(deps, body);
+  // Validation, target resolution, AND the enqueue itself all happen here,
+  // BEFORE the stream opens — failures here (`invalid_request`,
+  // `volume_not_found`, `session_not_found`, `turn_queue_busy`) are ordinary
+  // JSON error responses (`error-mapping.ts`), not in-band SSE `error`
+  // events, because headers/status can still change at this point. Only
+  // failures *during* the turn itself (inside the `ReadableStream`, below)
+  // become in-band `error` events, per `docs/API.md`: "error — terminal for
+  // this turn."
+  const target = await resolveTarget(deps, body);
+  const enqueued: EnqueuedTurn = await deps.sessionService.enqueueTurn(target, message);
 
   // Guards against a disconnected client (`cancel()` below) racing the
-  // generator loop: without `closed`, a client that goes away mid-turn lets
-  // `conversation.sendMessage`'s generator keep running, `send()` then
-  // throws trying to `enqueue` on an already-closed/errored controller, the
+  // draining loop: without `closed`, a client that goes away mid-turn lets
+  // this loop keep pulling from `enqueued.events`, `send()` then throws
+  // trying to `enqueue` on an already-closed/errored controller, the
   // `catch` below turns that into an `error` SSE event on a dead stream
   // (itself another `enqueue` on a closed controller), and `finally` then
   // double-closes. `closed` short-circuits every one of those once either
-  // `cancel()` fires or the turn finishes on its own.
+  // `cancel()` fires or the loop finishes on its own.
   let closed = false;
-  let iterator: AsyncGenerator<ShadowEvent> | undefined;
 
   const stream = new ReadableStream<Uint8Array>({
     async start(controller) {
@@ -119,17 +124,7 @@ export async function postChat(deps: ApiDeps, req: BunRequest<"/api/chat">): Pro
           // Already closed (e.g. by a concurrent `cancel()`) — fine.
         }
       };
-      send("session", { sessionId });
-
-      // The user bubble. Synthesized here (`@shadow/agent` never emits an
-      // `operator-message` `ShadowEvent` — see `../event-mapping.ts`'s
-      // doc), at the point the turn starts, so a second live viewer of this
-      // same session sees it too, and so live and replayed transcripts
-      // render identically (T2.2). Stored-shape identical to what T2.5's
-      // tee will later append for this same turn.
-      for (const wire of wireEventsForLive(operatorMessageEvent(message))) {
-        send(wire.event, wire.data);
-      }
+      send("session", { sessionId: enqueued.sessionId });
 
       // Shadow can be legitimately silent for a long time — a research brief
       // that fetches several pages, then a Tier 2 audit, can easily outlast any
@@ -148,39 +143,58 @@ export async function postChat(deps: ApiDeps, req: BunRequest<"/api/chat">): Pro
         }
       }, 5_000);
 
-      // Turn-scoped: mints/stamps `briefId`s while `research-started`'s
-      // `ResearchBrief` object identity still correlates it to the same
-      // brief's later `research-completed`/`-failed` (`../event-mapping.ts`).
-      // A fresh stamper per turn keeps ids unique across turns too — the
-      // `turnId` prefix, not just the per-stamper counter.
-      const turnId = randomUUID();
-      const stamper = new StoredEventStamper(turnId);
+      // Set the instant an `error` wire event is sent (either from a
+      // thrown-error boundary record, or an agent-emitted `{type:"error"}`
+      // `ShadowEvent`) — `docs/API.md`: "error — terminal for this turn," so
+      // `done` must never follow it on the same turn. Deferring the `done`
+      // decision to after the loop (rather than an early `close(); return;`
+      // the moment an error is seen, the old design) is safe here because
+      // the underlying turn generator always ends right after an error
+      // anyway (`@shadow/agent`'s `sendMessage` returns as soon as a turn
+      // fails) — there is nothing more to drain either way.
+      let errorSent = false;
 
       try {
-        iterator = conversation.sendMessage(message) as AsyncGenerator<ShadowEvent>;
-        for await (const event of iterator) {
-          if (closed) break; // client disconnected (cancel()) mid-turn — stop draining the generator
-          if (event.type === "text-delta") {
+        for await (const msg of enqueued.events) {
+          if (closed) break; // client disconnected (cancel()) mid-turn — stop reading, the turn keeps running server-side regardless
+          if (msg.kind === "text-delta") {
             // No stored shape at all (`@shadow/sessions` never persists
-            // deltas) — streamed straight to the wire as `@shadow/agent`
-            // produces it, chunk by chunk.
-            send("text", { delta: event.text });
+            // deltas) — forwarded straight to the wire.
+            send("text", { delta: msg.text });
             continue;
           }
-          const stored = stamper.stampAgentEvent(event);
-          for (const wire of wireEventsForLive(stored)) {
-            send(wire.event, wire.data);
+          const { event } = msg.record;
+          if (event.type === "turn-boundary") {
+            // No wire representation for the boundary record itself
+            // (`wireEventsFromStored` already maps it to `[]`) — but a
+            // thrown-error `ended` boundary is the ONE place a thrown
+            // failure's message/code survive for the wire (T2.1's schema;
+            // an agent-emitted `{type:"error"}` event, by contrast, is an
+            // ordinary stored event already handled by `wireEventsForLive`
+            // below).
+            if (event.phase === "ended" && event.endReason === "error") {
+              send("error", { message: event.message, code: event.code });
+              errorSent = true;
+            }
+            continue;
           }
-          if (event.type === "error") {
-            close();
-            return;
+          for (const wire of wireEventsForLive(event)) {
+            send(wire.event, wire.data);
+            if (wire.event === "error") errorSent = true;
           }
         }
-        send("done", {});
+        if (!errorSent) send("done", {});
       } catch (error) {
+        // Reachable only for a failure in THIS handler's own consumption
+        // (e.g. `send` throwing into a genuinely broken controller state
+        // `closed` didn't already catch) — the turn's own failures are
+        // delivered as ordinary events through the loop above, never thrown
+        // out of it.
         if (!closed) {
-          const mapped = toErrorResponse(error);
-          send("error", { message: mapped.body.error.message, code: mapped.body.error.code });
+          send("error", {
+            message: error instanceof Error ? error.message : String(error),
+            code: "internal_error",
+          });
         }
       } finally {
         clearInterval(heartbeat);
@@ -188,16 +202,18 @@ export async function postChat(deps: ApiDeps, req: BunRequest<"/api/chat">): Pro
       }
     },
     // Fires when the client disconnects (nav away, tab close, aborted
-    // fetch) before the turn finishes. Without this, `conversation`'s
-    // generator keeps running to completion against a controller nobody
-    // can read from anymore — `send()` would throw into the `catch` above,
-    // which would `send("error", ...)` on the same dead controller, and
-    // `finally` would then close it a second time. Terminating the
-    // generator via `.return()` stops that chain at the source rather than
-    // papering over its symptoms downstream.
+    // fetch) before the turn finishes. Unlike the pre-T2.5 design, calling
+    // `.return()` here does NOT kill the turn — `enqueued.events` is a
+    // generator over a session-bus *subscription*
+    // (`session-service.ts`'s `drainChannel`), not over the turn's own
+    // draining loop; `.return()` only runs that generator's `finally`
+    // (unsubscribe) and stops this handler's own loop promptly instead of
+    // leaving it blocked waiting on the next bus message. The turn itself
+    // keeps running server-side, tee'd into the store, exactly as if this
+    // viewer had never disconnected (T2.5's whole point).
     async cancel() {
       closed = true;
-      await iterator?.return?.(undefined);
+      await enqueued.events.return(undefined);
     },
   });
 
