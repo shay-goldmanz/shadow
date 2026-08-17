@@ -118,6 +118,26 @@ export class ServiceShuttingDownError extends ShadowApiError {
 }
 
 /**
+ * `SessionService.deleteSession` (T3.1) was called for a session that
+ * currently has a turn running or queued (`SessionLock.hasActivity`).
+ * Operator-visible, not a fault: PLAN.md's failure table calls this out by
+ * name — "Delete while turn running/queued -> 409; delete after it
+ * settles." The client should wait for the in-flight turn to finish (or
+ * poll `GET /api/sessions/:id/events`) and retry the delete.
+ */
+export class SessionBusyError extends ShadowApiError {
+  override readonly name = "SessionBusyError";
+  readonly status = 409;
+  readonly code = "session_busy";
+
+  constructor(public readonly sessionId: string) {
+    super(
+      `Session ${JSON.stringify(sessionId)} has a turn running or queued; delete once it settles`,
+    );
+  }
+}
+
+/**
  * `GET /api/volumes/:slug/index` (or `/api/lint`) was called before the
  * volume was ever indexed — `VolumeStore.readIndex`/`readCorpusIndex`
  * returned `undefined`. Not a fault: `POST /api/volumes/:slug/reindex`

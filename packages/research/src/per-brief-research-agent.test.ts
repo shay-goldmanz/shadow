@@ -159,6 +159,7 @@ describe("PerBriefResearchAgent — concurrent calls both complete (T0.1)", () =
       class ControllableSession implements AgenticSession {
         sessionId: string | undefined;
         usage = ZERO_USAGE;
+        readonly failedSessionIds: readonly string[] = [];
         constructor(
           private readonly id: string,
           public readonly options: AgenticSessionOptions | undefined,
@@ -219,6 +220,7 @@ type AnyToolDefinition = ToolDefinition<any>;
 class ScriptedToolLoopSession implements AgenticSession {
   sessionId: string | undefined;
   usage = ZERO_USAGE;
+  readonly failedSessionIds: readonly string[] = [];
 
   constructor(
     private readonly id: string,

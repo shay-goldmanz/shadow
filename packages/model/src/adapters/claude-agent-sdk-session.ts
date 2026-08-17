@@ -195,8 +195,13 @@ class ClaudeAgentSdkSession implements AgenticSession {
    * Excludes this handle's `options.resume` target even when the CLI's
    * error result echoes it back (F3 review fix, same branch) — that id is
    * the operator's pre-existing transcript, not one this handle orphaned.
+   * Exposed read-only via the `failedSessionIds` getter below (F7 review
+   * fix, T3.1) so a caller that never calls `close()` — the ordinary path,
+   * per that method's own doc — can still discover and record these ids
+   * (`@shadow/agent`'s `ShadowConversation.failedSdkSessionIds`,
+   * `@shadow/api`'s `SessionService.finishTurn`).
    */
-  private readonly failedSessionIds = new Set<string>();
+  private readonly _failedSessionIds = new Set<string>();
   /**
    * Set once `close()` has actually issued `deleteSession` for this
    * handle's own `ownSessionId` — makes a second `close()` call idempotent
@@ -219,6 +224,11 @@ class ClaudeAgentSdkSession implements AgenticSession {
 
   get usage(): TokenUsage {
     return this.accumulatedUsage;
+  }
+
+  /** F7 review fix (T3.1): read-only view of `_failedSessionIds` — see that field's doc and `AgenticSession.failedSessionIds`'s. A fresh array each call, so a caller can never mutate this handle's internal `Set` through the returned reference. */
+  get failedSessionIds(): readonly string[] {
+    return [...this._failedSessionIds];
   }
 
   async *stream(prompt: string): AsyncGenerator<AgenticStreamEvent, void, undefined> {
@@ -342,7 +352,7 @@ class ClaudeAgentSdkSession implements AgenticSession {
             // orphaned. Only ids genuinely new to (and therefore owned by)
             // this handle belong in this set.
             if (message.session_id && message.session_id !== this.options.resume?.sessionId) {
-              this.failedSessionIds.add(message.session_id);
+              this._failedSessionIds.add(message.session_id);
             }
           } else {
             this.ownSessionId = message.session_id;
@@ -397,7 +407,7 @@ class ClaudeAgentSdkSession implements AgenticSession {
   async close(): Promise<void> {
     if (this.options.persistSession === false) return;
 
-    const idsToDelete = new Set(this.failedSessionIds);
+    const idsToDelete = new Set(this._failedSessionIds);
     if (this.ownSessionId !== undefined && !this.ownSessionDeleted) {
       idsToDelete.add(this.ownSessionId);
     }
@@ -414,7 +424,7 @@ class ClaudeAgentSdkSession implements AgenticSession {
       );
     }
 
-    this.failedSessionIds.clear();
+    this._failedSessionIds.clear();
     if (this.ownSessionId !== undefined) {
       this.ownSessionDeleted = true;
     }

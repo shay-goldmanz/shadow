@@ -508,6 +508,61 @@ describe("ShadowConversation — a second sendMessage reuses the same session (D
 });
 
 // -----------------------------------------------------------------------
+// F7 review fix (T3.1) — a failed FIRST turn's SDK session id surfaces via
+// `failedSdkSessionIds`, not just silently latched-and-lost.
+// -----------------------------------------------------------------------
+
+describe("ShadowConversation — failedSdkSessionIds surfaces a failed first turn's id (F7 review fix, T3.1)", () => {
+  test("a first turn that fails via an isError result exposes its (unlatched) session id via failedSdkSessionIds", async () => {
+    await withVolumeHarness(async ({ evidenceStore, volumeStore, volume, root }) => {
+      await withSessionCwd(async (sessionCwd) => {
+        const research = new FakeResearchBriefPort(evidenceStore, () => []);
+        const sessions = new FakeAgenticSessionPort(() => ({
+          isError: true,
+          stopReason: "overloaded",
+        }));
+
+        const deps: ShadowAgentDeps = {
+          agenticSessionPort: sessions,
+          researchBriefPort: research,
+          volumeStore,
+          evidenceStore,
+          indexer: freshIndexer(root),
+          checkWorthinessClassifier: alwaysNarrativeClassifier,
+          entailmentRelevanceJudge: scriptedEntailmentJudge(),
+          claimRestater: scriptedClaimRestater(() => {
+            throw new Error("should not be called");
+          }),
+          sessionCwd,
+        };
+
+        const agent = new ShadowAgent(deps);
+        const conversation = agent.startConversation(volume);
+
+        // Nothing yet — no turn has run.
+        expect(conversation.failedSdkSessionIds).toEqual([]);
+
+        const events: ShadowEvent[] = [];
+        for await (const event of conversation.sendMessage("First message.")) {
+          events.push(event);
+        }
+        expect(events.some((e) => e.type === "error")).toBe(true);
+
+        // `sessionId` (the successful-turn id) stays undefined — T1.1's
+        // first-turn derivation — but the failed turn's id is still
+        // reachable through this getter, mirroring the underlying fake
+        // session's own `failedSessionIds`.
+        expect(conversation.sessionId).toBeUndefined();
+        const underlying = sessions.sessions[0];
+        if (!underlying) throw new Error("expected a fake session to have been created");
+        expect(underlying.failedSessionIds).toHaveLength(1);
+        expect(conversation.failedSdkSessionIds).toEqual(underlying.failedSessionIds);
+      });
+    });
+  });
+});
+
+// -----------------------------------------------------------------------
 // T0.2 — research directives run concurrently within a turn.
 // -----------------------------------------------------------------------
 

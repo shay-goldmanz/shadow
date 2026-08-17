@@ -326,6 +326,26 @@ export class ShadowConversation {
   }
 
   /**
+   * F7 review fix (T3.1): the underlying session handle's own
+   * `failedSessionIds` (`@shadow/model`'s `AgenticSession.failedSessionIds`)
+   * — SDK ids a failed turn on THIS handle reported but never latched as
+   * `sessionId`. `[]` before any turn has ever failed with a session id, or
+   * once `this.session` is unset (never created a handle yet, or between a
+   * `release()` and the next turn's `getOrCreateSession`). `@shadow/api`'s
+   * `SessionService.finishTurn` reads this after every turn and merges
+   * anything new into `SessionMeta.failedSdkSessionIds` — the plumbing that
+   * finally makes a failed FIRST turn's transcript reachable for deletion
+   * (`docs/DECISIONS.md` D6b). Deliberately a live read, not a drain: the
+   * underlying handle's own `Set` is the source of truth for as long as this
+   * conversation holds it, and `finishTurn`'s caller-side dedup (merging
+   * into a `Set` before patching) is what makes calling this after every
+   * turn — even ones that didn't just fail — safe and idempotent.
+   */
+  get failedSdkSessionIds(): readonly string[] {
+    return this.session?.failedSessionIds ?? [];
+  }
+
+  /**
    * Drop this handle's reference to its underlying `AgenticSession`,
    * deleting nothing (T2.4 — replaces the old `dispose()`, which called
    * `AgenticSession.close()` and deleted the SDK transcript underneath it).

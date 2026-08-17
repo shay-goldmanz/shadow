@@ -213,6 +213,24 @@ future `DELETE`, keyed off `meta.sdkSessionId`, has nothing to target. A genuine
 turn's transcript is therefore orphaned twice over today. The plan's failure table says "failed
 persisted transcripts tracked for cleanup"; as built, nothing performs that cleanup.
 
+**Resolved by T3.1 (F7 review fix).** The loop above — "in principle `close()` closes it, in
+practice nothing calls `close()`" — is closed a different way than that paragraph originally
+anticipated: not by ever calling `close()`, but by exposing the tracking `close()` already did
+and reading it from somewhere that already runs on every turn regardless. `AgenticSession` grows
+a `failedSessionIds: readonly string[]` getter (`ClaudeAgentSdkSession`/`FakeAgenticSession` both
+had the private tracking since T1.1; only the read access was missing), `RetryingAgenticSession`
+passes it through, `ShadowConversation` exposes it as `failedSdkSessionIds` (a live read of
+whichever underlying handle it currently holds), and `SessionMeta` grows a matching
+`failedSdkSessionIds?: readonly string[]` field that `SessionService.finishTurn` merges into
+(union, not replace — a `Set`, so accumulating across repeated failed turns on one handle is
+idempotent) after *every* turn, not just ones that end in a thrown-error boundary. `DELETE
+/api/sessions/:id` then calls the model port's `deleteStoredSession` for `meta.sdkSessionId` AND
+every `meta.failedSdkSessionIds` entry, in that order, before removing the store row — so a
+failed first turn's transcript is deletable for the first time, cold sessions included (nothing
+in this path goes through a live handle). See `packages/api/src/handlers/sessions.test.ts` and
+`packages/api/src/session-service.test.ts`'s F7 tests for the failed-then-successful-turn case
+that exercises two genuinely distinct SDK ids on one session.
+
 **The fallback summary stays out of the citable transcript (D19/D23).** T2.3's in-conversation
 resume fallback — a resumed first turn's SDK transcript is genuinely gone — recreates the session
 without `resume` and prepends a deterministic summary to the *model prompt only*, never to the
@@ -246,12 +264,15 @@ ships on the strength of "correct either way": if the preamble turns out not to 
 cross-session, the recorded fallback is an internal FIFO queue on the search provider instead of
 today's one-shot-session default — a decision this amendment defers, not one it makes.
 
-**Cost.** Sessions accumulate under `~/.claude/projects/` indefinitely with no way to remove one
-until T3.1 ships `DELETE /api/sessions/:id` — trading D6a's silent-leak-on-every-eviction failure
-mode for a visible, bounded one (disk, not correctness), which is the right trade for
-keep-forever retention but a real cost until Tier 3 lands. Failed first-turn transcripts are a
-smaller, separate leak that Tier 3 alone won't close, since nothing persists their id anywhere a
-delete path could ever reach.
+**Cost — as it stood before T3.1.** Sessions accumulated under `~/.claude/projects/` indefinitely
+with no way to remove one, trading D6a's silent-leak-on-every-eviction failure mode for a visible,
+bounded one (disk, not correctness) — the right trade for keep-forever retention, but a real cost
+until Tier 3 landed. Failed first-turn transcripts were a smaller, separate leak Tier 3 alone
+wouldn't have closed on its own, since nothing persisted their id anywhere a delete path could
+ever reach — the gap the "Resolved by T3.1" paragraph above records closing. As of T3.1,
+`DELETE /api/sessions/:id` removes both kinds of transcript together with the store row; the
+remaining cost is only the ordinary one — an operator who never deletes a session keeps its
+transcript, by design (keep-forever retention), not by leak.
 
 ---
 

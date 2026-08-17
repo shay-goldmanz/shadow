@@ -73,6 +73,11 @@ export class RetryingAgenticSession implements AgenticSession {
     return this.inner.usage;
   }
 
+  /** Passthrough — this decorator never fails a turn silently without also retrying the underlying handle, so it has no `failedSessionIds` bookkeeping of its own (F7 review fix, T3.1); the inner session's is authoritative. */
+  get failedSessionIds(): AgenticSession["failedSessionIds"] {
+    return this.inner.failedSessionIds;
+  }
+
   async *stream(prompt: string): AsyncGenerator<AgenticStreamEvent, void, undefined> {
     let attempt = 0;
     // Labeled so a retry decision made deep inside the inner read loop

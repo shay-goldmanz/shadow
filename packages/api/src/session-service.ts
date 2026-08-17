@@ -58,7 +58,9 @@ import type {
   StartConversationOptions,
 } from "@shadow/agent";
 import type { VolumeSlug } from "@shadow/core";
+import type { AgenticSessionPort } from "@shadow/model";
 import type {
+  SessionListFilter,
   SessionMeta,
   SessionMetaPatch,
   SessionStore,
@@ -68,7 +70,12 @@ import type {
 } from "@shadow/sessions";
 import { ConversationRegistry, type ConversationRegistryOptions } from "./conversation-registry.ts";
 import { toErrorResponse } from "./error-mapping.ts";
-import { ServiceShuttingDownError, SessionNotFoundError, TurnQueueBusyError } from "./errors.ts";
+import {
+  ServiceShuttingDownError,
+  SessionBusyError,
+  SessionNotFoundError,
+  TurnQueueBusyError,
+} from "./errors.ts";
 import {
   operatorMessageEvent,
   StoredEventStamper,
@@ -126,6 +133,20 @@ export interface EnqueuedTurn {
 export interface SessionServiceDeps {
   readonly store: SessionStore;
   readonly shadowAgent: ShadowAgent;
+  /**
+   * The model-layer port whose `deleteStoredSession(sdkSessionId)` (T2.4) is
+   * `deleteSession`'s (T3.1) only way to remove an SDK transcript that has
+   * no live `AgenticSession` handle — a cold session, or a failed-first-turn
+   * id in `SessionMeta.failedSdkSessionIds` (F7 review fix), neither of
+   * which any `ShadowConversation` this service holds can reach. The SAME
+   * port instance `shadowAgent` was constructed with (`composition.ts`),
+   * threaded here directly rather than reached through `ShadowAgent` — that
+   * class exposes only volume/reindex locking (`withVolumeLock`/
+   * `withReindexLock`), not the model port itself, and adding a
+   * passthrough there for one caller's sake would widen its surface for no
+   * reason beyond this constructor's own convenience.
+   */
+  readonly agenticSessionPort: AgenticSessionPort;
 }
 
 export interface SessionServiceOptions {
@@ -196,6 +217,7 @@ function raceWithDeadline(promise: Promise<unknown>, deadlineMs: number): Promis
 export class SessionService {
   private readonly store: SessionStore;
   private readonly shadowAgent: ShadowAgent;
+  private readonly agenticSessionPort: AgenticSessionPort;
   private readonly lock = new SessionLock();
   private readonly bus = new SessionEventBus();
   private readonly maxQueuedTurnsPerSession: number;
@@ -254,6 +276,7 @@ export class SessionService {
   constructor(deps: SessionServiceDeps, options: SessionServiceOptions = {}) {
     this.store = deps.store;
     this.shadowAgent = deps.shadowAgent;
+    this.agenticSessionPort = deps.agenticSessionPort;
     this.maxQueuedTurnsPerSession =
       options.maxQueuedTurnsPerSession ?? DEFAULT_MAX_QUEUED_TURNS_PER_SESSION;
     // `isSessionBusy` closes over `this.lock` by reference, not by value —
@@ -309,10 +332,17 @@ export class SessionService {
     // `session-lock.ts`'s module doc for why `tryReserve`/`runReserved` are
     // two calls instead of one, specifically to make this ordering possible.
     const unsubscribe = this.bus.subscribe(sessionId, (published) => {
+      // `"ended"` (T3.1: the session was deleted) never belongs to a
+      // specific turn — and can't reach a still-live per-turn subscription
+      // in practice anyway, since `deleteSession` 409s while any turn is
+      // running or queued (`SessionBusyError`); this channel's own turn will
+      // already have unsubscribed via `isTurnEndedRecord` below by the time
+      // a delete could ever succeed. Filtered out defensively regardless,
+      // rather than assumed unreachable.
       const belongsToThisTurn =
         published.kind === "text-delta"
           ? published.turnId === turnId
-          : published.record.turnId === turnId;
+          : published.kind === "record" && published.record.turnId === turnId;
       if (!belongsToThisTurn) return;
       channel.push(published);
       if (isTurnEndedRecord(published)) {
@@ -425,6 +455,7 @@ export class SessionService {
     let errorInfo: { message: string; code: string } | undefined;
     let conversation: ShadowConversation | undefined;
     let priorTitle: string | null = null;
+    let priorFailedSdkSessionIds: readonly string[] = [];
 
     try {
       // F8 review fix: the store row for a fresh `{volume}` target is
@@ -447,6 +478,7 @@ export class SessionService {
       const ensured = await this.ensureConversation(sessionId);
       conversation = ensured.conversation;
       priorTitle = ensured.meta.title;
+      priorFailedSdkSessionIds = ensured.meta.failedSdkSessionIds ?? [];
 
       await this.appendAndPublish(sessionId, turnId, operatorMessageEvent(operatorText));
       await this.appendAndPublish(sessionId, turnId, turnBoundaryStarted());
@@ -508,6 +540,7 @@ export class SessionService {
         turnId,
         conversation,
         priorTitle,
+        priorFailedSdkSessionIds,
         operatorText,
         endReason,
         errorInfo,
@@ -515,12 +548,19 @@ export class SessionService {
     }
   }
 
-  /** The `finally` half of `runTurn`: append the closing boundary, update session meta, and make sure this turn's bus subscribers are guaranteed to terminate even if the boundary append itself fails. */
+  /**
+   * The `finally` half of `runTurn`: append the closing boundary, update
+   * session meta — including, as of F7 (T3.1), merging in any SDK session
+   * ids this turn's conversation handle reported as failed — and make sure
+   * this turn's bus subscribers are guaranteed to terminate even if the
+   * boundary append itself fails.
+   */
   private async finishTurn(
     sessionId: string,
     turnId: string,
     conversation: ShadowConversation | undefined,
     priorTitle: string | null,
+    priorFailedSdkSessionIds: readonly string[],
     operatorText: string,
     endReason: TurnBoundaryEndReason,
     errorInfo: { message: string; code: string } | undefined,
@@ -551,6 +591,28 @@ export class SessionService {
 
     if (!conversation) return; // ensureConversation itself failed — no meta to touch.
 
+    // F7 review fix (T3.1): merge in any SDK session ids this turn's
+    // conversation handle now reports as failed — most notably a failed
+    // FIRST turn's `isError` result id, which never becomes `sdkSessionId`
+    // (that field is written only from a successful `conversation.sessionId`
+    // below) and is therefore otherwise unreachable by anything, including
+    // `DELETE /api/sessions/:id`. `ShadowConversation.failedSdkSessionIds` is
+    // a live read of the underlying handle's own tracking (`@shadow/model`'s
+    // `AgenticSession.failedSessionIds`), not turn-scoped — union with the
+    // meta's prior value (a `Set`, so idempotent across repeated turns on
+    // the same handle) rather than replacing it, since an earlier turn's
+    // failed id must never be forgotten just because this turn didn't fail.
+    // Only patched when something is actually new, to avoid a no-op write on
+    // every ordinary successful turn.
+    const mergedFailedSdkSessionIds = new Set([
+      ...priorFailedSdkSessionIds,
+      ...conversation.failedSdkSessionIds,
+    ]);
+    const failedSdkSessionIds: readonly string[] | undefined =
+      mergedFailedSdkSessionIds.size > priorFailedSdkSessionIds.length
+        ? [...mergedFailedSdkSessionIds]
+        : undefined;
+
     const patch: SessionMetaPatch = {
       lastActiveAt: new Date().toISOString(),
       // Written on first-turn completion, and again — overwriting the dead
@@ -564,6 +626,7 @@ export class SessionService {
       // Only the very first turn (still-null title) sets a default; T3.1's
       // `PATCH` override is the only other writer of this field.
       title: priorTitle === null ? defaultTitleFrom(operatorText) : undefined,
+      failedSdkSessionIds,
     };
     try {
       await this.store.update(sessionId, patch);
@@ -759,6 +822,107 @@ export class SessionService {
   /** Test-only exposure of the internal bus's per-session listener count (F5 review fix — `SessionEventBus.listenerCount`'s own doc). Not used by any production path; lets a leaked-subscription test assert directly rather than inferring a leak indirectly. */
   listenerCountForTest(sessionId: string): number {
     return this.bus.listenerCount(sessionId);
+  }
+
+  /**
+   * `GET /api/sessions` (T3.1) — every session's row, newest-first
+   * (`SessionStore.list`'s own ordering doc), optionally narrowed to one
+   * volume. A thin passthrough to the store: listing needs no lock (nothing
+   * here is a write), no registry lookup (a `SessionMeta` carries everything
+   * a list view needs — `sdkSessionId`/`failedSdkSessionIds` are internal
+   * bookkeeping the handler's own summary mapping leaves off the wire, not
+   * this method's concern).
+   */
+  async listSessions(filter?: SessionListFilter): Promise<SessionMeta[]> {
+    return this.store.list(filter);
+  }
+
+  /**
+   * `PATCH /api/sessions/:id { title }` (T3.1) — the operator-set title
+   * overrides `finishTurn`'s first-turn default (`defaultTitleFrom`) for
+   * good; nothing else in this class writes `title` after this call. 404
+   * `session_not_found` if `sessionId` has no store row — checked
+   * explicitly rather than just letting `store.update` throw, so this
+   * method's own 404 reads the same way every other existence check in this
+   * class does (`resolveSessionId`, `hasSession`), even though
+   * `store.update` would raise the identical `SessionNotFoundError` either
+   * way (`@shadow/sessions`' own contract).
+   */
+  async updateTitle(sessionId: string, title: string): Promise<SessionMeta> {
+    const meta = await this.store.get(sessionId);
+    if (!meta) {
+      throw new SessionNotFoundError(sessionId);
+    }
+    await this.store.update(sessionId, { title });
+    const updated = await this.store.get(sessionId);
+    if (!updated) {
+      // TOCTOU-only: nothing in this codebase concurrently deletes a
+      // session outside `deleteSession` below, and that method 409s while
+      // this one's own `store.update` above is still running (both go
+      // through the store, not the lock — see `deleteSession`'s doc on why
+      // that's fine here). Defensive, not expected to ever fire.
+      throw new SessionNotFoundError(sessionId);
+    }
+    return updated;
+  }
+
+  /**
+   * `DELETE /api/sessions/:id` (T3.1) — the ONE path, alongside
+   * `finishTurn`'s bookkeeping above, this task adds: removes the store
+   * directory, the registry entry (if any — cold sessions have none), and
+   * every SDK transcript the session ever produced, live or failed
+   * (`meta.sdkSessionId` plus every `meta.failedSdkSessionIds` entry — F7
+   * review fix, closing `docs/DECISIONS.md` D6b's "orphaned twice over"
+   * gap), together — no orphans left in any direction. Publishes `{kind:
+   * "ended"}` on the bus afterward so an open `?follow=true` stream
+   * (`handlers/session-events.ts`) closes instead of sitting inertly
+   * subscribed to an id the store no longer knows (T2.7's documented seam,
+   * `session-bus.ts`'s module doc).
+   *
+   * **409 `SessionBusyError` if a turn is currently running or queued**
+   * (`SessionLock.hasActivity` — the same predicate `ConversationRegistry`'s
+   * eviction consults) — checked FIRST, before anything else, so a delete
+   * racing an in-flight turn never tears the store out from under
+   * `runTurn`'s own appends. **404 `SessionNotFoundError`** if the store has
+   * no row for `sessionId` — existence is a store-only question here (same
+   * reasoning `resolveSessionId`/`hasSession` already document: a registry
+   * entry always implies a store row, so checking the store alone is
+   * sufficient).
+   *
+   * **Order matters for crash-safety.** SDK transcripts are deleted BEFORE
+   * the store row: if this method (or the process) dies between the two, the
+   * store row survives and a retried `DELETE` on the same id finds the
+   * session still there — safe to try again, since a repeat
+   * `deleteStoredSession` call for an id already gone is a documented no-op
+   * (`AgenticSessionPort.deleteStoredSession`'s doc). The reverse order would
+   * leave a store row nothing could ever re-target once the SDK ids it
+   * pointed at were already forgotten. Registry release happens first and is
+   * best-effort (mirrors `ConversationRegistry.evict()`'s own stance,
+   * `.catch(() => {})`) — dropping the in-memory handle early is never
+   * itself a data-loss risk, only ever a wasted rehydrate if a later step
+   * fails and the operator retries.
+   */
+  async deleteSession(sessionId: string): Promise<void> {
+    if (this.lock.hasActivity(sessionId)) {
+      throw new SessionBusyError(sessionId);
+    }
+    const meta = await this.store.get(sessionId);
+    if (!meta) {
+      throw new SessionNotFoundError(sessionId);
+    }
+
+    await this.registry.remove(sessionId);
+
+    const idsToDelete = new Set<string>();
+    if (meta.sdkSessionId !== undefined) idsToDelete.add(meta.sdkSessionId);
+    for (const id of meta.failedSdkSessionIds ?? []) idsToDelete.add(id);
+    for (const id of idsToDelete) {
+      await this.agenticSessionPort.deleteStoredSession(id);
+    }
+
+    await this.store.delete(sessionId);
+
+    this.bus.publish(sessionId, { kind: "ended" });
   }
 
   /**

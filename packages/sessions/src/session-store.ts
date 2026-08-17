@@ -30,24 +30,49 @@ export interface SessionMeta {
   readonly lastActiveAt: string;
   /** Set once the first turn completes (T2.5); absent (not `null`) until then, so it round-trips through `JSON.stringify` as a genuinely missing key rather than a stored `null`. */
   readonly sdkSessionId?: string;
+  /**
+   * SDK session ids a *failed* turn reported but that never became
+   * `sdkSessionId` (F7 review fix, T3.1) — the CLI may still have persisted
+   * a transcript under one of these before the turn errored (`is_error:
+   * true`, or a thrown mid-turn failure that latched an id — see
+   * `@shadow/model`'s `ClaudeAgentSdkSession.failedSessionIds` doc for the
+   * exact shape), so it is otherwise reachable by nothing: `sdkSessionId`
+   * only ever records a *successful* turn's id. `@shadow/api`'s
+   * `SessionService.finishTurn` merges its conversation's own
+   * `failedSdkSessionIds` in here after every turn; `DELETE
+   * /api/sessions/:id` (T3.1) deletes every id here alongside
+   * `sdkSessionId`, so a failed first turn's orphaned transcript is finally
+   * reachable — see `docs/DECISIONS.md` D6b's "orphaned twice over"
+   * paragraph for the gap this closes. Absent (not `[]`) until a failed id
+   * is ever recorded, same round-trip reasoning as `sdkSessionId`.
+   */
+  readonly failedSdkSessionIds?: readonly string[];
 }
 
 /**
- * `update`'s patch. Only these three fields are ever mutable after
+ * `update`'s patch. Only these four fields are ever mutable after
  * `create` — everything else about a `SessionMeta` (`id`, `volume`,
  * `createdAt`) is fixed for the session's lifetime.
  *
  * `title` follows the same omitted-vs-`null` convention as `@shadow/core`'s
  * `VolumeUpdate.staleAfter`: a key left out of the patch entirely
  * (`undefined`) means "don't touch it", while an explicit `null` clears
- * the title back to untitled. `lastActiveAt`/`sdkSessionId` have no
- * "clear" case — an absent key simply means "don't touch it" and there is
- * no way to unset either once set.
+ * the title back to untitled. `lastActiveAt`/`sdkSessionId`/
+ * `failedSdkSessionIds` have no "clear" case — an absent key simply means
+ * "don't touch it" and there is no way to unset any of them once set.
  */
 export interface SessionMetaPatch {
   readonly title?: string | null;
   readonly lastActiveAt?: string;
   readonly sdkSessionId?: string;
+  /**
+   * Replaces `SessionMeta.failedSdkSessionIds` wholesale when given (not a
+   * merge — the caller, `@shadow/api`'s `SessionService.finishTurn`, already
+   * unions the prior value with any newly-observed ids before patching, so
+   * this store never needs to know how to merge). Omit to leave it
+   * untouched.
+   */
+  readonly failedSdkSessionIds?: readonly string[];
 }
 
 /**

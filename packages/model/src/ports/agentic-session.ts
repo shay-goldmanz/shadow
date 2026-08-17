@@ -138,6 +138,24 @@ export interface AgenticSession {
   /** Usage accumulated across every turn sent through this session handle. */
   readonly usage: TokenUsage;
   /**
+   * Session ids an *error* result (`is_error: true`) reported but that were
+   * never latched into `sessionId` (T1.1's first-turn derivation) — the CLI
+   * may still have persisted a transcript under one of these before the
+   * turn failed. Excludes this handle's own `resume` target even when an
+   * error result echoes it back (F3 review fix — that id is a pre-existing
+   * transcript this handle didn't orphan, not a new one). Grows across every
+   * failed turn sent through this handle; nothing here clears it except
+   * `close()`. F7 review fix (T3.1): the caller-facing surface of
+   * `ClaudeAgentSdkSession`'s/`FakeAgenticSession`'s private
+   * `failedSessionIds` tracking (both pre-dating this getter, T1.1) — what
+   * lets `@shadow/agent`'s `ShadowConversation` and, through it,
+   * `@shadow/api`'s `SessionService.finishTurn` record a failed FIRST turn's
+   * id in `SessionMeta.failedSdkSessionIds` even though `close()` is never
+   * called on the ordinary path (see that class's doc). Empty when nothing
+   * has ever failed with a session id on this handle.
+   */
+  readonly failedSessionIds: readonly string[];
+  /**
    * Send one user turn, streaming events as they arrive. The final event is
    * always `{ type: "done", result }` — on every path, including an error
    * turn (`result.isError`) — so a consumer can always find the outcome by

@@ -17,13 +17,30 @@
  * (`handlers/chat.ts`) is "the first viewer of the turn it enqueued"
  * (PLAN.md's Tier 2 intro) and still needs to stream those chunks live, the
  * same way it always has. Rather than giving the enqueuer a second, special
- * channel just for deltas, `SessionBusMessage` is a two-case union: `record`
- * (a real, `seq`-stamped, stored append — what T2.7's replay+follow will
- * dedupe by `seq`) and `text-delta` (transient, `turnId`-scoped, no `seq`,
- * published but never persisted). Every subscriber sees both kinds
- * interleaved in true production order, because both are published from the
- * same single-threaded draining loop that produced them
- * (`session-service.ts`'s `runTurn`).
+ * channel just for deltas, `SessionBusMessage` is a three-case union:
+ * `record` (a real, `seq`-stamped, stored append — what T2.7's replay+follow
+ * dedupes by `seq`), `text-delta` (transient, `turnId`-scoped, no `seq`,
+ * published but never persisted), and `ended` (T3.1 — the session itself was
+ * deleted; no `turnId`/`seq`, since it isn't scoped to any one turn). Every
+ * subscriber sees all three kinds interleaved in true production order,
+ * because they're published from the same single-threaded call sites that
+ * produced them: `record`/`text-delta` from `session-service.ts`'s
+ * `runTurn`, `ended` from `SessionService.deleteSession`.
+ *
+ * ## `ended` — T2.7's documented seam, finally built (T3.1)
+ *
+ * `handlers/session-events.ts`'s `?follow=true` stream subscribes
+ * session-wide and, before this case existed, had no way to react to its
+ * session being deleted out from under it — the stream just sat there,
+ * quietly subscribed to an id the store no longer knew about, until the
+ * client eventually gave up (that module's own doc, "Close conditions, and
+ * the seam left for T3.1"). `SessionService.deleteSession` publishes `{kind:
+ * "ended"}` once the store row and every SDK transcript are gone; that
+ * handler's `for await` loop treats it as terminal (`break`, same shape
+ * `isTurnEndedRecord` already used for `enqueueTurn`'s narrower per-turn
+ * case) instead of forwarding it as an ordinary message — there is no wire
+ * event for it (a deleted session has no client left to notify beyond
+ * simply closing the stream).
  *
  * ## Why this lives apart from `SessionLock`
  *
@@ -40,7 +57,8 @@ import type { StoredEventRecord } from "@shadow/sessions";
 /** One message published on a session's bus. See this module's doc for why the payload isn't just `StoredEventRecord`. */
 export type SessionBusMessage =
   | { readonly kind: "record"; readonly record: StoredEventRecord }
-  | { readonly kind: "text-delta"; readonly turnId: string; readonly text: string };
+  | { readonly kind: "text-delta"; readonly turnId: string; readonly text: string }
+  | { readonly kind: "ended" };
 
 type SessionBusListener = (message: SessionBusMessage) => void;
 

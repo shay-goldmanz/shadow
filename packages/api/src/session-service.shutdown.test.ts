@@ -102,6 +102,7 @@ function operatorTextsOf(records: Awaited<ReturnType<SessionStore["readEvents"]>
 class DeltaThenGatedSession implements AgenticSession {
   sessionId: string | undefined;
   usage = ZERO_USAGE;
+  readonly failedSessionIds: readonly string[] = [];
   readonly prompts: string[] = [];
   private gateResolve: (() => void) | undefined;
   private gatedResolve: (() => void) | undefined;
@@ -194,7 +195,7 @@ async function withShutdownHarness<T>(fn: (harness: ShutdownHarness) => Promise<
     });
 
     const store = new InMemorySessionStore();
-    const service = new SessionService({ store, shadowAgent });
+    const service = new SessionService({ store, shadowAgent, agenticSessionPort: sessions });
 
     return await fn({ service, store, sessions, volume });
   } finally {

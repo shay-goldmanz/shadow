@@ -188,6 +188,7 @@ export class FileSystemSessionStore implements SessionStore {
       title: patch.title !== undefined ? patch.title : existing.title,
       lastActiveAt: patch.lastActiveAt ?? existing.lastActiveAt,
       sdkSessionId: patch.sdkSessionId ?? existing.sdkSessionId,
+      failedSdkSessionIds: patch.failedSdkSessionIds ?? existing.failedSdkSessionIds,
     };
     await this.writeMeta(updated);
   }

@@ -138,6 +138,25 @@ export class ConversationRegistry {
     }
   }
 
+  /**
+   * Removes and releases `sessionId`'s live handle, if present — a no-op
+   * (not an error) if it isn't registered, the ordinary shape for a cold
+   * session `DELETE /api/sessions/:id` (T3.1) targets. Unlike `evict()`,
+   * which fires-and-forgets `release()` (best-effort, background eviction
+   * pressure), this AWAITS it: deletion is a foreground, explicit,
+   * operator-initiated action whose caller (`SessionService.deleteSession`)
+   * wants the in-memory handle genuinely gone before it moves on to
+   * deleting the underlying SDK transcript by id — release failing is still
+   * swallowed (`.catch`), matching `evict()`'s stance that a handle's own
+   * teardown failure must never block the caller that asked for it.
+   */
+  async remove(sessionId: string): Promise<void> {
+    const conversation = this.byId.get(sessionId);
+    if (!conversation) return;
+    this.byId.delete(sessionId);
+    await conversation.release().catch(() => {});
+  }
+
   /** Release every held conversation and empty the registry — server shutdown. Ignores busy-ness: shutdown means nothing is going to keep running these turns anyway (T2.9 owns winding turns down *before* this is called). */
   async releaseAll(): Promise<void> {
     const conversations = [...this.byId.values()];

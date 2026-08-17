@@ -179,6 +179,36 @@ export function runSessionStoreContractTests(
         const { store } = harness;
         await expectRejection(store.update("missing", { title: "x" }), SessionNotFoundError);
       });
+
+      // F7 review fix (T3.1): `failedSdkSessionIds` round-trips the same way
+      // `sdkSessionId` does — absent until set, then set-and-survives, except
+      // it replaces wholesale rather than being set once (a later failed
+      // turn can add more ids, `session-service.ts`'s `finishTurn` doc).
+      test("failedSdkSessionIds is absent until set", async () => {
+        const { store } = harness;
+        await store.create(makeMeta("no-failed-ids-yet"));
+        const meta = await store.get("no-failed-ids-yet");
+        expect(meta?.failedSdkSessionIds).toBeUndefined();
+      });
+
+      test("failedSdkSessionIds is set, replaces wholesale on a later patch, and survives unrelated patches", async () => {
+        const { store } = harness;
+        await store.create(makeMeta("gets-failed-ids"));
+
+        await store.update("gets-failed-ids", { failedSdkSessionIds: ["sdk-failed-1"] });
+        expect((await store.get("gets-failed-ids"))?.failedSdkSessionIds).toEqual(["sdk-failed-1"]);
+
+        await store.update("gets-failed-ids", { lastActiveAt: "2026-01-06T00:00:00.000Z" });
+        expect((await store.get("gets-failed-ids"))?.failedSdkSessionIds).toEqual(["sdk-failed-1"]);
+
+        await store.update("gets-failed-ids", {
+          failedSdkSessionIds: ["sdk-failed-1", "sdk-failed-2"],
+        });
+        expect((await store.get("gets-failed-ids"))?.failedSdkSessionIds).toEqual([
+          "sdk-failed-1",
+          "sdk-failed-2",
+        ]);
+      });
     });
 
     describe("append / readEvents", () => {

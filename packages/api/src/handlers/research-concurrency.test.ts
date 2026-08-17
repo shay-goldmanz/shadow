@@ -140,6 +140,7 @@ class ControllableResearchSessionPort implements AgenticSessionPort {
     return {
       sessionId: undefined,
       usage: ZERO_USAGE,
+      failedSessionIds: [],
       async *stream(): AsyncGenerator<AgenticStreamEvent, void, undefined> {
         startResolvers[index]?.();
         await gate; // held open until the test releases it

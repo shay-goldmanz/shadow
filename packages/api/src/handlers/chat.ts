@@ -165,6 +165,16 @@ export async function postChat(deps: ApiDeps, req: BunRequest<"/api/chat">): Pro
             send(wire.event, wire.data);
             continue;
           }
+          if (msg.kind === "ended") {
+            // Structurally unreachable here (T3.1): `enqueueTurn`'s own
+            // per-turn bus filter (`session-service.ts`) never forwards an
+            // `"ended"` message to a specific turn's channel — deleting a
+            // session 409s while any turn is running/queued, so this turn's
+            // channel is always already closed by the time one could ever be
+            // published. Handled for type-safety/forward-compat, not because
+            // this path is expected to run.
+            continue;
+          }
           const { event } = msg.record;
           if (event.type === "turn-boundary") {
             // No wire representation for the boundary record itself

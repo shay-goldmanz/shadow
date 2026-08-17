@@ -96,6 +96,7 @@ type AnyToolDefinition = ToolDefinition<any>;
 class ScriptedToolLoopSession implements AgenticSession {
   sessionId: string | undefined;
   usage = ZERO_USAGE;
+  readonly failedSessionIds: readonly string[] = [];
   readonly prompts: string[] = [];
 
   constructor(
@@ -276,6 +277,7 @@ describe("WebResearchToolAgent — concurrency guard", () => {
       class BlockingSession implements AgenticSession {
         sessionId: string | undefined = "blocking-session";
         usage = ZERO_USAGE;
+        readonly failedSessionIds: readonly string[] = [];
         async *stream(): AsyncGenerator<AgenticStreamEvent, void, undefined> {
           await gate;
           const result: AgenticTurnResult = {

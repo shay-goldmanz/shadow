@@ -176,9 +176,10 @@ pure replay — every stored event from `fromSeq` onward, then a `done` event, t
 closes. With `?follow=true`: replay, then the stream **stays open** and keeps delivering new
 events as they happen, across idle gaps between turns — a `turn-boundary` finishing is *not* a
 close condition, so a second tab watching a session doesn't go blind the moment the turn it
-happened to catch finishes. It closes only on client disconnect (or, today, the server process
-exiting — session deletion has no way to signal an open follow stream yet, since there is no
-delete endpoint; see `DELETE /api/sessions/:id`, T3.1, not yet built).
+happened to catch finishes. It closes on client disconnect, the server process exiting, or the
+session being deleted (`DELETE /api/sessions/:id`, below) — deletion publishes a close signal on
+the session's internal bus before the store row is removed, so an open follow stream ends instead
+of sitting inertly subscribed to an id that no longer exists.
 
 **Every event derived from a stored record carries `seq` in its `data`** — replayed or freshly
 live, identically — which is what makes `seq` usable as a reconnect cursor regardless of which
@@ -215,6 +216,46 @@ far with it). A viewer that subscribes mid-message only ever sees the delta chun
 reconnect mid-message self-correcting instead of duplicating text.
 
 **Heartbeats** work identically to `POST /api/chat`'s (an SSE comment line every 5 seconds).
+
+## Session management
+
+```
+GET    /api/sessions              ?volume=:slug        → { sessions: SessionSummary[] }
+PATCH  /api/sessions/:id          { title }             → { session: SessionSummary }
+DELETE /api/sessions/:id                                → { deleted: true }
+```
+
+`SessionSummary` is `{ id, volume, title, createdAt, lastActiveAt }` — a curated view of the
+stored `SessionMeta`, the same "summary, not the raw domain type" move `ChapterSummary` makes for
+volumes. The underlying SDK transcript id(s) (`sdkSessionId`, and any `failedSdkSessionIds` a
+failed first turn left behind — see the DELETE entry below) never cross the wire; they're
+`DELETE`'s own bookkeeping, not something a session list has any use for.
+
+**`GET /api/sessions?volume=:slug`** lists sessions newest-first by `lastActiveAt` (a session that
+was just turned on jumps to the top). Omitting `?volume=` lists every session across every
+volume — the same shape either way, so filtering is a no-cost narrowing, not a different endpoint.
+
+**`PATCH /api/sessions/:id { title }`** sets the title, overriding whatever was there — including
+the first-turn default (the operator's first message, first line, clipped to ~60 chars, set once
+`POST /api/chat`'s first turn completes). `title` is required and must be a non-empty string; a
+missing/non-string/empty title is `400 invalid_request`. `404 session_not_found` if `:id` is
+unknown.
+
+**`DELETE /api/sessions/:id`** removes the session's store directory, its live registry handle (if
+any — a cold session has none), and every SDK transcript it ever produced — the successful one
+(`sdkSessionId`) and every failed first-turn one (`failedSdkSessionIds`: a first turn that failed
+via an `isError` result can still have left a transcript on disk under an id that never became
+`sdkSessionId`; deleting only the latter would leave that one permanently unreachable). All of it
+goes together, or none of it does:
+
+- **`409 session_busy`** if the session currently has a turn running or queued — delete once it
+  settles (poll `GET /api/sessions/:id/events`, or just retry).
+- **`404 session_not_found`** if `:id` is unknown.
+- Works identically for a **cold session** (no live registry handle, e.g. evicted or untouched
+  since the last server restart) — deletion is driven entirely from the stored `SessionMeta`, never
+  through a live conversation handle, so there is nothing a cold session lacks that this needs.
+- **Closes any open `?follow=true` stream** on this session (`GET /api/sessions/:id/events`,
+  above) instead of leaving it open and inert.
 
 ## Wire types
 
@@ -270,8 +311,9 @@ transport concerns that have no pillar to originate from:
 
 | code | status | from | meaning |
 |---|---|---|---|
-| `session_not_found` | 404 | `POST /api/chat`, `GET /api/sessions/:id/events` | `sessionId`/`:id` is unknown to both the live registry and the on-disk store |
+| `session_not_found` | 404 | `POST /api/chat`, `GET /api/sessions/:id/events`, `PATCH`/`DELETE /api/sessions/:id` | `sessionId`/`:id` is unknown to both the live registry and the on-disk store |
 | `turn_queue_busy` | 409 | `POST /api/chat` | this session already has 4 turns queued ahead of this one (multiple tabs racing one session); back off and retry, or wait for the in-flight turn |
+| `session_busy` | 409 | `DELETE /api/sessions/:id` | this session has a turn running or queued; delete once it settles |
 | `shutting_down` | 503 | `POST /api/chat` | the server is winding down in-flight turns and is not accepting new ones; retry once it has restarted |
 
 ## Not in scope

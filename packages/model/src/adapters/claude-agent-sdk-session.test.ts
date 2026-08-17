@@ -232,6 +232,11 @@ describe("createClaudeAgentSdkSessionPort — first turn derived from a successf
     expect(first.isError).toBe(true);
     expect(first.sessionId).toBe(failedSessionId); // reported to the caller...
     expect(session.sessionId).toBeUndefined(); // ...but NOT latched as this handle's own session
+    // F7 review fix (T3.1): the failed id IS discoverable via the
+    // `failedSessionIds` getter, even though nothing calls `close()` on the
+    // ordinary path — this is what lets `@shadow/agent`/`@shadow/api` record
+    // it for later deletion.
+    expect(session.failedSessionIds).toEqual([failedSessionId]);
 
     await runToCompletion(session, "retry");
     expect(calls).toHaveLength(2);
@@ -409,6 +414,9 @@ describe("createClaudeAgentSdkSessionPort — close()", () => {
     const first = await runToCompletion(session, "first turn");
     expect(first.isError).toBe(true);
     expect(first.sessionId).toBe(resumeTarget); // still reported to the caller...
+    // F7 review fix (T3.1): the exclusion holds at the getter too — the
+    // resume target never shows up as a "failed" id to begin with.
+    expect(session.failedSessionIds).toEqual([]);
 
     await session.close?.();
     // ...but NOT deleted: it's the operator's pre-existing transcript, not

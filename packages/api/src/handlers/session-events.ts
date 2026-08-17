@@ -92,25 +92,18 @@
  * 5s interval, invisible to any real client but real traffic to the
  * connection and any proxy in front of it.
  *
- * ## Close conditions, and the seam left for T3.1
+ * ## Close conditions
  *
- * Today there are exactly two ways this stream ends: the client
- * disconnects (`cancel()` — unsubscribes and ends the channel, unblocking
- * a `for await` that would otherwise wait forever) or the process exits.
- * Session *deletion* (T3.1) has no signal to react to yet — deleting a
- * session out from under an open follow stream today would simply leave
- * the stream open, quietly subscribed to a session id the store no longer
- * knows about, never receiving anything further (nothing can `append` to a
- * deleted session, so nothing new is ever published for it either) until
- * the client eventually gives up or disconnects. That's inert, not wrong,
- * but not the same as an explicit close. The seam: `SessionBusMessage`
- * (`../session-bus.ts`) would grow a third case (e.g. `{ kind: "ended" }`)
- * that a delete path publishes before tearing down the store row, and the
- * `for await` loop below would treat it as a terminal signal — `channel.end()`
- * itself, or a `break` — the same way `isTurnEndedRecord` already does for
- * `enqueueTurn`'s narrower per-turn case. Not built here: T3.1 is where
- * DELETE lands, and this endpoint has no delete path to react to before
- * then.
+ * Three ways this stream ends: the client disconnects (`cancel()` —
+ * unsubscribes and ends the channel, unblocking a `for await` that would
+ * otherwise wait forever), the process exits, or the session is deleted
+ * (T3.1). `SessionService.deleteSession` publishes `{ kind: "ended" }`
+ * (`../session-bus.ts`'s three-case `SessionBusMessage`) after the store row
+ * and every SDK transcript are gone; the `for await` loop below `break`s on
+ * it — the same shape `isTurnEndedRecord` already used for `enqueueTurn`'s
+ * narrower per-turn case, just session-wide and unconditional rather than
+ * filtered to one turn. No wire event accompanies it: a deleted session has
+ * no client-visible content left to send, only a stream to close.
  */
 
 import type { StoredEventRecord } from "@shadow/sessions";
@@ -252,6 +245,14 @@ export async function getSessionEvents(
         // condition (this module's doc).
         for await (const message of channel as PushChannel<SessionBusMessage>) {
           if (closed) break;
+          if (message.kind === "ended") {
+            // T3.1: the session was deleted out from under this stream
+            // (`session-bus.ts`'s module doc — the seam this module used to
+            // just document as "not built here"). No wire event: a deleted
+            // session has no client-visible content left to send, only a
+            // stream to close, same as any other close condition below.
+            break;
+          }
           if (message.kind === "text-delta") {
             const wire = textDeltaWireEvent(message.text);
             send(wire.event, wire.data);

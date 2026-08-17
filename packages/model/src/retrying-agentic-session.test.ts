@@ -77,6 +77,7 @@ function sessionThatYieldsThenThrows(deltaText: string, error: unknown): Agentic
   return {
     sessionId: undefined,
     usage: ZERO_USAGE,
+    failedSessionIds: [],
     async *stream(): AsyncGenerator<AgenticStreamEvent, void, undefined> {
       yield { type: "text-delta", text: deltaText };
       throw error;
@@ -89,6 +90,7 @@ function sessionThatYieldsThenErrors(deltaText: string): AgenticSession {
   return {
     sessionId: undefined,
     usage: ZERO_USAGE,
+    failedSessionIds: [],
     async *stream(): AsyncGenerator<AgenticStreamEvent, void, undefined> {
       yield { type: "text-delta", text: deltaText };
       yield {
@@ -381,6 +383,7 @@ function trackedInnerSession(
   const session: AgenticSession = {
     sessionId: undefined,
     usage: ZERO_USAGE,
+    failedSessionIds: [],
     stream(): AsyncGenerator<AgenticStreamEvent, void, undefined> {
       const thisAttempt = attemptIndex++;
       log.push(`start-${thisAttempt}`);

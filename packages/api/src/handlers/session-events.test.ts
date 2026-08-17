@@ -180,6 +180,7 @@ class GatedReadEventsStore implements SessionStore {
 class ControllableSession implements AgenticSession {
   sessionId: string | undefined;
   usage = ZERO_USAGE;
+  readonly failedSessionIds: readonly string[] = [];
   readonly prompts: string[] = [];
   private turnIndex = 0;
   private readonly startResolvers: (() => void)[] = [];
@@ -274,7 +275,7 @@ async function withGatedApi<T>(fn: (harness: GatedHarness) => Promise<T>): Promi
     });
 
     const store = new GatedReadEventsStore(new InMemorySessionStore());
-    const sessionService = new SessionService({ store, shadowAgent });
+    const sessionService = new SessionService({ store, shadowAgent, agenticSessionPort: sessions });
 
     const deps: ApiDeps = {
       volumeStore,
@@ -335,6 +336,7 @@ async function postChatOnGatedHarness(
 class SteppedSession implements AgenticSession {
   sessionId: string | undefined;
   usage = ZERO_USAGE;
+  readonly failedSessionIds: readonly string[] = [];
   readonly prompts: string[] = [];
   private turnIndex = 0;
   private readonly channels: PushChannel<AgenticStreamEvent>[] = [];
@@ -428,7 +430,7 @@ async function withSteppedApi<T>(fn: (harness: SteppedHarness) => Promise<T>): P
     });
 
     const store = new InMemorySessionStore();
-    const sessionService = new SessionService({ store, shadowAgent });
+    const sessionService = new SessionService({ store, shadowAgent, agenticSessionPort: sessions });
 
     const deps: ApiDeps = {
       volumeStore,

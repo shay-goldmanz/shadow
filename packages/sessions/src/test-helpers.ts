@@ -98,6 +98,7 @@ export class InMemorySessionStore implements SessionStore {
       title: patch.title !== undefined ? patch.title : record.meta.title,
       lastActiveAt: patch.lastActiveAt ?? record.meta.lastActiveAt,
       sdkSessionId: patch.sdkSessionId ?? record.meta.sdkSessionId,
+      failedSdkSessionIds: patch.failedSdkSessionIds ?? record.meta.failedSdkSessionIds,
     };
   }
 

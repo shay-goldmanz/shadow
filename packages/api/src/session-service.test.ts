@@ -138,7 +138,7 @@ async function withSessionService<T>(
     });
 
     const store = new InMemorySessionStore();
-    const service = new SessionService({ store, shadowAgent });
+    const service = new SessionService({ store, shadowAgent, agenticSessionPort: sessions });
 
     return await fn({ service, store, sessions, volume });
   } finally {
@@ -150,6 +150,7 @@ async function withSessionService<T>(
 class ControllableSession implements AgenticSession {
   sessionId: string | undefined;
   usage = ZERO_USAGE;
+  readonly failedSessionIds: readonly string[] = [];
   readonly prompts: string[] = [];
   private turnIndex = 0;
   private readonly startResolvers: (() => void)[] = [];
@@ -249,7 +250,7 @@ async function withGatedSessionService<T>(
 
     const store = new InMemorySessionStore();
     const service = new SessionService(
-      { store, shadowAgent },
+      { store, shadowAgent, agenticSessionPort: sessions },
       { registryMaxSize: options.registryMaxSize },
     );
 
@@ -656,6 +657,50 @@ describe("SessionService — meta bookkeeping", () => {
 
       const meta = await store.get(enqueued.sessionId);
       expect(meta?.title).toBe(`${"x".repeat(60)}…`);
+    });
+  });
+
+  // F7 review fix (T3.1) — a failed FIRST turn's SDK session id (an `isError`
+  // result carrying a session id that is NOT the resume target) is merged
+  // into `meta.failedSdkSessionIds`, closing `docs/DECISIONS.md` D6b's
+  // "orphaned twice over" gap: `sdkSessionId` never latches from an error
+  // result (T1.1), so without this the id would be unreachable by anything,
+  // including the future `DELETE /api/sessions/:id`.
+  test("a failed first turn (isError result) records its session id in meta.failedSdkSessionIds, not meta.sdkSessionId", async () => {
+    const respond: FakeAgenticTurnResponder = () => ({ isError: true, stopReason: "overloaded" });
+    await withSessionService(respond, async ({ service, store, sessions, volume }) => {
+      const enqueued = await service.enqueueTurn({ volume }, "First message");
+      await drainToEnd(enqueued.events);
+
+      const meta = await store.get(enqueued.sessionId);
+      // Never latched — the whole point of T1.1's first-turn derivation.
+      expect(meta?.sdkSessionId).toBeUndefined();
+      // But reachable here instead, carrying the underlying fake session's
+      // own (unlatched) id — not the resume target, since this conversation
+      // was never resumed.
+      const underlying = sessions.sessions[0];
+      expect(underlying?.failedSessionIds).toHaveLength(1);
+      expect(meta?.failedSdkSessionIds).toEqual(underlying?.failedSessionIds);
+    });
+  });
+
+  test("failedSdkSessionIds accumulates (union, not replace) across repeated failed turns on the same handle", async () => {
+    const respond: FakeAgenticTurnResponder = () => ({ isError: true, stopReason: "overloaded" });
+    await withSessionService(respond, async ({ service, store, volume }) => {
+      const first = await service.enqueueTurn({ volume }, "First message");
+      await drainToEnd(first.events);
+      const afterFirst = await store.get(first.sessionId);
+      expect(afterFirst?.failedSdkSessionIds).toHaveLength(1);
+
+      // A second turn on the SAME (still cached, still un-resumed) handle —
+      // `isFirstTurn` stays true (T1.1: derived from a successful id, which
+      // this handle has never latched), so this is scripted to fail again.
+      const second = await service.enqueueTurn({ sessionId: first.sessionId }, "Still failing");
+      await drainToEnd(second.events);
+      const afterSecond = await store.get(first.sessionId);
+      // Same handle, same fake session id both times (`FakeAgenticSession`
+      // mints one id per handle) — the union collapses to one entry, not two.
+      expect(afterSecond?.failedSdkSessionIds).toEqual(afterFirst?.failedSdkSessionIds);
     });
   });
 });

@@ -119,7 +119,11 @@ export async function withApi<T>(fn: (harness: TestHarness) => Promise<T>): Prom
     });
 
     const sessionStore = new InMemorySessionStore();
-    const sessionService = new SessionService({ store: sessionStore, shadowAgent });
+    const sessionService = new SessionService({
+      store: sessionStore,
+      shadowAgent,
+      agenticSessionPort: sessions,
+    });
 
     const deps: ApiDeps = {
       volumeStore,
@@ -189,7 +193,11 @@ export async function withScriptedApi<T>(
     });
 
     const sessionStore = new InMemorySessionStore();
-    const sessionService = new SessionService({ store: sessionStore, shadowAgent });
+    const sessionService = new SessionService({
+      store: sessionStore,
+      shadowAgent,
+      agenticSessionPort: sessions,
+    });
 
     const deps: ApiDeps = {
       volumeStore,

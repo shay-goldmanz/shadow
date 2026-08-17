@@ -121,7 +121,14 @@ export function buildRealApiDeps(options: BuildRealApiDepsOptions = {}): ApiDeps
   // pointed at one corpus (see `sessionCwd`'s comment above for the exact
   // incident this mirrors for chat's own working directory).
   const sessionStore = new FileSystemSessionStore(root);
-  const sessionService = new SessionService({ store: sessionStore, shadowAgent });
+  // `agenticSession` — the SAME model port `shadowAgent` was built with
+  // above — is what `SessionService.deleteSession` (T3.1) drives
+  // `deleteStoredSession` through; see `SessionServiceDeps.agenticSessionPort`'s doc.
+  const sessionService = new SessionService({
+    store: sessionStore,
+    shadowAgent,
+    agenticSessionPort: agenticSession,
+  });
 
   return {
     volumeStore,
