@@ -63,7 +63,6 @@ import {
   LiveSearchUnavailableError,
   NoFindingsProducedError,
   PayloadTooLargeError,
-  ResearchAgentBusyError,
   ResearchTurnFailedError,
   RetrievalNetworkError,
   RetrievalTimeoutError,
@@ -137,6 +136,23 @@ const PILLAR_ERROR_TABLE: ReadonlyArray<readonly [AnyErrorCtor, number, string]>
   // ---- @shadow/research: only reachable if research ever runs outside
   // the chat auto-turn loop's own try/catch (defensive; not currently
   // exercised by any @shadow/api endpoint directly) ----
+  //
+  // P3 review fix: `research_agent_busy` (`ResearchAgentBusyError`) is
+  // retired from this table. PLAN.md's T0.1 entry always said this row
+  // stays "until Tier 0 is proven live, then is retired" — Tier 0 removed
+  // the shared research agent that could ever throw it on a real request
+  // path (`PerBriefResearchAgent`'s own doc: a fresh `WebResearchToolAgent`
+  // per brief means its `busy` guard can never actually fire from here),
+  // and that's now proven, not just designed: T0.3's handler test and the
+  // full sessions e2e both exercise concurrent research without it ever
+  // surfacing (`handlers/research-concurrency.test.ts`'s own module doc).
+  // `ResearchAgentBusyError` itself is NOT retired — `WebResearchToolAgent`
+  // still throws it from its own instance-level guard (`web-research-tool-
+  // agent.ts`) and `web-research-tool-agent.test.ts` still pins that — only
+  // this API-level mapping row, unreachable in practice, is gone. A future
+  // caller that DID somehow trigger it now falls through to the generic
+  // `internal_error` 500 below, same as any other genuinely-unexpected
+  // pillar error this table doesn't name.
   [RetrievalNetworkError, 502, "retrieval_network_error"],
   [RetrievalTimeoutError, 504, "retrieval_timeout"],
   [PayloadTooLargeError, 502, "retrieval_payload_too_large"],
@@ -149,7 +165,6 @@ const PILLAR_ERROR_TABLE: ReadonlyArray<readonly [AnyErrorCtor, number, string]>
   [SourceBudgetExceededError, 400, "source_budget_exceeded"],
   [ResearchTurnFailedError, 500, "research_turn_failed"],
   [NoFindingsProducedError, 500, "no_findings_produced"],
-  [ResearchAgentBusyError, 409, "research_agent_busy"],
 ];
 
 function detailsOf(error: Error): Record<string, unknown> {

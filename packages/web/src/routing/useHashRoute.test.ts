@@ -21,6 +21,21 @@ describe("hash routing", () => {
     });
   });
 
+  // T2.8: the session's own address — mounting it replays the stored
+  // transcript and follows it live.
+  test("parses a chat route with a session id, decoding it", () => {
+    expect(parseHash("#/v/design-inspiration/chat/sess_123")).toEqual({
+      name: "chat",
+      slug: "design-inspiration",
+      sessionId: "sess_123",
+    });
+    expect(parseHash("#/v/design-inspiration/chat/sess%20with%20space")).toEqual({
+      name: "chat",
+      slug: "design-inspiration",
+      sessionId: "sess with space",
+    });
+  });
+
   test("parses a chapter route, decoding the slug", () => {
     expect(parseHash("#/v/design-inspiration/c/epoch-one-pagers")).toEqual({
       name: "chapter",
@@ -34,6 +49,7 @@ describe("hash routing", () => {
       { name: "volumes" as const },
       { name: "volume" as const, slug: "a b" },
       { name: "chat" as const, slug: "a b" },
+      { name: "chat" as const, slug: "a b", sessionId: "sess a/b" },
       { name: "chapter" as const, slug: "a b", chapter: "c/d" },
     ];
     for (const route of routes) {

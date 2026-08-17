@@ -487,6 +487,24 @@ export interface LintReport {
   readonly findings: readonly LintFinding[];
 }
 
+// ---- sessions (T3.1/T3.2) --------------------------------------------------
+
+/**
+ * `handlers/sessions.ts`'s `toSessionSummary` — a curated view of
+ * `@shadow/sessions`' `SessionMeta`, not the type itself: `sdkSessionId`/
+ * `failedSdkSessionIds` are internal SDK-transcript bookkeeping and never
+ * cross the wire (that handler's own module doc). `title` is `null` until
+ * either the first turn completes (`defaultTitleFrom`, `session-service.ts`)
+ * or an operator `PATCH` sets one explicitly.
+ */
+export interface SessionSummary {
+  readonly id: string;
+  readonly volume: string;
+  readonly title: string | null;
+  readonly createdAt: string;
+  readonly lastActiveAt: string;
+}
+
 // ---- chat / SSE (D5, D6, D9) ----------------------------------------------
 
 export interface ChatInput {
@@ -537,7 +555,44 @@ export interface RepairDecision {
  */
 export type ChatStreamEvent =
   | { readonly event: "session"; readonly data: { readonly sessionId: string } }
-  | { readonly event: "text"; readonly data: { readonly delta: string } }
+  // T2.2's new wire event (F7 review fix — the web types/fake were built
+  // before it existed). The user bubble: emitted once per turn, right
+  // after `session` and before any agent event (`@shadow/api`'s
+  // `handlers/chat.ts` synthesizes it — `@shadow/agent` never emits an
+  // `operator-message` `ShadowEvent`). See `event-mapping.ts`'s module doc
+  // for the full live/replay story.
+  | { readonly event: "operator"; readonly data: { readonly text: string } }
+  // `seq` (F2/F4 review fix): present ONLY on `GET /api/sessions/:id/events`
+  // (`POST /api/chat` never stamps one — `@shadow/api`'s `event-mapping.ts`
+  // module doc). Its presence, not its value, is the semantic switch
+  // `chat-transcript.ts`'s reducer reads: a `seq`-carrying `text` is the
+  // FULL text of one stored `assistant-message` record (the follow
+  // endpoint's live tail now maps that record the same way replay always
+  // has, instead of suppressing it) and REPLACES the current assistant
+  // bubble outright; a seq-less `text` is one live, transient, chunked
+  // delta and APPENDS. See `SessionEventEnvelope`'s doc below for why this
+  // is the fix for a viewer who joined mid-message.
+  | { readonly event: "text"; readonly data: { readonly delta: string; readonly seq?: number } }
+  // T2.8's new wire event — `GET /api/sessions/:id/events` (T2.7) only, the
+  // one `turn-boundary` shape that gets a wire representation
+  // (`@shadow/api`'s `event-mapping.ts` module doc): a turn stalled with no
+  // further events ever coming for it. `POST /api/chat` never sends this —
+  // its own stream just ends (a client-side signal `chat-transcript.ts`'s
+  // `markInterruptedIfPending` covers separately, for the shape T2.1's
+  // torn-tail tolerance can produce that never even wrote a boundary
+  // record, so the wire has nothing to carry at all).
+  | { readonly event: "turn.interrupted"; readonly data: Record<string, never> }
+  // F3 review fix — `GET /api/sessions/:id/events` only, same family as
+  // `turn.interrupted` above: the OTHER `turn-boundary` outcome, a turn that
+  // finished normally. Without this, a follow viewer's `turnPending`
+  // (`chat-transcript.ts`'s `ChatState` doc) had no way to learn a turn it
+  // watched actually completed — `?follow=true` never sends `done` (a
+  // follow stream stays open across turns on purpose), so a later
+  // connection blip on an already-finished turn would get mis-marked
+  // `turn.interrupted` by `markInterruptedIfPending`, offering a live Retry
+  // for a turn that already succeeded (resending would duplicate it). The
+  // reducer clears `turnPending` on this and nothing else.
+  | { readonly event: "turn.ended"; readonly data: Record<string, never> }
   | {
       readonly event: "research.started";
       readonly data: { readonly briefId: string; readonly brief: ResearchBrief };
@@ -595,6 +650,50 @@ export type ChatStreamEvent =
     }
   | { readonly event: "error"; readonly data: { readonly message: string; readonly code: string } }
   | { readonly event: "done"; readonly data: Record<string, never> };
+
+/**
+ * One event from `GET /api/sessions/:id/events` (T2.7/T2.8) — replay,
+ * optionally followed live. The same `ChatStreamEvent` vocabulary
+ * `POST /api/chat` sends (`session` never actually appears; that event is
+ * `POST /api/chat`-only, minted at enqueue time, not stored), plus
+ * `turn.interrupted` and `turn.ended`.
+ *
+ * `seq` is lifted to the ENVELOPE rather than folded into each variant's
+ * `data` — `ChatStreamEvent`'s own shapes stay exactly what `POST /api/chat`
+ * sends, with no endpoint-specific field bolted onto all thirteen of them —
+ * and is `undefined` for the two events this endpoint can send that carry
+ * no backing `StoredEventRecord`: a live-tail `text` DELTA (chunked, no
+ * seq'd record of its own) and the replay-only `done` marker (not derived
+ * from any one record; `?follow=true` never sends it at all — `@shadow/api`'s
+ * `session-events.ts` module doc). `seq` is the reconnect cursor per T2.7's
+ * inclusive `fromSeq` contract: reconnecting with `fromSeq = seq + 1` never
+ * re-delivers this event and never skips whatever came after it either.
+ *
+ * **F2/F4 review fix — what a `seq`-carrying `text` actually means.** The
+ * claim this doc used to make here — a live delta's missing `seq` "doesn't
+ * matter because the eventual `assistant-message` record's seq covers the
+ * text it sums to" — was false: the follow endpoint's live tail used to
+ * suppress the stored `assistant-message` record entirely (the same
+ * suppression the LIVE `POST /api/chat` path needs, to avoid double-sending
+ * text it already streamed chunk by chunk — but the follow endpoint has no
+ * such live history to avoid duplicating, for a viewer who only just
+ * subscribed). A viewer who joined mid-message therefore never received
+ * that message's prefix from BEFORE they joined, and nothing ever arrived to
+ * correct that gap. Fixed: the follow endpoint's live tail now maps a
+ * completed `assistant-message` record the same way replay always has —
+ * one `seq`-stamped `text` event carrying the FULL accumulated string. The
+ * client reducer (`../pages/chat-transcript.ts`) reads `seq`'s mere
+ * PRESENCE as the semantic switch: a `seq`-carrying `text` REPLACES the
+ * current assistant bubble outright (it is the authoritative full text,
+ * self-correcting any prefix loss or, on a `fromSeq` reconnect after a
+ * partially-seen message, duplication); a seq-less `text` is a live,
+ * transient, chunked delta and APPENDS, exactly as before.
+ */
+export interface SessionEventEnvelope {
+  readonly event: ChatStreamEvent["event"];
+  readonly data: unknown;
+  readonly seq: number | undefined;
+}
 
 // ---- errors ---------------------------------------------------------------
 

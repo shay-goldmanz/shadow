@@ -35,7 +35,12 @@ export type {
   FakeAgenticTurnResponder,
   FakeAgenticTurnScript,
 } from "./fakes/fake-agentic-session.ts";
-export { FakeAgenticSession, FakeAgenticSessionPort } from "./fakes/fake-agentic-session.ts";
+export {
+  FakeAgenticSession,
+  FakeAgenticSessionPort,
+  failNTimesThenSucceed,
+  noConversationFoundError,
+} from "./fakes/fake-agentic-session.ts";
 export type { FakeStructuredGenerationResponder } from "./fakes/fake-structured-generation.ts";
 export { FakeStructuredGenerationPort } from "./fakes/fake-structured-generation.ts";
 export type { AuthResolution } from "./guardrail.ts";
@@ -52,11 +57,21 @@ export type {
   SystemPromptOption,
 } from "./ports/agentic-session.ts";
 export { runToCompletion } from "./ports/agentic-session.ts";
+export type { RetryPolicy, TurnFailure } from "./ports/retry-policy.ts";
+export {
+  conservativeRetryPolicy,
+  isNoConversationFoundError,
+  noRetryPolicy,
+  turnFailureFromErrorResult,
+  turnFailureFromThrown,
+} from "./ports/retry-policy.ts";
 export type {
   StructuredGenerationPort,
   StructuredGenerationRequest,
   StructuredGenerationResult,
 } from "./ports/structured-generation.ts";
+export type { SleepFn } from "./retrying-agentic-session.ts";
+export { RetryingAgenticSession, realSleep } from "./retrying-agentic-session.ts";
 export type { ToolDefinition, ToolResult, ToolServerHandle } from "./tools.ts";
 export { createToolServer, defineTool } from "./tools.ts";
 export type { TokenUsage } from "./usage.ts";

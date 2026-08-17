@@ -33,9 +33,11 @@ import {
   FakeStructuredGenerationPort,
 } from "@shadow/model";
 import type { ResearchBrief, ResearchBriefPort, ResearchResult } from "@shadow/research";
-import { ConversationRegistry } from "./conversation-registry.ts";
+import type { SessionStore } from "@shadow/sessions";
+import { InMemorySessionStore } from "@shadow/sessions/test-helpers";
 import type { ApiDeps } from "./deps.ts";
 import { createServer } from "./server.ts";
+import { SessionService } from "./session-service.ts";
 
 /** Always says every unmarked sentence is narrative — the common case for a harness that isn't specifically exercising the check-worthiness sweep. */
 export const alwaysNarrativeClassifier: CheckWorthinessClassifier = {
@@ -80,6 +82,8 @@ export interface TestHarness {
   readonly baseUrl: string;
   /** The fake session port backing `deps.shadowAgent`'s conversations — for tests that assert on session reuse. */
   readonly sessions: FakeAgenticSessionPort;
+  /** The `SessionStore` backing `deps.sessionService` — an `InMemorySessionStore` (`@shadow/sessions/test-helpers`), for tests that assert on stored transcripts directly rather than only through the wire. */
+  readonly sessionStore: SessionStore;
 }
 
 export interface WithApiOptions {
@@ -114,6 +118,13 @@ export async function withApi<T>(fn: (harness: TestHarness) => Promise<T>): Prom
       sessionCwd: root,
     });
 
+    const sessionStore = new InMemorySessionStore();
+    const sessionService = new SessionService({
+      store: sessionStore,
+      shadowAgent,
+      agenticSessionPort: sessions,
+    });
+
     const deps: ApiDeps = {
       volumeStore,
       evidenceStore,
@@ -126,7 +137,8 @@ export async function withApi<T>(fn: (harness: TestHarness) => Promise<T>): Prom
       structuredGenerationPort: new FakeStructuredGenerationPort(),
       missLog: new InMemoryMissLog(),
       shadowAgent,
-      conversations: new ConversationRegistry(),
+      sessionService,
+      conversations: sessionService.registry,
     };
 
     const server = createServer(deps, { port: 0, hostname: "localhost" });
@@ -137,6 +149,7 @@ export async function withApi<T>(fn: (harness: TestHarness) => Promise<T>): Prom
         server,
         baseUrl: server.url.toString().replace(/\/$/, ""),
         sessions,
+        sessionStore,
       });
     } finally {
       void server.stop(true);
@@ -179,6 +192,13 @@ export async function withScriptedApi<T>(
       sessionCwd: root,
     });
 
+    const sessionStore = new InMemorySessionStore();
+    const sessionService = new SessionService({
+      store: sessionStore,
+      shadowAgent,
+      agenticSessionPort: sessions,
+    });
+
     const deps: ApiDeps = {
       volumeStore,
       evidenceStore,
@@ -189,7 +209,8 @@ export async function withScriptedApi<T>(
       structuredGenerationPort: new FakeStructuredGenerationPort(),
       missLog: new InMemoryMissLog(),
       shadowAgent,
-      conversations: new ConversationRegistry(),
+      sessionService,
+      conversations: sessionService.registry,
     };
 
     const server = createServer(deps, { port: 0, hostname: "localhost" });
@@ -200,6 +221,7 @@ export async function withScriptedApi<T>(
         server,
         baseUrl: server.url.toString().replace(/\/$/, ""),
         sessions,
+        sessionStore,
       });
     } finally {
       void server.stop(true);
@@ -223,7 +245,7 @@ export interface ParsedSseEvent {
   readonly data: unknown;
 }
 
-/** Reads an SSE `Response` body to completion and parses it into `{event, data}` records, in wire order. */
+/** Reads an SSE `Response` body to completion and parses it into `{event, data}` records, in wire order. Only for a stream that actually ends (replay-only, or a live `POST /api/chat` turn) — a `follow=true` replay+follow stream never sends `done` on its own (T2.7: "turn ended is not a close condition"), so reading it to completion here would hang forever; use `readSseEventsUntil` for that. */
 export async function readAllSseEvents(response: Response): Promise<ParsedSseEvent[]> {
   const text = await response.text();
   const events: ParsedSseEvent[] = [];
@@ -237,6 +259,74 @@ export async function readAllSseEvents(response: Response): Promise<ParsedSseEve
     }
     if (dataLine === undefined) continue;
     events.push({ event: eventName, data: JSON.parse(dataLine) });
+  }
+  return events;
+}
+
+/**
+ * Incrementally reads an SSE `Response` body — a stream that may never
+ * close on its own (T2.7's `follow=true`) — until `predicate(events)`
+ * returns `true`, then cancels the reader (triggering the server-side
+ * `cancel()` callback, e.g. T2.7's `unsubscribe`) and returns whatever was
+ * collected. SSE comment lines (`: keepalive`, no `data:` line) are parsed
+ * and silently dropped, same as `readAllSseEvents`. Throws if `predicate`
+ * never becomes true within `timeoutMs`.
+ */
+export async function readSseEventsUntil(
+  response: Response,
+  predicate: (events: readonly ParsedSseEvent[]) => boolean,
+  options: { readonly timeoutMs?: number } = {},
+): Promise<ParsedSseEvent[]> {
+  const timeoutMs = options.timeoutMs ?? 5_000;
+  const body = response.body;
+  if (!body) throw new Error("readSseEventsUntil: response has no streamed body");
+  const reader = body.getReader();
+  const decoder = new TextDecoder();
+  const events: ParsedSseEvent[] = [];
+  let buffer = "";
+  const deadline = Date.now() + timeoutMs;
+
+  try {
+    while (!predicate(events)) {
+      const remaining = deadline - Date.now();
+      if (remaining <= 0) {
+        throw new Error("readSseEventsUntil: timed out waiting for predicate");
+      }
+      // `reader.read()` racing a timeout: a `follow=true` stream may sit
+      // idle indefinitely (correctly — see this module's doc), so nothing
+      // here can just `await reader.read()` unconditionally without risking
+      // hanging the whole test suite on a bug that stops events flowing.
+      const result = await Promise.race([
+        reader.read(),
+        new Promise<never>((_resolve, reject) => {
+          setTimeout(
+            () => reject(new Error("readSseEventsUntil: timed out waiting for predicate")),
+            remaining,
+          );
+        }),
+      ]);
+      if (result.done) break;
+      buffer += decoder.decode(result.value, { stream: true });
+      let boundary = buffer.indexOf("\n\n");
+      while (boundary !== -1) {
+        const block = buffer.slice(0, boundary);
+        buffer = buffer.slice(boundary + 2);
+        if (block.trim().length > 0) {
+          let eventName = "message";
+          let dataLine: string | undefined;
+          for (const line of block.split("\n")) {
+            if (line.startsWith("event: ")) eventName = line.slice("event: ".length);
+            else if (line.startsWith("data: ")) dataLine = line.slice("data: ".length);
+          }
+          if (dataLine !== undefined) {
+            events.push({ event: eventName, data: JSON.parse(dataLine) });
+          }
+        }
+        boundary = buffer.indexOf("\n\n");
+      }
+    }
+  } finally {
+    await reader.cancel().catch(() => {});
   }
   return events;
 }

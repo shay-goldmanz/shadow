@@ -11,7 +11,7 @@
  *   or fakes (tests).
  * - `buildRealApiDeps(options)` — the composition root: wires
  *   `FileSystemVolumeStore`, `FileSystemEvidenceStore`, `StructuralIndexer`,
- *   `WebResearchToolAgent`, the Tier 2 `Batched*` adapters, and
+ *   `PerBriefResearchAgent`, the Tier 2 `Batched*` adapters, and
  *   `@shadow/model`'s real ports into one `ApiDeps`. Used by `start.ts`
  *   only — nothing in a test should import it.
  * - `ApiDeps` — the seam every handler is written against.

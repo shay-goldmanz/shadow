@@ -47,11 +47,10 @@ describe.skipIf(!RUN_LIVE)("AgenticSearchProvider live smoke test (SHADOW_LIVE_T
       expect(() => new URL(hit.url)).not.toThrow();
     }
 
-    // Session reuse (D6): a second query on the same provider instance
-    // reuses the same session rather than paying the preamble again.
-    const firstSessionId = provider.sessionId;
-    expect(firstSessionId).toBeDefined();
-
+    // One-shot sessions (T0.5): a second query on the same provider
+    // instance runs on its own fresh, non-persisted session rather than
+    // reusing the first — this only proves the second call still
+    // succeeds independently, not that anything was shared.
     const second = await provider.search(
       { query: "Notion design system", maxResults: 3 },
       async () => {
@@ -59,6 +58,5 @@ describe.skipIf(!RUN_LIVE)("AgenticSearchProvider live smoke test (SHADOW_LIVE_T
       },
     );
     expect(second.hits.length).toBeGreaterThan(0);
-    expect(provider.sessionId).toBe(firstSessionId);
   }, 60_000);
 });

@@ -138,6 +138,24 @@ export interface AgenticSession {
   /** Usage accumulated across every turn sent through this session handle. */
   readonly usage: TokenUsage;
   /**
+   * Session ids an *error* result (`is_error: true`) reported but that were
+   * never latched into `sessionId` (T1.1's first-turn derivation) — the CLI
+   * may still have persisted a transcript under one of these before the
+   * turn failed. Excludes this handle's own `resume` target even when an
+   * error result echoes it back (F3 review fix — that id is a pre-existing
+   * transcript this handle didn't orphan, not a new one). Grows across every
+   * failed turn sent through this handle; nothing here clears it except
+   * `close()`. F7 review fix (T3.1): the caller-facing surface of
+   * `ClaudeAgentSdkSession`'s/`FakeAgenticSession`'s private
+   * `failedSessionIds` tracking (both pre-dating this getter, T1.1) — what
+   * lets `@shadow/agent`'s `ShadowConversation` and, through it,
+   * `@shadow/api`'s `SessionService.finishTurn` record a failed FIRST turn's
+   * id in `SessionMeta.failedSdkSessionIds` even though `close()` is never
+   * called on the ordinary path (see that class's doc). Empty when nothing
+   * has ever failed with a session id on this handle.
+   */
+  readonly failedSessionIds: readonly string[];
+  /**
    * Send one user turn, streaming events as they arrive. The final event is
    * always `{ type: "done", result }` — on every path, including an error
    * turn (`result.isError`) — so a consumer can always find the outcome by
@@ -170,6 +188,38 @@ export interface AgenticSession {
 
 export interface AgenticSessionPort {
   createSession(options?: AgenticSessionOptions): AgenticSession;
+  /**
+   * Delete a previously-persisted session's on-disk transcript by its SDK
+   * session id, with no live `AgenticSession` handle required (T2.4/D6b).
+   *
+   * Once sessions outlive the process (`@shadow/sessions`, Tier 2), the
+   * *only* thing that knows a session's SDK id after a restart or an
+   * eviction is stored metadata (`SessionMeta.sdkSessionId`) — there is no
+   * in-memory `AgenticSession` left to call `close()` through, and `close()`
+   * couldn't help anyway: it deletes ids a *live* handle latched during its
+   * own turns (`ownSessionId`/`failedSessionIds` on
+   * `ClaudeAgentSdkSession`), which a cold session never had a handle to
+   * latch in the first place. This method is the id-based counterpart that
+   * works regardless — wraps the Agent SDK's `deleteSession` directly, and
+   * is the sole deletion path callers should use going forward
+   * (`ShadowConversation.release()` no longer deletes anything; see its
+   * doc).
+   *
+   * **F1 review fix (T3.1): this is a no-op for an id whose transcript was
+   * never written, but only because the real adapter makes it one — the
+   * underlying SDK's own `deleteSession` does NOT no-op there, it throws.**
+   * A failed first turn can leave an id in `SessionMeta.failedSdkSessionIds`
+   * (T1.1/F7) with no transcript ever having been persisted for it (the CLI
+   * failed before writing anything); the real adapter
+   * (`../adapters/claude-agent-sdk-session.ts`) catches exactly that "not
+   * found" shape and resolves normally, so a caller here can rely on this
+   * method behaving as documented regardless of which of those two cases it
+   * hit. Any OTHER failure (permissions, disk, a genuinely unexpected error)
+   * still rejects with `AgenticSessionError`, which `SessionService.deleteSession`
+   * (`@shadow/api`) is the one place that decides how to handle — see that
+   * method's doc for the resulting partial-failure story.
+   */
+  deleteStoredSession(sdkSessionId: string): Promise<void>;
 }
 
 /**

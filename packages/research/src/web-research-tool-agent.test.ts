@@ -96,6 +96,7 @@ type AnyToolDefinition = ToolDefinition<any>;
 class ScriptedToolLoopSession implements AgenticSession {
   sessionId: string | undefined;
   usage = ZERO_USAGE;
+  readonly failedSessionIds: readonly string[] = [];
   readonly prompts: string[] = [];
 
   constructor(
@@ -137,6 +138,8 @@ class ScriptedToolLoopSessionPort implements AgenticSessionPort {
     this.sessions.push(session);
     return session;
   }
+
+  async deleteStoredSession(): Promise<void> {}
 }
 
 function toolDefinitionsOf(agent: WebResearchToolAgent): readonly AnyToolDefinition[] {
@@ -274,6 +277,7 @@ describe("WebResearchToolAgent — concurrency guard", () => {
       class BlockingSession implements AgenticSession {
         sessionId: string | undefined = "blocking-session";
         usage = ZERO_USAGE;
+        readonly failedSessionIds: readonly string[] = [];
         async *stream(): AsyncGenerator<AgenticStreamEvent, void, undefined> {
           await gate;
           const result: AgenticTurnResult = {
@@ -291,6 +295,8 @@ describe("WebResearchToolAgent — concurrency guard", () => {
         createSession(): AgenticSession {
           return new BlockingSession();
         }
+
+        async deleteStoredSession(): Promise<void> {}
       }
 
       const agent = new WebResearchToolAgent({

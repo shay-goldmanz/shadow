@@ -64,6 +64,13 @@
  * `web-research-tool-agent.ts`'s module doc for how that makes reaching the
  * network any other way structurally hard, not just discouraged.
  *
+ * `PerBriefResearchAgent` (`per-brief-research-agent.ts`, T0.1) is the
+ * `ResearchBriefPort` a real caller should actually wire in: it builds a
+ * fresh `WebResearchToolAgent` per `research()` call rather than sharing
+ * one, which is what makes concurrent briefs — across conversations or
+ * within one (`docs/superpowers/specs/shadow-sessions/PLAN.md`'s Tier 0) —
+ * safe. See its module doc for the shared-instance hazard it removes.
+ *
  * `transcript-source.ts`'s `recordSessionTranscriptSource` is the *other*
  * legitimate origin of a source record (D19/D23) — a session transcript,
  * for `@shadow/agent` to cite when recording what the operator actually
@@ -144,6 +151,8 @@ export {
   LiveTransport,
   type LiveTransportOptions,
 } from "./live-transport.ts";
+export type { PerBriefResearchAgentDeps } from "./per-brief-research-agent.ts";
+export { PerBriefResearchAgent } from "./per-brief-research-agent.ts";
 export { RecordTransport } from "./record-transport.ts";
 export { ReplayTransport } from "./replay-transport.ts";
 export type { FetchedSourceEntry } from "./research-run.ts";

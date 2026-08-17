@@ -63,6 +63,32 @@ function resultMessage(sessionId: string): SDKMessage {
   };
 }
 
+function errorResultMessage(sessionId: string): SDKMessage {
+  return {
+    type: "result",
+    subtype: "error_during_execution",
+    duration_ms: 1,
+    duration_api_ms: 1,
+    is_error: true,
+    num_turns: 1,
+    stop_reason: null,
+    total_cost_usd: 0,
+    usage: {
+      input_tokens: 1,
+      output_tokens: 1,
+      cache_creation_input_tokens: 0,
+      cache_read_input_tokens: 0,
+      server_tool_use: { web_search_requests: 0 },
+      // biome-ignore lint/suspicious/noExplicitAny: NonNullableUsage requires every BetaUsage field non-nullable; only fields our adapter reads matter for this test.
+    } as any,
+    modelUsage: {},
+    permission_denials: [],
+    errors: ["overloaded_error"],
+    uuid: randomUUID(),
+    session_id: sessionId,
+  };
+}
+
 /** Records every call's options and yields a scripted init+result pair. Each call gets a fresh sessionId unless the test wants otherwise. */
 function makeRecordingQueryFn(options: {
   readonly apiKeySource?: string;
@@ -149,6 +175,106 @@ describe("createClaudeAgentSdkSessionPort — session reuse (D6)", () => {
   });
 });
 
+describe("createClaudeAgentSdkSessionPort — first turn derived from a successful session id (T1.1)", () => {
+  test("first turn fails via a THROWN error → second stream() still passes the original `resume` options, not `resume: undefined`", async () => {
+    const calls: Array<{ prompt: string; options: Options | undefined }> = [];
+    let callIndex = 0;
+    const queryFn: QueryFn = ({ prompt, options }) => {
+      calls.push({ prompt, options });
+      const thisCall = callIndex++;
+      return (async function* () {
+        if (thisCall === 0) {
+          throw new Error("simulated transport failure (e.g. 529 overloaded)");
+        }
+        const sessionId = "second-attempt-session";
+        yield initMessage({ sessionId });
+        yield resultMessage(sessionId);
+      })();
+    };
+    const port = createClaudeAgentSdkSessionPort({}, { query: queryFn });
+    const session = port.createSession({ resume: { sessionId: "original-resume-target" } });
+
+    await expectRejection(runToCompletion(session, "first turn"), Error);
+    expect(session.sessionId).toBeUndefined();
+
+    await runToCompletion(session, "retry");
+    expect(calls).toHaveLength(2);
+    // Both calls bootstrap from the caller's ORIGINAL resume target — the
+    // failed attempt never got a chance to become this handle's "own"
+    // session, so there is nothing else for the retry to resume.
+    expect(calls[0]?.options?.resume).toBe("original-resume-target");
+    expect(calls[1]?.options?.resume).toBe("original-resume-target");
+    expect(session.sessionId).toBe("second-attempt-session");
+  });
+
+  test("first turn fails via an `isError` RESULT (not a throw) → second stream() still passes the original `resume` options; the error result's session_id is never latched", async () => {
+    const failedSessionId = "failed-session-id";
+    let callIndex = 0;
+    const calls: Array<{ prompt: string; options: Options | undefined }> = [];
+    const queryFn: QueryFn = ({ prompt, options }) => {
+      calls.push({ prompt, options });
+      const thisCall = callIndex++;
+      return (async function* () {
+        if (thisCall === 0) {
+          yield initMessage({ sessionId: failedSessionId });
+          yield errorResultMessage(failedSessionId);
+          return;
+        }
+        const sessionId = "second-attempt-session";
+        yield initMessage({ sessionId });
+        yield resultMessage(sessionId);
+      })();
+    };
+    const port = createClaudeAgentSdkSessionPort({}, { query: queryFn });
+    const session = port.createSession({ resume: { sessionId: "original-resume-target" } });
+
+    const first = await runToCompletion(session, "first turn");
+    expect(first.isError).toBe(true);
+    expect(first.sessionId).toBe(failedSessionId); // reported to the caller...
+    expect(session.sessionId).toBeUndefined(); // ...but NOT latched as this handle's own session
+    // F7 review fix (T3.1): the failed id IS discoverable via the
+    // `failedSessionIds` getter, even though nothing calls `close()` on the
+    // ordinary path — this is what lets `@shadow/agent`/`@shadow/api` record
+    // it for later deletion.
+    expect(session.failedSessionIds).toEqual([failedSessionId]);
+
+    await runToCompletion(session, "retry");
+    expect(calls).toHaveLength(2);
+    expect(calls[0]?.options?.resume).toBe("original-resume-target");
+    // The retry is still treated as a first turn: it bootstraps from the
+    // caller's original resume target, not from the failed result's id.
+    expect(calls[1]?.options?.resume).toBe("original-resume-target");
+    expect(session.sessionId).toBe("second-attempt-session");
+  });
+
+  test("success → the second call resumes this handle's own (successful) session id", async () => {
+    const fixedSessionId = randomUUID();
+    const { queryFn, calls } = makeRecordingQueryFn({ sessionIdForCall: () => fixedSessionId });
+    const port = createClaudeAgentSdkSessionPort({}, { query: queryFn });
+    const session = port.createSession();
+
+    const first = await runToCompletion(session, "first turn");
+    expect(first.isError).toBe(false);
+    expect(session.sessionId).toBe(fixedSessionId);
+
+    await runToCompletion(session, "second turn");
+    expect(calls[1]?.options?.resume).toBe(fixedSessionId);
+  });
+
+  test("`persistSession: false` guard still fires on a genuine (successful) second turn, keyed off ownSessionId rather than a turn count", async () => {
+    const { queryFn, calls } = makeRecordingQueryFn({});
+    const port = createClaudeAgentSdkSessionPort({}, { query: queryFn });
+    const session = port.createSession({ persistSession: false });
+
+    await runToCompletion(session, "first turn");
+    expect(session.sessionId).toBeDefined();
+    expect(calls).toHaveLength(1);
+
+    await expectRejection(runToCompletion(session, "second turn"), AgenticSessionError);
+    expect(calls).toHaveLength(1);
+  });
+});
+
 describe("createClaudeAgentSdkSessionPort — persistSession: false cannot be resumed", () => {
   test("a second turn on a handle created with persistSession: false throws AgenticSessionError WITHOUT calling query() again — the contradiction this port now refuses to reach the subprocess for", async () => {
     const { queryFn, calls } = makeRecordingQueryFn({});
@@ -219,6 +345,115 @@ describe("createClaudeAgentSdkSessionPort — close()", () => {
     expect(deleteCalls).toEqual([]);
   });
 
+  test("after an errored (but persisted) first turn, close() deletes the failed transcript even though it was never latched as this handle's own session (T1.1)", async () => {
+    const failedSessionId = "failed-session-id";
+    let callIndex = 0;
+    const queryFn: QueryFn = () => {
+      const thisCall = callIndex++;
+      return (async function* () {
+        yield initMessage({ sessionId: failedSessionId });
+        if (thisCall === 0) {
+          yield errorResultMessage(failedSessionId);
+        } else {
+          yield resultMessage(failedSessionId);
+        }
+      })();
+    };
+    const deleteCalls: string[] = [];
+    const port = createClaudeAgentSdkSessionPort(
+      {},
+      {
+        query: queryFn,
+        // biome-ignore lint/suspicious/noExplicitAny: test double, only the sessionId argument matters
+        deleteSession: (async (sessionId: string) => {
+          deleteCalls.push(sessionId);
+        }) as any,
+      },
+    );
+    const session = port.createSession();
+
+    const first = await runToCompletion(session, "first turn");
+    expect(first.isError).toBe(true);
+    expect(session.sessionId).toBeUndefined(); // not latched — nothing for `close()` to find via `sessionId` alone
+
+    await session.close?.();
+    // ...yet the transcript the errored turn wrote is still deleted: the
+    // failed result's session_id was tracked separately for exactly this.
+    expect(deleteCalls).toEqual([failedSessionId]);
+  });
+
+  test("F3 review fix: a resumed first turn that errors does NOT track the resume target for deletion — close() only deletes the operator's real transcript if it independently belongs there", async () => {
+    const resumeTarget = "operators-preexisting-transcript";
+    let callIndex = 0;
+    const queryFn: QueryFn = () => {
+      const thisCall = callIndex++;
+      return (async function* () {
+        // The CLI's error result echoes back the SAME id it was asked to
+        // resume — no new session was ever actually created.
+        yield initMessage({ sessionId: resumeTarget });
+        if (thisCall === 0) {
+          yield errorResultMessage(resumeTarget);
+        } else {
+          yield resultMessage(resumeTarget);
+        }
+      })();
+    };
+    const deleteCalls: string[] = [];
+    const port = createClaudeAgentSdkSessionPort(
+      {},
+      {
+        query: queryFn,
+        // biome-ignore lint/suspicious/noExplicitAny: test double, only the sessionId argument matters
+        deleteSession: (async (sessionId: string) => {
+          deleteCalls.push(sessionId);
+        }) as any,
+      },
+    );
+    const session = port.createSession({ resume: { sessionId: resumeTarget } });
+
+    const first = await runToCompletion(session, "first turn");
+    expect(first.isError).toBe(true);
+    expect(first.sessionId).toBe(resumeTarget); // still reported to the caller...
+    // F7 review fix (T3.1): the exclusion holds at the getter too — the
+    // resume target never shows up as a "failed" id to begin with.
+    expect(session.failedSessionIds).toEqual([]);
+
+    await session.close?.();
+    // ...but NOT deleted: it's the operator's pre-existing transcript, not
+    // one this handle orphaned. Before the fix, `close()` would have
+    // deleted the operator's real history here.
+    expect(deleteCalls).toEqual([]);
+
+    // A genuinely NEW id from a later failed turn is still tracked and
+    // deleted normally — the exclusion is narrow, not a blanket "never
+    // delete after a resumed handle" rule.
+    await runToCompletion(session, "second turn");
+    expect(session.sessionId).toBe(resumeTarget);
+  });
+
+  test("F3 review fix: close() is idempotent — a second call does not re-issue deleteSession for ids already gone", async () => {
+    const fixedSessionId = randomUUID();
+    const { queryFn } = makeRecordingQueryFn({ sessionIdForCall: () => fixedSessionId });
+    const deleteCalls: string[] = [];
+    const port = createClaudeAgentSdkSessionPort(
+      {},
+      {
+        query: queryFn,
+        // biome-ignore lint/suspicious/noExplicitAny: test double, only the sessionId argument matters
+        deleteSession: (async (sessionId: string) => {
+          deleteCalls.push(sessionId);
+        }) as any,
+      },
+    );
+    const session = port.createSession();
+    await runToCompletion(session, "hi");
+
+    await session.close?.();
+    await session.close?.();
+
+    expect(deleteCalls).toEqual([fixedSessionId]); // deleted exactly once, not twice
+  });
+
   test("is a no-op for a session created with persistSession: false — nothing was ever written to delete", async () => {
     const { queryFn } = makeRecordingQueryFn({});
     const deleteCalls: string[] = [];
@@ -237,6 +472,93 @@ describe("createClaudeAgentSdkSessionPort — close()", () => {
 
     await session.close?.();
     expect(deleteCalls).toEqual([]);
+  });
+});
+
+describe("createClaudeAgentSdkSessionPort — deleteStoredSession (T2.4)", () => {
+  test("delegates to the SDK's deleteSession with the given id, no live handle required", async () => {
+    const deleteCalls: string[] = [];
+    const port = createClaudeAgentSdkSessionPort(
+      {},
+      {
+        // biome-ignore lint/suspicious/noExplicitAny: test double, only the sessionId argument matters
+        deleteSession: (async (sessionId: string) => {
+          deleteCalls.push(sessionId);
+        }) as any,
+      },
+    );
+
+    // No `createSession()`/`stream()` call at all — this is exactly the
+    // cold-session shape T2.4 exists for: an id read from stored
+    // `SessionMeta.sdkSessionId` after a restart, with no `AgenticSession`
+    // handle in memory to call `close()` through.
+    await port.deleteStoredSession("cold-session-id");
+
+    expect(deleteCalls).toEqual(["cold-session-id"]);
+  });
+
+  test("wraps a thrown deleteSession failure in AgenticSessionError", async () => {
+    const port = createClaudeAgentSdkSessionPort(
+      {},
+      {
+        deleteSession: (async () => {
+          throw new Error("boom");
+          // biome-ignore lint/suspicious/noExplicitAny: test double
+        }) as any,
+      },
+    );
+
+    await expectRejection(port.deleteStoredSession("some-id"), AgenticSessionError);
+  });
+
+  // F1 review fix (T3.1): the real SDK's `deleteSession` throws — not a
+  // no-op — for a transcript that was never written (verified against the
+  // installed package directly; see `../adapters/claude-agent-sdk-session.ts`'s
+  // `deleteStoredSession` doc). A session whose first turn failed before the
+  // CLI ever persisted anything left exactly this id in
+  // `SessionMeta.failedSdkSessionIds` with no matching transcript on disk —
+  // this pins the tolerance that keeps that session deletable.
+  test("tolerates the SDK's own not-found error for a transcript that was never written", async () => {
+    const port = createClaudeAgentSdkSessionPort(
+      {},
+      {
+        deleteSession: (async (sessionId: string) => {
+          throw new Error(`Session ${sessionId} not found in any project directory`);
+          // biome-ignore lint/suspicious/noExplicitAny: test double, mirrors the real SDK's own thrown message
+        }) as any,
+      },
+    );
+
+    // Resolves cleanly — no throw at all, not even wrapped.
+    await port.deleteStoredSession("poisoned-id");
+  });
+
+  test("tolerates the SDK's dir-scoped not-found message too", async () => {
+    const port = createClaudeAgentSdkSessionPort(
+      {},
+      {
+        deleteSession: (async (sessionId: string) => {
+          throw new Error(`Session ${sessionId} not found in project directory for /some/dir`);
+          // biome-ignore lint/suspicious/noExplicitAny: test double
+        }) as any,
+      },
+    );
+
+    await port.deleteStoredSession("poisoned-id-2");
+  });
+
+  test("does NOT tolerate a not-found message for a DIFFERENT session id (conservative match)", async () => {
+    const port = createClaudeAgentSdkSessionPort(
+      {},
+      {
+        deleteSession: (async () => {
+          throw new Error("Session some-other-id not found in any project directory");
+          // biome-ignore lint/suspicious/noExplicitAny: test double
+        }) as any,
+      },
+    );
+
+    await expectRejection(port.deleteStoredSession("this-id"), AgenticSessionError);
   });
 });
 

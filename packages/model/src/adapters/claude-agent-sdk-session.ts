@@ -81,6 +81,40 @@ export function createClaudeAgentSdkSessionPort(
     createSession(options: AgenticSessionOptions = {}): AgenticSession {
       return new ClaudeAgentSdkSession(queryFn, deleteSessionFn, defaults, options);
     },
+    // T2.4/D6b: id-based deletion, independent of any live session handle —
+    // see `AgenticSessionPort.deleteStoredSession`'s doc for why this exists
+    // alongside (and, going forward, instead of) `ClaudeAgentSdkSession.close()`.
+    async deleteStoredSession(sdkSessionId: string): Promise<void> {
+      try {
+        await deleteSessionFn(sdkSessionId);
+      } catch (error) {
+        // F1 review fix (T3.1): the installed SDK's `deleteSession` does NOT
+        // no-op for a transcript that was never written — it THROWS, an
+        // `Error` reading `Session <id> not found in any project directory`
+        // (or `... for <dir>` when `dir` was given). Verified against the
+        // installed package directly (`@anthropic-ai/claude-agent-sdk`'s
+        // `deleteSession`/its internal `m$`), since there is no typed
+        // "not found" error class exported to `instanceof` against — this
+        // port's own doc used to claim the opposite (a no-op), which is
+        // exactly how a session whose first turn failed before the CLI ever
+        // persisted anything (`SessionMeta.failedSdkSessionIds`) became
+        // permanently undeletable: `DELETE` would reach this call, it would
+        // throw, and the store row survived forever behind it.
+        //
+        // Tolerated here, matched conservatively against THIS id's own
+        // message prefix (not a bare `/not found/` substring, which could
+        // just as easily swallow an unrelated failure that happens to
+        // mention the phrase) — every other failure still wraps and rethrows
+        // exactly as before.
+        if (
+          error instanceof Error &&
+          error.message.startsWith(`Session ${sdkSessionId} not found`)
+        ) {
+          return;
+        }
+        throw new AgenticSessionError(`failed to delete persisted session ${sdkSessionId}`, error);
+      }
+    },
   };
 }
 
@@ -177,7 +211,29 @@ function extractTextDelta(
 class ClaudeAgentSdkSession implements AgenticSession {
   private ownSessionId: string | undefined;
   private accumulatedUsage: TokenUsage = ZERO_USAGE;
-  private turnsSent = 0;
+  /**
+   * Session ids an error `result` reported (`is_error: true`) but that were
+   * never latched into `ownSessionId` — see the `case "result"` branch
+   * below. The CLI may still have written a transcript for that session id
+   * before failing, so `close()` deletes these too, not just `ownSessionId`.
+   * Excludes this handle's `options.resume` target even when the CLI's
+   * error result echoes it back (F3 review fix, same branch) — that id is
+   * the operator's pre-existing transcript, not one this handle orphaned.
+   * Exposed read-only via the `failedSessionIds` getter below (F7 review
+   * fix, T3.1) so a caller that never calls `close()` — the ordinary path,
+   * per that method's own doc — can still discover and record these ids
+   * (`@shadow/agent`'s `ShadowConversation.failedSdkSessionIds`,
+   * `@shadow/api`'s `SessionService.finishTurn`).
+   */
+  private readonly _failedSessionIds = new Set<string>();
+  /**
+   * Set once `close()` has actually issued `deleteSession` for this
+   * handle's own `ownSessionId` — makes a second `close()` call idempotent
+   * (F3 review fix) instead of re-deleting (or re-erroring on) an id
+   * already gone. `failedSessionIds` doesn't need an equivalent flag: it is
+   * cleared outright once its contents are deleted (see `close()`).
+   */
+  private ownSessionDeleted = false;
 
   constructor(
     private readonly queryFn: QueryFn,
@@ -194,8 +250,19 @@ class ClaudeAgentSdkSession implements AgenticSession {
     return this.accumulatedUsage;
   }
 
+  /** F7 review fix (T3.1): read-only view of `_failedSessionIds` — see that field's doc and `AgenticSession.failedSessionIds`'s. A fresh array each call, so a caller can never mutate this handle's internal `Set` through the returned reference. */
+  get failedSessionIds(): readonly string[] {
+    return [...this._failedSessionIds];
+  }
+
   async *stream(prompt: string): AsyncGenerator<AgenticStreamEvent, void, undefined> {
-    const isFirstTurn = this.turnsSent === 0;
+    // Derived from a *successful* session id, not a count of turns sent: a
+    // failed first turn must still look like a first turn to the retry that
+    // follows it (fresh `resume`/`continueMostRecent` bootstrap, not
+    // `resume: undefined` masquerading as "nothing to resume"). See
+    // `case "result"` below for the other half of this — `ownSessionId` is
+    // only ever assigned from a non-error result.
+    const isFirstTurn = this.ownSessionId === undefined;
 
     if (!isFirstTurn && this.options.persistSession === false) {
       // `persistSession: false` and resume are mutually exclusive by
@@ -210,7 +277,11 @@ class ClaudeAgentSdkSession implements AgenticSession {
       // proved live: Shadow's chat session (`@shadow/agent`'s
       // `conversation.ts`) set `persistSession: false` while relying on
       // resume-based multi-turn continuation (D6) — the fix there was to
-      // stop setting it, not to work around this guard.
+      // stop setting it, not to work around this guard. Keying this off
+      // `ownSessionId` rather than a turn count also means a persisted-
+      // false session whose first turn *failed* gets to retry as a first
+      // turn too — a resumed second turn only exists once a turn has
+      // actually succeeded.
       throw new AgenticSessionError(
         "This AgenticSession was created with persistSession: false and cannot be resumed " +
           "for a second turn: non-persisted sessions are never written to " +
@@ -220,7 +291,6 @@ class ClaudeAgentSdkSession implements AgenticSession {
           "the resulting on-disk transcript.",
       );
     }
-    this.turnsSent += 1;
 
     const queryOptions = buildQueryOptions(this.defaults, this.options, {
       ownSessionId: this.ownSessionId,
@@ -286,7 +356,31 @@ class ClaudeAgentSdkSession implements AgenticSession {
         }
         case "result": {
           const usage = sumModelUsage(message.modelUsage);
-          this.ownSessionId = message.session_id;
+          if (message.is_error) {
+            // Do NOT latch an error result's session id into `ownSessionId`
+            // — 529/overloaded and friends report `is_error: true` here,
+            // and latching would make the *next* `stream()` call believe
+            // this handle already has a successful session to resume, when
+            // in fact the caller's original `resume`/`continueMostRecent`
+            // bootstrap should be retried instead. The CLI may still have
+            // persisted a transcript under this id before failing, so it's
+            // tracked for `close()` to clean up rather than discarded —
+            // EXCEPT when that id is exactly this handle's `options.resume`
+            // target (F3 review fix): if `options.resume` was set (an
+            // operator's pre-existing transcript this handle was created to
+            // continue) and that very first turn errors, the CLI's error
+            // result echoes back the SAME id we asked it to resume, since
+            // no new session was ever actually created. Tracking that id
+            // here would make `close()` delete the operator's real,
+            // pre-existing history — not a transcript this handle itself
+            // orphaned. Only ids genuinely new to (and therefore owned by)
+            // this handle belong in this set.
+            if (message.session_id && message.session_id !== this.options.resume?.sessionId) {
+              this._failedSessionIds.add(message.session_id);
+            }
+          } else {
+            this.ownSessionId = message.session_id;
+          }
           this.accumulatedUsage = addUsage(this.accumulatedUsage, usage);
           const result: AgenticTurnResult = {
             text: message.subtype === "success" ? message.result : "",
@@ -312,25 +406,51 @@ class ClaudeAgentSdkSession implements AgenticSession {
   }
 
   /**
-   * Deletes this session's persisted transcript from `~/.claude/projects/`
-   * via the SDK's `deleteSession`. A no-op when there is nothing to delete:
-   * no turn has completed yet (`ownSessionId` still `undefined`), or this
-   * session was created with `persistSession: false` (nothing was ever
-   * written for it). Deliberately not called automatically anywhere in
-   * this package — this port has no notion of "the caller is done with
-   * this conversation," so a long-lived caller (Shadow chat, D6) that
-   * wants sessions to not accumulate indefinitely on disk must call this
-   * itself once it retires a handle.
+   * Deletes this session's persisted transcript(s) from
+   * `~/.claude/projects/` via the SDK's `deleteSession` — this handle's own
+   * successful session id (`ownSessionId`), *and* any id an errored turn on
+   * this handle reported (`failedSessionIds`): a persisted-but-errored turn
+   * can still have written a transcript the caller has no other way to
+   * reach, since that id was never exposed as `sessionId`. A no-op when
+   * there is nothing to delete: no turn ever completed or failed with a
+   * session id, or this session was created with `persistSession: false`
+   * (nothing was ever written for it, successful or not). Deliberately not
+   * called automatically anywhere in this package — this port has no
+   * notion of "the caller is done with this conversation," so a long-lived
+   * caller (Shadow chat, D6) that wants sessions to not accumulate
+   * indefinitely on disk must call this itself once it retires a handle.
+   *
+   * Idempotent (F3 review fix): a second call after a successful first
+   * finds nothing left to delete and returns immediately, rather than
+   * re-issuing `deleteSession` for ids already gone — `failedSessionIds` is
+   * cleared and `ownSessionDeleted` latched once this method's own delete
+   * loop below actually succeeds. Whoever owns conversation lifecycle can
+   * therefore call `close()` more than once (an explicit dispose racing an
+   * eviction timeout, say) without it becoming an error.
    */
   async close(): Promise<void> {
-    if (!this.ownSessionId || this.options.persistSession === false) return;
+    if (this.options.persistSession === false) return;
+
+    const idsToDelete = new Set(this._failedSessionIds);
+    if (this.ownSessionId !== undefined && !this.ownSessionDeleted) {
+      idsToDelete.add(this.ownSessionId);
+    }
+    if (idsToDelete.size === 0) return;
+
     try {
-      await this.deleteSessionFn(this.ownSessionId);
+      for (const id of idsToDelete) {
+        await this.deleteSessionFn(id);
+      }
     } catch (error) {
       throw new AgenticSessionError(
-        `failed to delete persisted session ${this.ownSessionId}`,
+        `failed to delete persisted session(s): ${[...idsToDelete].join(", ")}`,
         error,
       );
+    }
+
+    this._failedSessionIds.clear();
+    if (this.ownSessionId !== undefined) {
+      this.ownSessionDeleted = true;
     }
   }
 }

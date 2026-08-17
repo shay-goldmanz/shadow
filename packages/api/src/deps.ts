@@ -20,6 +20,7 @@ import type {
 import type { Indexer, MissLogStore } from "@shadow/indexing";
 import type { StructuredGenerationPort } from "@shadow/model";
 import type { ConversationRegistry } from "./conversation-registry.ts";
+import type { SessionService } from "./session-service.ts";
 
 /**
  * Every collaborator an `@shadow/api` handler can call into. A strict
@@ -38,19 +39,25 @@ export interface ApiDeps {
   readonly missLog: MissLogStore;
   readonly shadowAgent: ShadowAgent;
   /**
-   * In-memory registry of live conversations, keyed by the `sessionId` the
-   * `session` SSE event hands the client (`handlers/chat.ts`). Reusing the
-   * same `ShadowConversation` instance across `POST /api/chat` calls is
-   * what makes D6's session reuse actually happen at the HTTP layer — the
-   * underlying `AgenticSession` lives inside that instance and is only
-   * ever created once. Lost on server restart, same as any other
-   * in-process state; `docs/API.md` documents no persistence guarantee for
-   * chat sessions, only for volumes (D4).
+   * Owns session lifecycle (T2.5) — `handlers/chat.ts` enqueues turns
+   * through this instead of touching `conversations`/`shadowAgent`
+   * directly. See `session-service.ts`'s module doc.
+   */
+  readonly sessionService: SessionService;
+  /**
+   * The SAME `ConversationRegistry` instance `sessionService` constructed
+   * for itself (`SessionService.registry`), kept on `ApiDeps` only for the
+   * callers that predate T2.5 and still need direct access: `start.ts`'s
+   * shutdown path (`releaseAll()`). Every session-lifecycle concern now
+   * goes through `sessionService` instead — this is a read/shutdown-only
+   * handle onto the same cache, not a second registry.
    *
-   * Bounded (`ConversationRegistry`, not a raw `Map`): each conversation now
-   * persists its session transcript on disk for as long as it's held (D6's
-   * `resume` requires it), so an unbounded registry would leak both memory
-   * and disk. See that class's doc for the eviction policy.
+   * Bounded (`ConversationRegistry`, not a raw `Map`): each conversation
+   * holds an `AgenticSession` handle for as long as it's registered, so an
+   * unbounded registry would leak memory. Eviction only releases that
+   * in-memory handle, never the session's on-disk transcript (T2.4/D6b) —
+   * see that class's doc for the eviction policy, including how it skips a
+   * session with a running/queued turn.
    */
   readonly conversations: ConversationRegistry;
 }

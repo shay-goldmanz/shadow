@@ -63,12 +63,44 @@
  * "we couldn't tell." Returning empty on failure would be indistinguishable
  * from "the corpus has nothing," which is a lie the operator would act on.
  *
- * ## Session reuse (D6)
+ * ## One-shot sessions, not shared (T0.5)
  *
- * One session is created lazily on the first `search()` call and reused
- * for every later call on the same instance, exactly like
- * `WebResearchToolAgent` — see that class's doc for why paying the Claude
- * Code preamble once per instance instead of once per query matters.
+ * This class used to lazily create **one** `AgenticSession` and reuse it
+ * for every `search()` call on the instance, exactly like
+ * `WebResearchToolAgent` used to (D6) — with no busy guard. Under T0.2's
+ * parallel research briefs (and cross-session parallelism generally),
+ * concurrent `search()` calls on the shared instance in `composition.ts`
+ * would have run concurrent `query()` subprocesses resuming the *same* SDK
+ * session id: two processes appending to one transcript at once — exactly
+ * the duplicate-resume race
+ * `docs/superpowers/specs/shadow-sessions/PLAN.md` (T0.5) exists to make
+ * unrepresentable. `PerBriefResearchAgent` closed the analogous hole for
+ * the research tool-agent itself (T0.1); this class needed the same fix
+ * for the same reason.
+ *
+ * The fix: every `search()` call builds a brand-new session via
+ * `createSession()` below, with `persistSession: false`. A single
+ * `search()` is a single turn, so the cross-call `resume` rationale for
+ * reuse never applied here to begin with — there is no second turn to
+ * resume. This makes the provider itself stateless: no instance field
+ * holds a session, so there is nothing left to race, and no orphaned
+ * `~/.claude/projects/` transcript accumulates per call either, since a
+ * non-persisted session is never written there.
+ *
+ * This does re-pay the Claude Code preamble (~18k cache-write tokens) on
+ * every `search()` call instead of once per provider instance. T0.4
+ * measures whether that is actually expensive once cross-session prompt
+ * caching is accounted for; if it proves prohibitive, the plan's recorded
+ * fallback is an internal FIFO queue on this provider instead of one-shot
+ * sessions — not implemented here, since T0.5's default is this simple,
+ * stateless fix.
+ *
+ * `close()` is deliberately not called on the session after the turn: per
+ * `AgenticSession.close()`'s own doc (`@shadow/model`), it is a no-op for a
+ * session created with `persistSession: false`, because nothing was ever
+ * written to `~/.claude/projects/` for it to delete. Calling it would cost
+ * nothing but buy nothing either, so it is skipped — the same call
+ * `PerBriefResearchAgent`'s one-shot sessions make (T0.1).
  *
  * ## Record/replay
  *
@@ -179,14 +211,12 @@ function buildSearchPrompt(request: SearchRequest): string {
   return `Search query: ${request.query}\nReturn at most ${cap} result(s).`;
 }
 
-/** The reference `SearchProvider` implementation — see the module doc. */
+/** The reference `SearchProvider` implementation — see the module doc. Stateless: no session lives across `search()` calls (T0.5). */
 export class AgenticSearchProvider implements SearchProvider {
-  private session: AgenticSession | undefined;
-
   constructor(private readonly deps: AgenticSearchProviderDeps) {}
 
   async search(request: SearchRequest, _fetchImpl: FetchLike): Promise<SearchResponse> {
-    const session = this.getOrCreateSession();
+    const session = this.createSession();
     const prompt = buildSearchPrompt(request);
     const result = await runToCompletion(session, prompt);
 
@@ -196,6 +226,11 @@ export class AgenticSearchProvider implements SearchProvider {
 
     const hits = parseSearchResults(request.query, result.text, request.maxResults);
 
+    // Deliberately not calling `session.close()` here — see the module
+    // doc's "One-shot sessions, not shared" section: a `persistSession:
+    // false` session was never written to `~/.claude/projects/`, so
+    // `close()` on it is a documented no-op.
+
     return {
       query: request.query,
       hits,
@@ -204,14 +239,8 @@ export class AgenticSearchProvider implements SearchProvider {
     };
   }
 
-  /** Inspectable for tests/callers that want to confirm session reuse (D6) without a real subprocess. */
-  get sessionId(): string | undefined {
-    return this.session?.sessionId;
-  }
-
-  private getOrCreateSession(): AgenticSession {
-    if (this.session) return this.session;
-
+  /** Builds a fresh, non-persisted, one-shot session for a single `search()` call — see the module doc's "One-shot sessions, not shared" section (T0.5). */
+  private createSession(): AgenticSession {
     const options: AgenticSessionOptions = {
       model: this.deps.sessionTuning?.model,
       cwd: this.deps.sessionTuning?.cwd,
@@ -227,15 +256,15 @@ export class AgenticSearchProvider implements SearchProvider {
       disallowedTools: ["WebFetch", "Bash", "Read", "Write", "Edit", "Agent", "Task"],
       settingSources: [],
       permissionMode: "default",
-      // Deliberately NOT `persistSession: false` — this handle is reused
-      // across every `search()` call on this instance (D6), and reuse
-      // after the first turn goes through `resume`, which only works
-      // against a persisted session. Same reasoning as
-      // `WebResearchToolAgent.getOrCreateSession`; see that method's
-      // comment for the incident this guards against.
+      // This session receives exactly one turn, ever — one `search()` call
+      // is one turn — so there is no second turn to `resume` and nothing
+      // that needs persisting. See the module doc (T0.5) for the
+      // concurrency hazard this closes: reusing one handle across calls
+      // meant concurrent `search()`s could resume the same SDK session id
+      // from two subprocesses at once.
+      persistSession: false,
     };
 
-    this.session = this.deps.sessions.createSession(options);
-    return this.session;
+    return this.deps.sessions.createSession(options);
   }
 }

@@ -19,12 +19,22 @@ import type {
   LintReport,
   PutChapterAudit,
   PutChapterInput,
+  SessionEventEnvelope,
+  SessionSummary,
   SourceRecord,
   UpdateVolumeInput,
   Volume,
   VolumeIndexDocument,
   VolumeSummary,
 } from "./types.ts";
+
+/** `getSessionEvents`'s options — `?follow=`/`?fromSeq=` (T2.7). */
+export interface GetSessionEventsOptions {
+  /** `?follow=true` — stay open past the stored transcript and stream live activity too (including turns from other tabs). @default false (replay only, ends with a `done` event). */
+  readonly follow?: boolean;
+  /** `?fromSeq=` — the reconnect cursor. Inclusive: the record it names IS re-delivered (`SessionStore.readEvents`'s contract) — a client resuming after `seq` N passes `N + 1`. @default undefined (replay the whole stored transcript). */
+  readonly fromSeq?: number;
+}
 
 export interface ShadowApiClient {
   listVolumes(): Promise<readonly VolumeSummary[]>;
@@ -55,4 +65,37 @@ export interface ShadowApiClient {
 
   /** Streams one chat turn. Consume with `for await`; the async iterable ends after `done` or `error`. */
   chat(input: ChatInput): AsyncIterable<ChatStreamEvent>;
+
+  /**
+   * `GET /api/sessions/:id/events` (T2.7/T2.8) — replay a session's stored
+   * transcript, optionally (`options.follow`) staying open to stream live
+   * activity afterward, from any tab (this one's own sends included). With
+   * `follow: true` the returned iterable never completes on its own; the
+   * caller must `break`/`return` out of its `for await` (or otherwise stop
+   * pulling) to disconnect.
+   */
+  getSessionEvents(
+    sessionId: string,
+    options?: GetSessionEventsOptions,
+  ): AsyncIterable<SessionEventEnvelope>;
+
+  /**
+   * `GET /api/sessions?volume=` (T3.1/T3.2) — newest-first
+   * (`SessionStore.list`'s ordering doc: `lastActiveAt` descending).
+   * Omitting `volume` lists globally; T3.2's session list always passes the
+   * current volume's slug.
+   */
+  listSessions(volume?: string): Promise<readonly SessionSummary[]>;
+
+  /** `PATCH /api/sessions/:id { title }` — overrides the first-turn default title for good. @throws {ApiError} `session_not_found` if `id` is unknown. */
+  renameSession(id: string, title: string): Promise<SessionSummary>;
+
+  /**
+   * `DELETE /api/sessions/:id` — removes the session's row, registry entry,
+   * and every SDK transcript it ever produced.
+   * @throws {ApiError} `session_busy` (409) if a turn is currently running
+   * or queued for this session — delete after it settles.
+   * @throws {ApiError} `session_not_found` (404) if `id` is unknown.
+   */
+  deleteSession(id: string): Promise<void>;
 }

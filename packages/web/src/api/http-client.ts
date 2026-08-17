@@ -4,7 +4,7 @@
  * knows a URL or an HTTP verb.
  */
 
-import type { ShadowApiClient } from "./client.ts";
+import type { GetSessionEventsOptions, ShadowApiClient } from "./client.ts";
 import { parseEventStream } from "./sse.ts";
 import {
   ApiError,
@@ -21,6 +21,8 @@ import {
   type LintReport,
   type PutChapterAudit,
   type PutChapterInput,
+  type SessionEventEnvelope,
+  type SessionSummary,
   type SourceRecord,
   type UpdateVolumeInput,
   type Volume,
@@ -125,6 +127,47 @@ export class HttpApiClient implements ShadowApiClient {
     for await (const raw of parseEventStream(response.body)) {
       yield { event: raw.event, data: JSON.parse(raw.data) } as ChatStreamEvent;
     }
+  }
+
+  async *getSessionEvents(
+    sessionId: string,
+    options: GetSessionEventsOptions = {},
+  ): AsyncIterable<SessionEventEnvelope> {
+    const params = new URLSearchParams();
+    if (options.follow) params.set("follow", "true");
+    if (options.fromSeq !== undefined) params.set("fromSeq", String(options.fromSeq));
+    const query = params.toString();
+    const response = await fetch(
+      `${this.baseUrl}/sessions/${encodeURIComponent(sessionId)}/events${query ? `?${query}` : ""}`,
+    );
+    if (!response.ok || !response.body) throw await toApiError(response);
+
+    for await (const raw of parseEventStream(response.body)) {
+      const data = JSON.parse(raw.data) as Record<string, unknown> & { readonly seq?: unknown };
+      // `seq` rides in the same `data` object on the wire (`@shadow/api`'s
+      // `withSeq`) but is lifted to the envelope here — see
+      // `SessionEventEnvelope`'s doc for why. `text`/`done` never carry one.
+      const seq = typeof data.seq === "number" ? data.seq : undefined;
+      yield { event: raw.event as ChatStreamEvent["event"], data, seq };
+    }
+  }
+
+  async listSessions(volume?: string): Promise<readonly SessionSummary[]> {
+    const query = volume !== undefined ? `?volume=${encodeURIComponent(volume)}` : "";
+    const { sessions } = await this.getJson<{ sessions: SessionSummary[] }>(`/sessions${query}`);
+    return sessions;
+  }
+
+  async renameSession(id: string, title: string): Promise<SessionSummary> {
+    const { session } = await this.request<{ session: SessionSummary }>(
+      `/sessions/${encodeURIComponent(id)}`,
+      { method: "PATCH", body: JSON.stringify({ title }) },
+    );
+    return session;
+  }
+
+  async deleteSession(id: string): Promise<void> {
+    await this.request(`/sessions/${encodeURIComponent(id)}`, { method: "DELETE" });
   }
 
   private async getJson<T>(path: string): Promise<T> {

@@ -38,6 +38,33 @@
  * three." `disallowedTools` names the risky built-ins anyway, as
  * belt-and-braces against a future change loosening `allowedTools`.
  *
+ * ## Same-volume chapter publication is serialized across conversations
+ * (T0.6); the reindex step is serialized corpus-wide (F1 review fix)
+ *
+ * `runChapterDirective` below drafts a chapter and then publishes it
+ * (`chapter-draft.ts` + `publish.ts`), which read-modify-writes shared
+ * per-volume files (the claim sidecar, retirement-event appends) and
+ * reindexes the corpus. The auto-continuation loop above already runs
+ * chapter directives one at a time *within* one conversation, but nothing
+ * stopped two different conversations on the *same* volume from racing that
+ * shared state — an easy thing to hit once sessions can list and be resumed
+ * independently. `ShadowAgent` owns one `VolumeLocks` (`volume-locks.ts`)
+ * and hands it to every `ShadowConversation` it mints; `runChapterDirective`
+ * holds it for the volume slug across the whole draft-then-publish unit —
+ * draft and audit for *different* volumes still run fully in parallel, and
+ * research directives are untouched by any of this.
+ *
+ * Reindexing is not volume-scoped, though: `publishChapter`'s final step
+ * reads every volume and rewrites the corpus-wide index plus every volume's
+ * own index files, so two publishes on different volumes still race *that*
+ * one step even with per-volume locking in place. `runChapterDirective`
+ * passes `publishChapter` a `withReindexLock` bound to the *same*
+ * `VolumeLocks` instance, keyed on `CORPUS_LOCK_KEY` — a reserved key that
+ * cannot collide with a real volume slug (`volume-locks.ts`) — acquired
+ * strictly *inside* the volume lock already held, so the corpus-wide
+ * critical section is as short as the reindex call itself, never the whole
+ * draft-then-publish unit.
+ *
  * ## Session persistence is required, not optional (see `getOrCreateSession`)
  *
  * "Reused across turns" above means what it says: this handle sends every
@@ -45,8 +72,11 @@
  * (`@shadow/model`'s `ClaudeAgentSdkSession`). `resume` only finds a
  * session that was actually written to `~/.claude/projects/`, so this
  * session must NOT be created with `persistSession: false` — see the
- * comment at that call site for the incident this guards against, and
- * `ShadowConversation.dispose` for the cleanup this now requires.
+ * comment at that call site for the incident this guards against. Cleaning
+ * up the resulting on-disk transcript is no longer this handle's job
+ * (T2.4/D6b): `release()` below only drops the in-memory reference, and
+ * deletion — when the operator actually wants a session gone — is the
+ * explicit, id-based `AgenticSessionPort.deleteStoredSession` path instead.
  */
 
 import { randomUUID } from "node:crypto";
@@ -62,16 +92,22 @@ import type {
   RepairDecision,
 } from "@shadow/evidence";
 import type { Indexer } from "@shadow/indexing";
-import type { AgenticSession, AgenticSessionPort } from "@shadow/model";
+import {
+  type AgenticSession,
+  type AgenticSessionPort,
+  isNoConversationFoundError,
+} from "@shadow/model";
 import type { ResearchBrief, ResearchBriefPort, ResearchResult } from "@shadow/research";
 import { recordSessionTranscriptSource } from "@shadow/research";
 import { draftChapter } from "./chapter-draft.ts";
 import type { ChapterDirective, ResearchDirective } from "./directives.ts";
 import { parseShadowDirectives } from "./directives.ts";
 import { AutoTurnBudgetExceededError } from "./errors.ts";
+import { type AsyncEventProducer, mergeAsyncEvents } from "./merge-async-events.ts";
 import { publishChapter } from "./publish.ts";
 import { ensureWritingVolumesSkillInstalled } from "./skills.ts";
 import { buildShadowSystemPrompt } from "./system-prompt.ts";
+import { CORPUS_LOCK_KEY, VolumeLocks } from "./volume-locks.ts";
 
 export interface ShadowAgentDeps {
   readonly agenticSessionPort: AgenticSessionPort;
@@ -97,6 +133,67 @@ export interface ShadowAgentDeps {
 export interface StartConversationOptions {
   /** Stable id for this conversation, used to derive the transcript source's `session:<id>` url. Defaults to a fresh random id. */
   readonly conversationId?: string;
+  /**
+   * Resume a previously-persisted SDK session instead of starting fresh
+   * (T2.3). `getOrCreateSession` forwards `sdkSessionId` as
+   * `options.resume` on the underlying `AgenticSessionPort.createSession`
+   * call — see `@shadow/model`'s `AgenticSessionOptions.resume` — so the
+   * conversation's *first* turn continues that transcript rather than
+   * opening a new one. `@shadow/api`'s `SessionService` (T2.5) is the
+   * intended caller: it rehydrates a cold session id and builds
+   * `fallbackSummary` from the stored transcript.
+   *
+   * Composes with T1.1/T1.2 for free: a transient failure (529/overloaded)
+   * on the resumed first turn retries *with resume intact* — the retrying
+   * decorator re-issues the same underlying handle, which still carries
+   * `options.resume` (`../model/src/retrying-agentic-session.ts`'s module
+   * doc). The one failure that decorator never retries — the SDK's
+   * "No conversation found" error (`conservativeRetryPolicy`,
+   * `isNoConversationFoundError`) — is exactly the one this class's own
+   * fallback below handles instead.
+   */
+  readonly resume?: {
+    readonly sdkSessionId: string;
+    /**
+     * Deterministic prior-conversation context (T2.5 builds this from
+     * stored transcript events), used *only* if the resumed first turn
+     * fails with "No conversation found" (the SDK transcript is genuinely
+     * gone — deleted, expired, moved machines). When present, `sendMessage`
+     * drops the dead session handle, opens a fresh one *without* `resume`,
+     * and re-issues the same turn with this text prepended to the **model
+     * prompt only** — never to the recorded operator transcript source
+     * (D19/D23; see `sendMessage`'s doc). Omit this to leave "No
+     * conversation found" on the resumed first turn unhandled — it
+     * propagates as an ordinary error, same as any other channel this
+     * class doesn't special-case.
+     *
+     * Honestly scoped boundary (F6, final review — judged rare/acceptable,
+     * not fixed): this fallback only ever fires on the handle's very first
+     * `sendMessage` call — a *retry* after an `isError`-completed first
+     * turn (which leaves `resume` intact without throwing) finds
+     * `this.session` already set, so `isResumingFirstTurn` is false and a
+     * "No conversation found" on that retry propagates instead of falling
+     * back.
+     */
+    readonly fallbackSummary?: string;
+  };
+}
+
+/**
+ * Prepended to the model prompt (never to the recorded operator transcript
+ * source) when T2.3's in-conversation resume fallback fires — the exact
+ * framing the plan specifies, so `fallbackSummary` reads as recovered
+ * context rather than something the operator just said, and Shadow never
+ * cites it as an `operator`-kind claim's source.
+ */
+function buildFallbackPrompt(fallbackSummary: string, prompt: string): string {
+  return [
+    "Context recovered from a previous conversation — not operator speech; " +
+      "never cite it as an operator source.",
+    fallbackSummary,
+    "",
+    prompt,
+  ].join("\n");
 }
 
 export type ShadowEvent =
@@ -194,13 +291,37 @@ function formatChapterDraftFailure(slug: string, error: string): string {
 export class ShadowConversation {
   private readonly conversationId: string;
   private session: AgenticSession | undefined;
+  /**
+   * `StartConversationOptions.resume`, while it's still live. Consulted by
+   * `getOrCreateSession` (forwarded as `options.resume` on session
+   * creation) and by `sendMessage`'s fallback (T2.3, this module's doc on
+   * `StartConversationOptions.resume`). Cleared — not just ignored — once
+   * the fallback fires: the recreated session must never itself carry
+   * `resume`, and `getOrCreateSession` reads this same field to decide.
+   */
+  private pendingResume: StartConversationOptions["resume"];
+  /**
+   * How many `sendMessage` calls are currently in flight on this handle
+   * (F2 review fix). Not just 0-or-1: nothing prevents a caller from
+   * starting a second `sendMessage` before the first has finished draining
+   * (an operator sending two messages back-to-back before the first
+   * finishes streaming, say) — this counts genuine concurrent turns, not
+   * "am I busy," so `release()` defers until every one of them has
+   * completed, not just the most recent.
+   */
+  private activeTurns = 0;
+  /** Set by `release()` when it's called while `activeTurns > 0` — see that method's doc. Consumed (and cleared) by `sendMessage`'s `finally` once `activeTurns` returns to 0. */
+  private releaseRequested = false;
 
   constructor(
     private readonly deps: ShadowAgentDeps,
     private readonly volume: VolumeSlug,
+    /** Shared with every other conversation `ShadowAgent` mints — see this module's T0.6 doc above. */
+    private readonly volumeLocks: VolumeLocks,
     options: StartConversationOptions = {},
   ) {
     this.conversationId = options.conversationId ?? randomUUID();
+    this.pendingResume = options.resume;
   }
 
   get id(): string {
@@ -213,19 +334,83 @@ export class ShadowConversation {
   }
 
   /**
-   * Release the underlying `AgenticSession`'s persisted transcript
-   * (`AgenticSession.close`, backed by the Agent SDK's `deleteSession`).
-   * This handle deliberately persists its session for `resume` to work
-   * across turns — see the comment on `persistSession` in
-   * `getOrCreateSession` — which means it accumulates on disk under
-   * `~/.claude/projects/` for as long as it stays alive. Nothing in this
-   * class calls `dispose` automatically: it has no notion of "the operator
-   * is done with this conversation." Whoever owns conversation lifecycle
-   * (today, `@shadow/api`'s `ApiDeps.conversations` map) should call this
-   * when evicting a conversation. A no-op if no turn has completed yet.
+   * F7 review fix (T3.1): the underlying session handle's own
+   * `failedSessionIds` (`@shadow/model`'s `AgenticSession.failedSessionIds`)
+   * — SDK ids a failed turn on THIS handle reported but never latched as
+   * `sessionId`. `[]` before any turn has ever failed with a session id, or
+   * once `this.session` is unset (never created a handle yet, or between a
+   * `release()` and the next turn's `getOrCreateSession`). `@shadow/api`'s
+   * `SessionService.finishTurn` reads this after every turn and merges
+   * anything new into `SessionMeta.failedSdkSessionIds` — the plumbing that
+   * finally makes a failed FIRST turn's transcript reachable for deletion
+   * (`docs/DECISIONS.md` D6b). Deliberately a live read, not a drain: the
+   * underlying handle's own `Set` is the source of truth for as long as this
+   * conversation holds it, and `finishTurn`'s caller-side dedup (merging
+   * into a `Set` before patching) is what makes calling this after every
+   * turn — even ones that didn't just fail — safe and idempotent.
    */
-  async dispose(): Promise<void> {
-    await this.session?.close?.();
+  get failedSdkSessionIds(): readonly string[] {
+    return this.session?.failedSessionIds ?? [];
+  }
+
+  /**
+   * Drop this handle's reference to its underlying `AgenticSession`,
+   * deleting nothing (T2.4 — replaces the old `dispose()`, which called
+   * `AgenticSession.close()` and deleted the SDK transcript underneath it).
+   *
+   * D6b inverts D6a's cleanup rule: sessions now persist *past* the life of
+   * this in-memory handle (`@shadow/sessions`, Tier 2) — the SDK transcript
+   * is the entity of record, and this handle is only ever a cache entry for
+   * it. Releasing a cache entry must not delete the entity it cached, so
+   * eviction (`ConversationRegistry`) and server shutdown (`start.ts`) both
+   * call this instead of anything that touches `~/.claude/projects/`. The
+   * one legitimate deletion path left is explicit and id-based —
+   * `AgenticSessionPort.deleteStoredSession(sdkSessionId)`, driven by
+   * `SessionMeta.sdkSessionId` (T3.1's `DELETE` endpoint) — and it never
+   * goes through a `ShadowConversation` handle at all, which is what makes
+   * it work for a *cold* session (evicted or post-restart) that has no live
+   * handle for this method to even be called on.
+   *
+   * Nothing else needs releasing here: every `stream()` call spawns its own
+   * subprocess, which exits when that turn's `result` message arrives
+   * (module doc above) — this handle holds no live process, socket, or
+   * other non-transcript resource between turns, so dropping the reference
+   * is genuinely all there is to do today. Doing that explicitly (rather
+   * than leaving it to whatever the caller does with its own reference to
+   * this object) also means a caller that mistakenly reuses an "inert"
+   * handle after release gets a fresh, non-resuming session on its next
+   * `sendMessage` rather than silently reaching for a resume target this
+   * class no longer stands behind. If a future change gives `AgenticSession`
+   * genuine non-transcript teardown (an idle subprocess kept warm, say),
+   * it belongs here — T2.9's graceful-shutdown sequence is the next caller
+   * of this method and needs it to leave nothing dangling.
+   *
+   * **Deferred while a turn is running (F2 review fix).** `sendMessage`'s
+   * auto-continuation loop (module doc above) calls `getOrCreateSession` at
+   * the top of *every* auto-turn iteration, not just the first — so if this
+   * ran immediately while `activeTurns > 0`, a registry eviction landing
+   * between auto-turn N and N+1 of one `sendMessage` call would silently
+   * amputate that call's own context: the very next iteration's
+   * `getOrCreateSession` would see `this.session === undefined` and mint a
+   * brand-new session with no history and no resume, mid-conversation, with
+   * nothing in this class's API surface warning the caller it happened.
+   * Deferring instead means eviction can never race a turn it doesn't know
+   * about; it only ever takes effect once this handle is genuinely idle.
+   * `pendingResume` is cleared in the same step as `this.session` (F3
+   * review fix) — see `finishRelease`.
+   */
+  async release(): Promise<void> {
+    if (this.activeTurns > 0) {
+      this.releaseRequested = true;
+      return;
+    }
+    this.finishRelease();
+  }
+
+  /** Actually drops this handle's session reference (and `pendingResume` — F3 review fix), either immediately from an idle `release()` or deferred from `sendMessage`'s `finally` once the last in-flight turn completes. */
+  private finishRelease(): void {
+    this.session = undefined;
+    this.pendingResume = undefined;
   }
 
   /**
@@ -233,115 +418,359 @@ export class ShadowConversation {
    * auto-continuation rounds (research delegation, chapter drafting and
    * publication) it triggers. Streams progress as `ShadowEvent`s so a
    * caller (`@shadow/api`, T3.4) can surface it live.
+   *
+   * `recordSessionTranscriptSource` below runs exactly once, before any
+   * model turn — the *only* legitimate way to write down what the operator
+   * said (D19/D23, module doc). T2.3's resume fallback further down this
+   * method never re-runs it and never routes `fallbackSummary` through it:
+   * the summary only ever gets prepended to a re-issued *model prompt*, so
+   * it can never become a citable `operator`-kind source, and the operator
+   * turn is never double-recorded.
+   *
+   * **`activeTurns`/`release()` deferral (F2 review fix).** The whole method
+   * body runs inside an `activeTurns` increment/decrement — see `release`'s
+   * doc for why: every auto-turn iteration below calls `getOrCreateSession`,
+   * which is exactly the seam a same-instant `release()` would otherwise
+   * amputate mid-call. The `finally` is what actually applies a deferred
+   * `release()` once this call (and any sibling `sendMessage` call still in
+   * flight on this same handle) has finished.
    */
   async *sendMessage(operatorText: string): AsyncGenerator<ShadowEvent, void, undefined> {
-    const operatorSource = await recordSessionTranscriptSource(
-      this.deps.evidenceStore,
-      this.volume,
-      {
-        sessionId: this.conversationId,
-        turnText: operatorText,
-      },
-    );
-    yield { type: "operator-turn-recorded", sourceId: operatorSource.id };
+    this.activeTurns += 1;
+    try {
+      const operatorSource = await recordSessionTranscriptSource(
+        this.deps.evidenceStore,
+        this.volume,
+        {
+          sessionId: this.conversationId,
+          turnText: operatorText,
+        },
+      );
+      yield { type: "operator-turn-recorded", sourceId: operatorSource.id };
 
-    const maxAutoTurns = this.deps.maxAutoTurns ?? 6;
-    let prompt = buildOperatorPrompt(operatorText, operatorSource.id);
+      const maxAutoTurns = this.deps.maxAutoTurns ?? 6;
+      let prompt = buildOperatorPrompt(operatorText, operatorSource.id);
 
-    for (let turn = 0; turn < maxAutoTurns; turn++) {
-      const session = await this.getOrCreateSession();
-      let finalText = "";
-      let turnFailed = false;
+      for (let turn = 0; turn < maxAutoTurns; turn++) {
+        // True only for the very first `stream()` call this conversation
+        // will ever make on a session created with `resume` — `this.session`
+        // is still unset (no turn has ever run on this handle) and there's a
+        // `pendingResume` to lose. Every later iteration of this loop reuses
+        // the already-created `this.session` (D6), so this is `false` for
+        // every turn after the conversation's first — matching the plan's
+        // "only the first turn of a resumed conversation falls back."
+        const isResumingFirstTurn = this.session === undefined && this.pendingResume !== undefined;
+        const session = await this.getOrCreateSession();
 
-      for await (const event of session.stream(prompt)) {
-        if (event.type === "text-delta") {
-          yield { type: "text-delta", text: event.text };
-        } else if (event.type === "done") {
-          finalText = event.result.text;
-          if (event.result.isError) {
-            turnFailed = true;
-            yield {
-              type: "error",
-              error: `Shadow's turn failed (stopReason: ${event.result.stopReason ?? "unknown"})`,
-            };
+        let finalText: string;
+        let turnFailed: boolean;
+        // F4 review fix: tracks whether `runModelTurn` yielded anything to
+        // the caller before it threw. A mutable box, not a return value,
+        // because a thrown generator never reaches its `return` — this is
+        // the only channel available to smuggle that fact past the throw.
+        const yieldedAnything = { value: false };
+        try {
+          ({ finalText, turnFailed } = yield* this.runModelTurn(session, prompt, yieldedAnything));
+        } catch (error) {
+          const fallbackSummary = this.pendingResume?.fallbackSummary;
+          if (
+            !isResumingFirstTurn ||
+            fallbackSummary === undefined ||
+            !isNoConversationFoundError(error) ||
+            // F4 review fix: the failed attempt already reached the caller
+            // with real output (at least one delta, or the turn's own
+            // `{ type: "error" }` event) — re-issuing the same turn against
+            // a fallback session would duplicate whatever the caller already
+            // saw. Mirrors `RetryingAgenticSession`'s structural rule (T1.3):
+            // once anything has reached the caller, the attempt is no longer
+            // retryable, it can only propagate.
+            yieldedAnything.value
+          ) {
+            // Not T2.3's fallback case: a non-first-turn failure (shouldn't
+            // happen — this handle resumes its own id after the first turn),
+            // a first turn that wasn't resumed at all, a resumed first turn
+            // with no `fallbackSummary` to fall back with (documented
+            // behavior — no fallback possible), a resumed first turn that
+            // failed for any other reason (a transient failure already
+            // retried *with* resume intact by the decorator before reaching
+            // here — see `StartConversationOptions.resume`'s doc), or a
+            // resumed first turn that already yielded output before it
+            // threw. Propagate as an ordinary error; `resume` stays intact
+            // for a caller that retries this same conversation handle — NOT
+            // because `this.session` is unset here (P4 review fix: it
+            // isn't — `getOrCreateSession` above already assigned it before
+            // `runModelTurn` ever ran), but because a retry's
+            // `getOrCreateSession` call finds that already-set `this.session`
+            // and reuses it as-is (`if (this.session) return this.session;`)
+            // rather than constructing a fresh one from `pendingResume`. The
+            // SAME session object this failed attempt was talking to is
+            // still wired to the ORIGINAL `resume` option it was constructed
+            // with, and stays that way: a thrown, pre-completion failure
+            // never gives the underlying adapter a chance to latch its own
+            // session id onto this handle (`ClaudeAgentSdkSession`'s
+            // contract — the same "never latches on `isError`" rule the F3
+            // comment below documents for a turn that fails by *completing*
+            // with `isError: true` applies just as much to one that fails by
+            // *throwing* before completing at all), so nothing has moved
+            // this handle's resume target since it was first created.
+            throw error;
+          }
+
+          // T2.3 in-conversation fallback: the resumed transcript genuinely
+          // doesn't exist on this machine (deleted, expired, moved), and
+          // nothing was yielded to the caller yet, so re-issuing the turn is
+          // safe. Drop the dead handle (`close()` here is a documented no-op
+          // for this exact shape — a thrown, pre-"done" failure latches
+          // neither `ownSessionId` nor `failedSessionIds` on the underlying
+          // session, real adapter or fake alike — kept anyway for
+          // defense-in-depth against a future SDK that partially persists
+          // before throwing), recreate without `resume`, and re-issue the
+          // *same* turn with the summary prepended to the model prompt only
+          // (this class doc, `buildFallbackPrompt`).
+          await this.session?.close?.();
+          this.session = undefined;
+          this.pendingResume = undefined;
+
+          const fallbackSession = await this.getOrCreateSession();
+          const fallbackPrompt = buildFallbackPrompt(fallbackSummary, prompt);
+          ({ finalText, turnFailed } = yield* this.runModelTurn(
+            fallbackSession,
+            fallbackPrompt,
+            yieldedAnything,
+          ));
+        }
+
+        // F3 review fix: once a resumed first turn has completed without
+        // hitting the no-conversation-found fallback above, resume is
+        // spent — either the SDK's `ownSessionId` genuinely latched onto
+        // this handle (an ordinary successful turn), or it legitimately
+        // failed some other way that the fallback branch already decided
+        // not to retry. Either way, `pendingResume` must not survive to a
+        // later `release()`-then-reuse of this same handle: the alternative
+        // is silently re-resuming a sdk id the SDK itself has already moved
+        // past (see `pendingResume`'s field doc / `finishRelease`).
+        // Deliberately gated on `!turnFailed`, not unconditional: an
+        // `isError` result never latches `ownSessionId` (the real
+        // adapter's contract — see `ClaudeAgentSdkSession`), so resume is
+        // NOT actually spent in that case, and a later retry of this same
+        // conversation should still be allowed to try it again.
+        if (isResumingFirstTurn && !turnFailed) {
+          this.pendingResume = undefined;
+        }
+
+        if (turnFailed) return;
+
+        yield { type: "assistant-message", text: finalText };
+
+        const directives = parseShadowDirectives(finalText);
+        if (directives.research.length === 0 && directives.chapters.length === 0) {
+          return;
+        }
+
+        const followUps: string[] = [];
+        for await (const event of this.runResearchDirectives(directives.research, followUps)) {
+          yield event;
+        }
+        for (const directive of directives.chapters) {
+          for await (const event of this.runChapterDirective(directive, followUps)) {
+            yield event;
           }
         }
-      }
-      if (turnFailed) return;
 
-      yield { type: "assistant-message", text: finalText };
-
-      const directives = parseShadowDirectives(finalText);
-      if (directives.research.length === 0 && directives.chapters.length === 0) {
-        return;
+        prompt = followUps.join("\n\n");
       }
 
-      const followUps: string[] = [];
-      for (const directive of directives.research) {
-        for await (const event of this.runResearchDirective(directive, followUps)) {
-          yield event;
-        }
+      throw new AutoTurnBudgetExceededError(maxAutoTurns);
+    } finally {
+      this.activeTurns -= 1;
+      if (this.activeTurns === 0 && this.releaseRequested) {
+        this.releaseRequested = false;
+        this.finishRelease();
       }
-      for (const directive of directives.chapters) {
-        for await (const event of this.runChapterDirective(directive, followUps)) {
-          yield event;
-        }
-      }
-
-      prompt = followUps.join("\n\n");
     }
-
-    throw new AutoTurnBudgetExceededError(maxAutoTurns);
   }
 
-  private async *runResearchDirective(
-    directive: ResearchDirective,
+  /**
+   * Drive one `session.stream(prompt)` call to completion, yielding
+   * `text-delta`/`error` `ShadowEvent`s as they arrive and returning the
+   * turn's outcome — factored out of `sendMessage` so T2.3's fallback can
+   * re-issue the same logic against a freshly-created session/prompt
+   * without duplicating the event-mapping. A thrown failure (including the
+   * SDK's no-conversation-found error) propagates out of this generator
+   * uncaught; `sendMessage` is the layer that decides whether to catch it.
+   *
+   * @param yieldedAnything F4 review fix: set to `true` the moment this
+   *   generator yields its first event, *before* the throw that might
+   *   follow it — a mutable box rather than a return value because a
+   *   generator that throws never reaches its own `return`, so this is the
+   *   only way `sendMessage`'s `catch` can learn "did the caller already
+   *   see real output from this attempt" once control reaches it.
+   */
+  private async *runModelTurn(
+    session: AgenticSession,
+    prompt: string,
+    yieldedAnything: { value: boolean },
+  ): AsyncGenerator<ShadowEvent, { finalText: string; turnFailed: boolean }, undefined> {
+    let finalText = "";
+    let turnFailed = false;
+
+    for await (const event of session.stream(prompt)) {
+      if (event.type === "text-delta") {
+        yieldedAnything.value = true;
+        yield { type: "text-delta", text: event.text };
+      } else if (event.type === "done") {
+        finalText = event.result.text;
+        if (event.result.isError) {
+          turnFailed = true;
+          yieldedAnything.value = true;
+          yield {
+            type: "error",
+            error: `Shadow's turn failed (stopReason: ${event.result.stopReason ?? "unknown"})`,
+          };
+        }
+      }
+    }
+
+    return { finalText, turnFailed };
+  }
+
+  /**
+   * Run every research directive from one model turn concurrently (T0.2).
+   * `research-started` fires for all of them up front, in directive order,
+   * before any brief's `research()` call begins. Completion events
+   * (`research-completed`/`research-failed`) then stream out via
+   * `mergeAsyncEvents` in *settle* order — whichever brief finishes first is
+   * yielded first — but `followUps` (the next turn's prompt material) is
+   * assembled in *directive* order once every brief has settled, so the
+   * model always sees a deterministic prompt regardless of network timing.
+   * A brief that throws is caught right here and turned into a
+   * `research-failed` event/follow-up line, same shape the old sequential
+   * code produced — it never sinks the siblings still in flight, because
+   * each brief is an independent `Promise` from the start.
+   */
+  private async *runResearchDirectives(
+    directives: readonly ResearchDirective[],
     followUps: string[],
   ): AsyncGenerator<ShadowEvent, void, undefined> {
-    const brief = toResearchBrief(this.volume, directive);
-    yield { type: "research-started", brief };
-    try {
-      const result = await this.deps.researchBriefPort.research(brief);
-      yield { type: "research-completed", brief, result };
-      followUps.push(formatResearchResult(brief, result));
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      yield { type: "research-failed", brief, error: message };
-      followUps.push(formatResearchFailure(brief, message));
+    if (directives.length === 0) return;
+
+    const briefs = directives.map((directive) => toResearchBrief(this.volume, directive));
+    for (const brief of briefs) {
+      yield { type: "research-started", brief };
     }
+
+    // Sparse until every producer settles (`mergeAsyncEvents` runs them all
+    // concurrently below) — honestly typed as possibly-`undefined` rather
+    // than lying with `string[]`; asserted filled at the spread site once
+    // every slot is guaranteed set.
+    const followUpBySlot: (string | undefined)[] = Array.from({ length: briefs.length });
+    const producers: AsyncEventProducer<ShadowEvent>[] = briefs.map(
+      (brief, slot) => async (push) => {
+        try {
+          const result = await this.deps.researchBriefPort.research(brief);
+          followUpBySlot[slot] = formatResearchResult(brief, result);
+          push({ type: "research-completed", brief, result });
+        } catch (error) {
+          const message = error instanceof Error ? error.message : String(error);
+          followUpBySlot[slot] = formatResearchFailure(brief, message);
+          push({ type: "research-failed", brief, error: message });
+        }
+      },
+    );
+
+    for await (const event of mergeAsyncEvents(producers)) {
+      yield event;
+    }
+
+    // Every producer above settled (successfully or not) before
+    // `mergeAsyncEvents` returned, and each one unconditionally sets its own
+    // slot before pushing its completion event — so every slot is filled by
+    // this point; the assertion below documents that invariant instead of
+    // silently coercing `undefined` to `string`.
+    followUps.push(
+      ...followUpBySlot.map((followUp, slot) => {
+        if (followUp === undefined) {
+          throw new Error(`internal error: research directive slot ${slot} never settled`);
+        }
+        return followUp;
+      }),
+    );
   }
 
+  /**
+   * Draft, then publish, one chapter directive — the whole read-modify-write
+   * unit held under `volumeLocks` for `this.volume` (T0.6, module doc
+   * above), so two conversations publishing to the same volume never
+   * interleave their sidecar writes/retirement appends/reindex; the reindex
+   * step inside `publishChapter` additionally serializes corpus-wide via
+   * `CORPUS_LOCK_KEY` (F1 review fix, module doc above).
+   *
+   * Events stream to the caller as each step completes, via a single-producer
+   * `mergeAsyncEvents` that `push`es synchronously from *inside* the locked
+   * section (F3/F4 review fix) — a deliberate departure from "collect during
+   * the lock, yield only after release": lock hold time no longer depends on
+   * how fast the consumer pulls (`push` returns immediately regardless), the
+   * caller can observe events like `chapter-drafted` *while the lock is
+   * still held* (streaming is no longer delayed for the whole draft+publish
+   * unit), and — the correctness fix, not just a latency one — a
+   * `publishChapter` throw after a successful draft no longer discards the
+   * already-pushed `chapter-drafted` event: `mergeAsyncEvents` drains every
+   * buffered event before surfacing a producer's rejection
+   * (`merge-async-events.ts`'s documented completion order), so the operator
+   * still gets the "a draft landed on disk" signal even when publication
+   * itself blows up afterward.
+   */
   private async *runChapterDirective(
     directive: ChapterDirective,
     followUps: string[],
   ): AsyncGenerator<ShadowEvent, void, undefined> {
-    let slug: ChapterSlug;
-    try {
-      const draft = await draftChapter(this.deps, this.volume, directive);
-      slug = draft.chapter.slug;
-      yield { type: "chapter-drafted", volume: this.volume, chapter: slug };
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      yield { type: "error", error: `Could not draft chapter "${directive.slug}": ${message}` };
-      followUps.push(formatChapterDraftFailure(directive.slug, message));
-      return;
-    }
+    let followUp: string | undefined;
 
-    const result = await publishChapter(this.deps, this.volume, slug);
-    const issues = result.outcomes.flatMap((outcome) => outcome.issues);
-    yield {
-      type: "chapter-audit",
-      volume: this.volume,
-      chapter: slug,
-      passed: result.verdict.passed,
-      repairs: result.repairs,
-    };
-    if (result.published) {
-      yield { type: "chapter-published", volume: this.volume, chapter: slug };
-    } else {
-      yield { type: "chapter-rejected", volume: this.volume, chapter: slug, issues };
-    }
-    followUps.push(formatChapterOutcome(slug, result.published, issues, result.repairs));
+    yield* mergeAsyncEvents<ShadowEvent>([
+      async (push) => {
+        await this.volumeLocks.withLock(this.volume, async () => {
+          let slug: ChapterSlug;
+          try {
+            const draft = await draftChapter(this.deps, this.volume, directive);
+            slug = draft.chapter.slug;
+            push({ type: "chapter-drafted", volume: this.volume, chapter: slug });
+          } catch (error) {
+            const message = error instanceof Error ? error.message : String(error);
+            push({
+              type: "error",
+              error: `Could not draft chapter "${directive.slug}": ${message}`,
+            });
+            followUp = formatChapterDraftFailure(directive.slug, message);
+            return;
+          }
+
+          const result = await publishChapter(
+            {
+              ...this.deps,
+              withReindexLock: (fn) => this.volumeLocks.withLock(CORPUS_LOCK_KEY, fn),
+            },
+            this.volume,
+            slug,
+          );
+          const issues = result.outcomes.flatMap((outcome) => outcome.issues);
+          push({
+            type: "chapter-audit",
+            volume: this.volume,
+            chapter: slug,
+            passed: result.verdict.passed,
+            repairs: result.repairs,
+          });
+          if (result.published) {
+            push({ type: "chapter-published", volume: this.volume, chapter: slug });
+          } else {
+            push({ type: "chapter-rejected", volume: this.volume, chapter: slug, issues });
+          }
+          followUp = formatChapterOutcome(slug, result.published, issues, result.repairs);
+        });
+      },
+    ]);
+
+    if (followUp !== undefined) followUps.push(followUp);
   }
 
   private async getOrCreateSession(): Promise<AgenticSession> {
@@ -359,6 +788,15 @@ export class ShadowConversation {
       allowedTools: ["Skill"],
       disallowedTools: ["WebFetch", "WebSearch", "Bash", "Read", "Write", "Edit", "Agent", "Task"],
       permissionMode: "default",
+      // T2.3: forward `StartConversationOptions.resume`, while it's still
+      // set, as this port's own `resume` option — honored only on this
+      // handle's first `stream()` call (`@shadow/model`'s
+      // `AgenticSessionOptions.resume` doc: "ignored after the first turn
+      // of a session that already has its own sessionId"). `undefined`
+      // once `sendMessage`'s fallback has cleared `pendingResume` (or if
+      // this conversation was never asked to resume anything), so the
+      // recreated post-fallback session is a genuinely fresh one.
+      resume: this.pendingResume ? { sessionId: this.pendingResume.sdkSessionId } : undefined,
       // Deliberately NOT `persistSession: false`. This handle is reused
       // across every `sendMessage` call and every auto-continuation round
       // (module doc above, D6) via `resume` — and `resume` only works
@@ -375,23 +813,57 @@ export class ShadowConversation {
       // spelled out here rather than left to be silently reintroduced.
       //
       // Cost this incurs (documented, not hidden): every conversation's
-      // transcript now persists under `~/.claude/projects/` for as long as
-      // the process keeps this `ShadowConversation` alive. Nothing in this
-      // package currently calls the matching cleanup —
-      // `AgenticSession.close()` (backed by the SDK's `deleteSession`) is
-      // available on `this.session` for whichever layer owns conversation
-      // lifecycle (today, `@shadow/api`'s `ApiDeps.conversations` map) to
-      // call once a conversation is evicted or the operator ends it.
+      // transcript persists under `~/.claude/projects/` for as long as the
+      // operator keeps talking to it — and, as of T2.4/D6b, for as long as
+      // the operator wants it resumable *after* that too, since eviction
+      // and shutdown now only `release()` this handle rather than deleting
+      // anything. The transcript is gone only when something calls
+      // `AgenticSessionPort.deleteStoredSession(sdkSessionId)` explicitly
+      // (T3.1's `DELETE` endpoint) — deliberate, id-based, and never routed
+      // through this handle.
     });
     return this.session;
   }
 }
 
-/** Top-level factory: holds Shadow's injected collaborators and mints a `ShadowConversation` per conversation. */
+/**
+ * Top-level factory: holds Shadow's injected collaborators and mints a
+ * `ShadowConversation` per conversation. Also owns the one `VolumeLocks`
+ * instance shared by every conversation it mints (T0.6, `conversation.ts`'s
+ * module doc) — this is what makes same-volume chapter publication
+ * serialized *across* conversations/sessions, not just within one.
+ */
 export class ShadowAgent {
+  private readonly volumeLocks = new VolumeLocks();
+
   constructor(private readonly deps: ShadowAgentDeps) {}
 
   startConversation(volume: VolumeSlug, options?: StartConversationOptions): ShadowConversation {
-    return new ShadowConversation(this.deps, volume, options);
+    return new ShadowConversation(this.deps, volume, this.volumeLocks, options);
+  }
+
+  /**
+   * Run `fn` with `volume`'s lock held — the *same* `VolumeLocks` instance
+   * (and therefore the same mutex) every `ShadowConversation` this agent
+   * mints uses for chapter publication (T0.6). Exposed so `@shadow/api`'s
+   * HTTP chapter-publish handler (`handlers/chapters.ts`, F2 review fix) can
+   * serialize against chat-driven publishes on the same volume, not just
+   * against other HTTP publishes — without this, the HTTP path bypassed
+   * locking entirely.
+   */
+  withVolumeLock<T>(volume: VolumeSlug, fn: () => Promise<T>): Promise<T> {
+    return this.volumeLocks.withLock(volume, fn);
+  }
+
+  /**
+   * Run `fn` with the corpus-wide reindex lock held (`CORPUS_LOCK_KEY`, F1
+   * review fix) — the same lock `ShadowConversation.runChapterDirective`
+   * wraps around `publishChapter`'s reindex step. Exposed so the HTTP
+   * chapter-publish handler's own `publishChapter` call serializes its
+   * reindex against chat-driven publishes on *other* volumes too, not only
+   * same-volume ones.
+   */
+  withReindexLock<T>(fn: () => Promise<T>): Promise<T> {
+    return this.volumeLocks.withLock(CORPUS_LOCK_KEY, fn);
   }
 }

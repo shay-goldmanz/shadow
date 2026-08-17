@@ -8,9 +8,11 @@
  *
  * Per T3.3's report, `ShadowAgent` needs: `FileSystemVolumeStore` +
  * `FileSystemEvidenceStore` (`@shadow/core`/`@shadow/evidence`),
- * `StructuralIndexer` (`@shadow/indexing`), `WebResearchToolAgent` as the
+ * `StructuralIndexer` (`@shadow/indexing`), `PerBriefResearchAgent` as the
  * `ResearchBriefPort` (`@shadow/research`, itself needing a
- * `RetrievalTransport` and the evidence store), the Tier 2
+ * `RetrievalTransport` and the evidence store — see that class's module
+ * doc for why a fresh-per-brief factory replaced the single shared
+ * `WebResearchToolAgent` this used to build directly, T0.1), the Tier 2
  * `Batched*` adapters (`@shadow/evidence`) over a `StructuredGenerationPort`,
  * and an `AgenticSessionPort` + `StructuredGenerationPort` from
  * `@shadow/model`. All of it lives here.
@@ -27,20 +29,32 @@ import {
   FileSystemEvidenceStore,
 } from "@shadow/evidence";
 import { FileMissLog, StructuralIndexer } from "@shadow/indexing";
-import { createModel } from "@shadow/model";
+import { createModel, type RetryPolicy } from "@shadow/model";
 import {
   AgenticSearchProvider,
   createRetrievalTransport,
-  WebResearchToolAgent,
+  PerBriefResearchAgent,
 } from "@shadow/research";
-import { ConversationRegistry } from "./conversation-registry.ts";
+import { FileSystemSessionStore } from "@shadow/sessions";
 import type { ApiDeps } from "./deps.ts";
+import { SessionService } from "./session-service.ts";
 
 export interface BuildRealApiDepsOptions {
   /** The `VolumeStore`/`EvidenceStore` root. @default `~/.shadow` (D4). */
   readonly root?: string;
   /** Model defaults (e.g. `model` name) forwarded to `@shadow/model`'s `createModel`. */
   readonly model?: string;
+  /**
+   * Retry policy for agentic session turns, forwarded to `createModel`
+   * (`@shadow/model/ports/retry-policy.ts`). The swap point T1.2's plan
+   * entry names: pass `noRetryPolicy` here to disable retries entirely, or
+   * a custom `RetryPolicy` to change the behavior — one line, this call
+   * site only. Omit for `createModel`'s default (`conservativeRetryPolicy`).
+   * `RetryingAgenticSession` (`@shadow/model`'s T1.3, now built) is what
+   * actually consults this on every turn; `createModel` just resolves and
+   * threads it through to that decorator.
+   */
+  readonly retryPolicy?: RetryPolicy;
 }
 
 /** Build a fully real `ApiDeps` — live filesystem store, live evidence store, live model ports (subscription auth only, D5), live web retrieval. Used only by `start.ts`; never imported by a test. */
@@ -54,6 +68,7 @@ export function buildRealApiDeps(options: BuildRealApiDepsOptions = {}): ApiDeps
   const { structuredGeneration, agenticSession } = createModel({
     structuredGeneration: options.model ? { model: options.model } : undefined,
     agenticSession: options.model ? { model: options.model } : undefined,
+    retryPolicy: options.retryPolicy,
   });
 
   const checkWorthinessClassifier = new BatchedCheckWorthinessClassifier(structuredGeneration);
@@ -71,7 +86,12 @@ export function buildRealApiDeps(options: BuildRealApiDepsOptions = {}): ApiDeps
   // D2's determinism) stays intact.
   const searchProvider = new AgenticSearchProvider({ sessions: agenticSession });
   const transport = createRetrievalTransport({ mode: "live", live: { search: searchProvider } });
-  const researchBriefPort = new WebResearchToolAgent({
+  // `PerBriefResearchAgent`, not a single shared `WebResearchToolAgent`
+  // (see this file's own module doc and `per-brief-research-agent.ts`'s):
+  // a fresh `WebResearchToolAgent` per `research()` call is what makes
+  // concurrent briefs — across conversations or within one — safe instead
+  // of serialized behind a `busy` flag (T0.1).
+  const researchBriefPort = new PerBriefResearchAgent({
     transport,
     evidenceStore,
     sessions: agenticSession,
@@ -96,6 +116,20 @@ export function buildRealApiDeps(options: BuildRealApiDepsOptions = {}): ApiDeps
     sessionCwd: root,
   });
 
+  // `FileSystemSessionStore` at `<root>/sessions/` (T2.1) — the same `root`
+  // every other store here is rooted at, so the API and the CLI stay
+  // pointed at one corpus (see `sessionCwd`'s comment above for the exact
+  // incident this mirrors for chat's own working directory).
+  const sessionStore = new FileSystemSessionStore(root);
+  // `agenticSession` — the SAME model port `shadowAgent` was built with
+  // above — is what `SessionService.deleteSession` (T3.1) drives
+  // `deleteStoredSession` through; see `SessionServiceDeps.agenticSessionPort`'s doc.
+  const sessionService = new SessionService({
+    store: sessionStore,
+    shadowAgent,
+    agenticSessionPort: agenticSession,
+  });
+
   return {
     volumeStore,
     evidenceStore,
@@ -112,6 +146,7 @@ export function buildRealApiDeps(options: BuildRealApiDepsOptions = {}): ApiDeps
     // exactly the split T2.7 already fixed on the CLI side.
     missLog: new FileMissLog(join(root, "misses.jsonl")),
     shadowAgent,
-    conversations: new ConversationRegistry(),
+    sessionService,
+    conversations: sessionService.registry,
   };
 }

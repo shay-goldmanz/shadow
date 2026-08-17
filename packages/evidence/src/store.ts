@@ -34,6 +34,7 @@ import { LedgerCorruptError, SnapshotNotFoundError, SourceNotFoundError } from "
 import { newSourceId, type SourceId, toSourceId } from "./ids.ts";
 import { EvidenceLayout } from "./layout.ts";
 import type { ClaimSidecar, EvidenceManifest, LedgerEvent, SourceRecord } from "./types.ts";
+import { generateUlid } from "./ulid.ts";
 import {
   deriveSourceFromRetrieval,
   deriveSourceFromTranscript,
@@ -227,7 +228,16 @@ export class FileSystemEvidenceStore implements EvidenceStore {
     // Content-addressed: if it's already there, the content is by
     // definition identical (same hash), so writing again is a no-op.
     if (!(await Bun.file(path).exists())) {
-      await Bun.write(path, normalizedText);
+      // Write to a per-call tmp file, then `rename` into place — `rename` is
+      // atomic on the same filesystem, so a concurrent reader can never
+      // observe a partially-written snapshot at `path` (the torn-read window
+      // a direct `Bun.write(path, ...)` leaves open). The tmp name is
+      // ULID-suffixed so two concurrent `putSnapshot` calls for the same
+      // (not-yet-existing) hash never collide on each other's tmp file.
+      const { rename } = await import("node:fs/promises");
+      const tmpPath = `${path}.tmp.${generateUlid()}`;
+      await Bun.write(tmpPath, normalizedText);
+      await rename(tmpPath, path);
     }
     return hash;
   }

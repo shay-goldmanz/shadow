@@ -157,8 +157,8 @@ describe("AgenticSearchProvider — malformed output fails loudly", () => {
   });
 });
 
-describe("AgenticSearchProvider — session reuse (D6)", () => {
-  test("one session serves every search() call on the same instance, not one per call", async () => {
+describe("AgenticSearchProvider — one-shot sessions, not shared (T0.5)", () => {
+  test("a fresh session is created for every search() call, not reused across calls", async () => {
     let turnCount = 0;
     const sessions = new FakeAgenticSessionPort(() => {
       turnCount += 1;
@@ -177,9 +177,54 @@ describe("AgenticSearchProvider — session reuse (D6)", () => {
     });
 
     expect(turnCount).toBe(3);
-    expect(sessions.sessions).toHaveLength(1);
-    expect(sessions.sessions[0]?.prompts).toHaveLength(3);
-    expect(provider.sessionId).toBe(sessions.sessions[0]?.sessionId);
+    // One session per call, each carrying exactly its own one prompt.
+    expect(sessions.sessions).toHaveLength(3);
+    for (const session of sessions.sessions) {
+      expect(session.prompts).toHaveLength(1);
+    }
+    // Distinct handles, not the same instance resumed three times.
+    expect(sessions.sessions[0]).not.toBe(sessions.sessions[1]);
+    expect(sessions.sessions[1]).not.toBe(sessions.sessions[2]);
+  });
+
+  test("every created session sets persistSession: false", async () => {
+    const sessions = new FakeAgenticSessionPort(() => ({ text: VALID_RESULTS_JSON }));
+    const provider = new AgenticSearchProvider({ sessions });
+
+    await provider.search({ query: "first" }, async () => {
+      throw new Error("unused");
+    });
+    await provider.search({ query: "second" }, async () => {
+      throw new Error("unused");
+    });
+
+    expect(sessions.sessions).toHaveLength(2);
+    for (const session of sessions.sessions) {
+      expect(session.options.persistSession).toBe(false);
+    }
+  });
+
+  test("concurrent search() calls run on distinct sessions and both complete correctly — no shared-session resume race", async () => {
+    const sessions = new FakeAgenticSessionPort((prompt) => ({
+      text: prompt.includes("alpha")
+        ? JSON.stringify({ results: [{ title: "Alpha result", url: "https://alpha.example" }] })
+        : JSON.stringify({ results: [{ title: "Beta result", url: "https://beta.example" }] }),
+    }));
+    const provider = new AgenticSearchProvider({ sessions });
+
+    const [alpha, beta] = await Promise.all([
+      provider.search({ query: "alpha query" }, async () => {
+        throw new Error("unused");
+      }),
+      provider.search({ query: "beta query" }, async () => {
+        throw new Error("unused");
+      }),
+    ]);
+
+    expect(sessions.sessions).toHaveLength(2);
+    expect(sessions.sessions[0]).not.toBe(sessions.sessions[1]);
+    expect(alpha.hits).toEqual([{ title: "Alpha result", url: "https://alpha.example" }]);
+    expect(beta.hits).toEqual([{ title: "Beta result", url: "https://beta.example" }]);
   });
 });
 
@@ -201,7 +246,8 @@ describe("AgenticSearchProvider — structural tool-allowlist hardening", () => 
     // WebSearch must never be in disallowedTools — that would contradict allowedTools.
     expect(options?.disallowedTools).not.toContain("WebSearch");
     expect(options?.settingSources).toEqual([]);
-    expect(options?.persistSession).not.toBe(false);
+    // One-shot session (T0.5): this handle receives exactly one turn.
+    expect(options?.persistSession).toBe(false);
   });
 });
 

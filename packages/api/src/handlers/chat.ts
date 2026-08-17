@@ -1,49 +1,55 @@
 /**
- * `POST /api/chat` (`docs/API.md` §Chat). Drives one `ShadowConversation`
- * turn and streams its `ShadowEvent`s back as SSE.
+ * `POST /api/chat` (`docs/API.md` §Chat). Enqueues one turn on
+ * `deps.sessionService` (T2.5) and streams it back as SSE — this handler is
+ * "the first viewer of the turn it enqueued" (PLAN.md's Tier 2 intro), not
+ * the thing driving the turn: `SessionService.enqueueTurn` owns creating/
+ * rehydrating the session, appending the operator/boundary records, and
+ * draining `ShadowConversation.sendMessage()`; this handler only maps what
+ * it observes onto the wire and manages its own SSE controller.
  *
- * ## Session reuse (D6) and the divergence in what "sessionId" means
+ * ## The turn survives this handler going away
  *
- * `docs/API.md` ties the `session` SSE event to D6's session-reuse
- * argument (the ~18k-token preamble cost), which suggests the underlying
- * `AgenticSession`'s own id. That id (`ShadowConversation.sessionId`,
- * `@shadow/agent`) is `undefined` until the *first* model turn completes —
- * unusable as "the first event" of a turn that hasn't started yet. What
- * actually makes D6 reuse happen in this codebase is holding the same
- * `ShadowConversation` *instance* in memory and calling `sendMessage`
- * again on it (`conversation.ts`'s `getOrCreateSession` caches `this.session`
- * across calls). So this handler exposes `ShadowConversation.id` — stable
- * from construction, before any turn runs — as the wire `sessionId`, and
- * keeps a bounded `sessionId -> ShadowConversation` registry
- * (`ApiDeps.conversations`, `ConversationRegistry`) so a client that echoes
- * it back resumes the same instance, and therefore the same underlying
- * `AgenticSession`. Flagged for `docs/API.md` to confirm or correct.
+ * Before T2.5, `cancel()` called `iterator.return()` on the conversation's
+ * own generator, killing the turn the instant a client disconnected. Now
+ * `cancel()` only stops iterating `enqueued.events` (a generator over a
+ * session-bus subscription, `session-service.ts`'s `drainChannel`) — its
+ * `finally` unsubscribes this one viewer, nothing more. The turn keeps
+ * draining server-side regardless of whether this handler, or any other
+ * viewer, is still watching (this module's whole reason for existing under
+ * T2.5, vs. the old request-scoped design).
+ *
+ * ## Session id resolution stays a pre-stream, ordinary HTTP concern
+ *
+ * `resolveTarget` below does exactly what `resolveConversation` used to:
+ * validate the request shape and, for a new conversation, confirm the
+ * volume exists (`docs/API.md`'s `volume_not_found`) — all BEFORE the SSE
+ * stream opens, so those failures stay ordinary JSON error responses
+ * (`error-mapping.ts`), not in-band `error` SSE events. `SessionService`
+ * itself resolves `{sessionId}` existence (`session_not_found`) and the
+ * turn-queue bound (`turn_queue_busy`) inside `enqueueTurn`, which this
+ * handler awaits before opening the stream — same pre-stream guarantee,
+ * just resolved one layer down.
  *
  * ## Mapping ShadowEvent -> docs/API.md's SSE table
  *
- * Not one-to-one; see each `case` below for the specific gap. Summary for
- * the task report: `operator-turn-recorded` and `assistant-message` are
- * dropped (no doc row; the latter is redundant with the `text` deltas
- * that already sum to it). `research-failed` and `chapter-published` /
- * `chapter-rejected` have no doc row but are real `ShadowEvent`s Shadow
- * actually emits, so — per instruction to follow the real shape rather
- * than invent nothing — they are forwarded as `research.failed` /
- * `chapter.published` / `chapter.rejected`, dot-named to match the table's
- * own convention. `chapter.restated` (D9's visibility requirement) is
- * synthesized: `chapter-audit`'s `repairs[]` is the only place a
- * `RepairDecision` appears in `ShadowEvent`, so this handler unpacks one
- * `chapter.restated` per decision. `indexed` is never emitted for chat: see
- * the `chapter-audit` case below for why that is a real gap, not an
- * oversight.
+ * The mapping itself — every `ShadowEvent` case, every wire field, and why
+ * each gap from `docs/API.md`'s table is what it is — lives in
+ * `../event-mapping.ts` (T2.2), shared with replay (T2.7). This handler's
+ * job is just the live-specific wiring around it: forward `text-delta`
+ * chunks straight through (they have no stored shape at all), and run every
+ * other observed record's stored event through `wireEventsForLive`. The
+ * `operator-message` record and `turn-boundary(started)` record —
+ * synthesized by `SessionService` itself, at run start — arrive through the
+ * exact same subscription as everything else, so this handler no longer
+ * synthesizes the operator wire event itself the way it used to.
  */
 
-import type { ShadowConversation, ShadowEvent } from "@shadow/agent";
 import { toVolumeSlug } from "@shadow/core";
-import type { ResearchBrief } from "@shadow/research";
 import type { BunRequest } from "bun";
 import type { ApiDeps } from "../deps.ts";
-import { toErrorResponse } from "../error-mapping.ts";
-import { InvalidRequestError, SessionNotFoundError } from "../errors.ts";
+import { InvalidRequestError } from "../errors.ts";
+import { errorEventForBoundary, textDeltaWireEvent, wireEventsForLive } from "../event-mapping.ts";
+import type { EnqueuedTurn, EnqueueTarget } from "../session-service.ts";
 import { encodeSseEvent } from "../sse.ts";
 
 interface ChatBody {
@@ -52,17 +58,12 @@ interface ChatBody {
   readonly sessionId?: unknown;
 }
 
-async function resolveConversation(
-  deps: ApiDeps,
-  body: ChatBody,
-): Promise<{ conversation: ShadowConversation; sessionId: string }> {
+async function resolveTarget(deps: ApiDeps, body: ChatBody): Promise<EnqueueTarget> {
   if (body.sessionId !== undefined) {
     if (typeof body.sessionId !== "string") {
       throw new InvalidRequestError("sessionId must be a string when provided");
     }
-    const conversation = deps.conversations.get(body.sessionId);
-    if (!conversation) throw new SessionNotFoundError(body.sessionId);
-    return { conversation, sessionId: body.sessionId };
+    return { sessionId: body.sessionId };
   }
 
   if (typeof body.volumeSlug !== "string" || body.volumeSlug.trim().length === 0) {
@@ -70,10 +71,7 @@ async function resolveConversation(
   }
   const volume = toVolumeSlug(body.volumeSlug);
   await deps.volumeStore.getVolume(volume); // 404 volume_not_found if it doesn't exist
-
-  const conversation = deps.shadowAgent.startConversation(volume);
-  deps.conversations.set(conversation.id, conversation);
-  return { conversation, sessionId: conversation.id };
+  return { volume };
 }
 
 export async function postChat(deps: ApiDeps, req: BunRequest<"/api/chat">): Promise<Response> {
@@ -83,24 +81,26 @@ export async function postChat(deps: ApiDeps, req: BunRequest<"/api/chat">): Pro
   }
   const message = body.message;
 
-  // Validation and session lookup happen here, BEFORE the stream opens —
-  // failures here are ordinary JSON error responses (`error-mapping.ts`),
-  // not in-band SSE `error` events, because headers/status can still
-  // change at this point. Only failures *during* the turn itself (inside
-  // the `ReadableStream`, below) become in-band `error` events, per
-  // `docs/API.md`: "error — terminal for this turn."
-  const { conversation, sessionId } = await resolveConversation(deps, body);
+  // Validation, target resolution, AND the enqueue itself all happen here,
+  // BEFORE the stream opens — failures here (`invalid_request`,
+  // `volume_not_found`, `session_not_found`, `turn_queue_busy`) are ordinary
+  // JSON error responses (`error-mapping.ts`), not in-band SSE `error`
+  // events, because headers/status can still change at this point. Only
+  // failures *during* the turn itself (inside the `ReadableStream`, below)
+  // become in-band `error` events, per `docs/API.md`: "error — terminal for
+  // this turn."
+  const target = await resolveTarget(deps, body);
+  const enqueued: EnqueuedTurn = await deps.sessionService.enqueueTurn(target, message);
 
   // Guards against a disconnected client (`cancel()` below) racing the
-  // generator loop: without `closed`, a client that goes away mid-turn lets
-  // `conversation.sendMessage`'s generator keep running, `send()` then
-  // throws trying to `enqueue` on an already-closed/errored controller, the
+  // draining loop: without `closed`, a client that goes away mid-turn lets
+  // this loop keep pulling from `enqueued.events`, `send()` then throws
+  // trying to `enqueue` on an already-closed/errored controller, the
   // `catch` below turns that into an `error` SSE event on a dead stream
   // (itself another `enqueue` on a closed controller), and `finally` then
   // double-closes. `closed` short-circuits every one of those once either
-  // `cancel()` fires or the turn finishes on its own.
+  // `cancel()` fires or the loop finishes on its own.
   let closed = false;
-  let iterator: AsyncGenerator<ShadowEvent> | undefined;
 
   const stream = new ReadableStream<Uint8Array>({
     async start(controller) {
@@ -124,7 +124,7 @@ export async function postChat(deps: ApiDeps, req: BunRequest<"/api/chat">): Pro
           // Already closed (e.g. by a concurrent `cancel()`) — fine.
         }
       };
-      send("session", { sessionId });
+      send("session", { sessionId: enqueued.sessionId });
 
       // Shadow can be legitimately silent for a long time — a research brief
       // that fetches several pages, then a Tier 2 audit, can easily outlast any
@@ -143,124 +143,72 @@ export async function postChat(deps: ApiDeps, req: BunRequest<"/api/chat">): Pro
         }
       }, 5_000);
 
-      // Correlates a `research-started` brief with its later `research-completed`
-      // / `research-failed` counterpart — `ShadowEvent` carries the same
-      // `ResearchBrief` object reference across both yields
-      // (`conversation.ts`'s `runResearchDirective`), but has no `briefId`
-      // field of its own (`docs/API.md`'s `research.finished: { briefId, ... }`
-      // assumes one exists; it doesn't, so this handler mints one).
-      const briefIds = new WeakMap<ResearchBrief, string>();
-      let briefCounter = 0;
+      // Set the instant an `error` wire event is sent (either from a
+      // thrown-error boundary record, or an agent-emitted `{type:"error"}`
+      // `ShadowEvent`) — `docs/API.md`: "error — terminal for this turn," so
+      // `done` must never follow it on the same turn. Deferring the `done`
+      // decision to after the loop (rather than an early `close(); return;`
+      // the moment an error is seen, the old design) is safe here because
+      // the underlying turn generator always ends right after an error
+      // anyway (`@shadow/agent`'s `sendMessage` returns as soon as a turn
+      // fails) — there is nothing more to drain either way.
+      let errorSent = false;
 
       try {
-        iterator = conversation.sendMessage(message) as AsyncGenerator<ShadowEvent>;
-        for await (const event of iterator) {
-          if (closed) break; // client disconnected (cancel()) mid-turn — stop draining the generator
-          switch (event.type) {
-            case "operator-turn-recorded":
-              // No doc row — internal bookkeeping the operator doesn't need
-              // to see; it's implied by having sent the message at all.
-              break;
-            case "text-delta":
-              send("text", { delta: event.text });
-              break;
-            case "assistant-message":
-              // No doc row, and redundant: concatenated `text` deltas
-              // already reconstruct this exact string.
-              break;
-            case "research-started": {
-              const briefId = `brief-${++briefCounter}`;
-              briefIds.set(event.brief, briefId);
-              send("research.started", { briefId, brief: event.brief });
-              break;
+        for await (const msg of enqueued.events) {
+          if (closed) break; // client disconnected (cancel()) mid-turn — stop reading, the turn keeps running server-side regardless
+          if (msg.kind === "text-delta") {
+            // No stored shape at all (`@shadow/sessions` never persists
+            // deltas) — forwarded straight to the wire via the same
+            // mapping T2.7's replay+follow uses for its own live tail.
+            const wire = textDeltaWireEvent(msg.text);
+            send(wire.event, wire.data);
+            continue;
+          }
+          if (msg.kind === "ended") {
+            // Structurally unreachable here (T3.1): `enqueueTurn`'s own
+            // per-turn bus filter (`session-service.ts`) never forwards an
+            // `"ended"` message to a specific turn's channel — deleting a
+            // session 409s while any turn is running/queued, so this turn's
+            // channel is always already closed by the time one could ever be
+            // published. Handled for type-safety/forward-compat, not because
+            // this path is expected to run.
+            continue;
+          }
+          const { event } = msg.record;
+          if (event.type === "turn-boundary") {
+            // No wire representation for the boundary record itself
+            // (`wireEventsFromStored` already maps it to `[]`) — but a
+            // thrown-error `ended` boundary is the ONE place a thrown
+            // failure's message/code survive for the wire (T2.1's schema;
+            // an agent-emitted `{type:"error"}` event, by contrast, is an
+            // ordinary stored event already handled by `wireEventsForLive`
+            // below). `errorEventForBoundary` is the shared synthesis T2.7's
+            // replay+follow reuses for the identical case.
+            const errorWire = errorEventForBoundary(event);
+            if (errorWire) {
+              send(errorWire.event, errorWire.data);
+              errorSent = true;
             }
-            case "research-completed": {
-              const briefId = briefIds.get(event.brief) ?? "unknown";
-              for (const source of event.result.sources) {
-                send("research.source", {
-                  sourceId: source.id,
-                  url: source.url,
-                  title: source.title,
-                });
-              }
-              send("research.finished", { briefId, findings: event.result.findings });
-              break;
-            }
-            case "research-failed": {
-              // No doc row (the table only has started/source/finished for
-              // research) — forwarded anyway: silently dropping a real
-              // failure would contradict the table's own stated purpose
-              // ("silence reads as failure").
-              const briefId = briefIds.get(event.brief) ?? "unknown";
-              send("research.failed", { briefId, brief: event.brief, error: event.error });
-              break;
-            }
-            case "chapter-drafted":
-              send("chapter.drafted", { volume: event.volume, chapter: event.chapter });
-              break;
-            case "chapter-audit": {
-              // D9: what Shadow softened, and why, stays visible. One
-              // `chapter.restated` per `RepairDecision`, emitted before the
-              // summary `audit` event they contributed to.
-              for (const repair of event.repairs) {
-                send("chapter.restated", {
-                  claim: repair.label,
-                  from: repair.from,
-                  to: repair.to,
-                  reason: repair.reason,
-                  outcome: repair.outcome,
-                });
-              }
-              // `docs/API.md`'s `audit: { chapter, verdict, findings }` names
-              // fields `ShadowEvent`'s `chapter-audit` doesn't carry (no
-              // `AuditVerdict`, no per-claim findings — only `passed` and
-              // `repairs`; the issue list arrives separately, below, on
-              // `chapter-published`/`chapter-rejected`). Forwarded with the
-              // real fields rather than a fabricated shape.
-              send("audit", {
-                volume: event.volume,
-                chapter: event.chapter,
-                passed: event.passed,
-                repairs: event.repairs,
-              });
-              break;
-            }
-            case "chapter-published":
-              // No doc row. `indexed: { volume, stats }` is what the table
-              // has here instead, but `@shadow/agent`'s `publishChapter`
-              // discards the `Indexer.reindex` result it triggers
-              // internally (`packages/agent/src/publish.ts`), so this
-              // handler has no `stats` to report without either changing
-              // `@shadow/agent` (outside this package's boundary) or
-              // re-running `indexer.reindex` itself here — which would
-              // reindex twice and is exactly the kind of duplicated
-              // domain logic the task rules out. `chapter.published`
-              // already tells the operator the reindex succeeded
-              // (`publishChapter` only reindexes on a passing verdict).
-              send("chapter.published", { volume: event.volume, chapter: event.chapter });
-              break;
-            case "chapter-rejected":
-              send("chapter.rejected", {
-                volume: event.volume,
-                chapter: event.chapter,
-                issues: event.issues,
-              });
-              break;
-            case "error":
-              // `docs/API.md`: "terminal for this turn." `ShadowEvent`'s
-              // `error` carries only a string, no stable code — this isn't
-              // one of the typed pillar errors `error-mapping.ts` maps, it's
-              // Shadow's own turn narrating its own failure.
-              send("error", { message: event.error, code: "shadow_turn_error" });
-              close();
-              return;
+            continue;
+          }
+          for (const wire of wireEventsForLive(event)) {
+            send(wire.event, wire.data);
+            if (wire.event === "error") errorSent = true;
           }
         }
-        send("done", {});
+        if (!errorSent) send("done", {});
       } catch (error) {
+        // Reachable only for a failure in THIS handler's own consumption
+        // (e.g. `send` throwing into a genuinely broken controller state
+        // `closed` didn't already catch) — the turn's own failures are
+        // delivered as ordinary events through the loop above, never thrown
+        // out of it.
         if (!closed) {
-          const mapped = toErrorResponse(error);
-          send("error", { message: mapped.body.error.message, code: mapped.body.error.code });
+          send("error", {
+            message: error instanceof Error ? error.message : String(error),
+            code: "internal_error",
+          });
         }
       } finally {
         clearInterval(heartbeat);
@@ -268,16 +216,18 @@ export async function postChat(deps: ApiDeps, req: BunRequest<"/api/chat">): Pro
       }
     },
     // Fires when the client disconnects (nav away, tab close, aborted
-    // fetch) before the turn finishes. Without this, `conversation`'s
-    // generator keeps running to completion against a controller nobody
-    // can read from anymore — `send()` would throw into the `catch` above,
-    // which would `send("error", ...)` on the same dead controller, and
-    // `finally` would then close it a second time. Terminating the
-    // generator via `.return()` stops that chain at the source rather than
-    // papering over its symptoms downstream.
+    // fetch) before the turn finishes. Unlike the pre-T2.5 design, calling
+    // `.return()` here does NOT kill the turn — `enqueued.events` is a
+    // generator over a session-bus *subscription*
+    // (`session-service.ts`'s `drainChannel`), not over the turn's own
+    // draining loop; `.return()` only runs that generator's `finally`
+    // (unsubscribe) and stops this handler's own loop promptly instead of
+    // leaving it blocked waiting on the next bus message. The turn itself
+    // keeps running server-side, tee'd into the store, exactly as if this
+    // viewer had never disconnected (T2.5's whole point).
     async cancel() {
       closed = true;
-      await iterator?.return?.(undefined);
+      await enqueued.events.return(undefined);
     },
   });
 

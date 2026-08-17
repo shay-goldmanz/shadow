@@ -27,6 +27,16 @@
  *   hand-typed chapter with unsupported claims fails the audit exactly
  *   like a Shadow-drafted one would, which is the whole point of D9 being
  *   a gate rather than a courtesy.
+ *
+ * `putClaims`+`publishChapter` run under `deps.shadowAgent.withVolumeLock`
+ * (F2 review fix): that method shares the *same* `VolumeLocks` instance
+ * `ShadowConversation.runChapterDirective` holds for a chat-driven publish
+ * (T0.6), so a chapter write through this endpoint can no longer interleave
+ * its sidecar write/reindex with a chat-driven publish on the same volume —
+ * this handler used to call `publishChapter` directly, entirely outside
+ * that lock. `publishChapter`'s own `withReindexLock` is likewise bound to
+ * `deps.shadowAgent`'s corpus-wide reindex lock (F1 review fix), so this
+ * path's reindex is serialized against every other volume's too.
  */
 
 import { publishChapter } from "@shadow/agent";
@@ -92,18 +102,24 @@ export async function putChapter(
   };
   const chapterDoc = await deps.volumeStore.putChapter(volume, input);
 
-  const existingSidecar = await deps.evidenceStore.getClaims(volume, chapter);
-  const sidecar: ClaimSidecar = existingSidecar
-    ? { ...existingSidecar, chapterTextSha256: sha256Of(chapterDoc.body) }
-    : {
-        schemaVersion: "1.0",
-        chapter,
-        chapterTextSha256: sha256Of(chapterDoc.body),
-        claims: [],
-      };
-  await deps.evidenceStore.putClaims(volume, sidecar);
+  const result = await deps.shadowAgent.withVolumeLock(volume, async () => {
+    const existingSidecar = await deps.evidenceStore.getClaims(volume, chapter);
+    const sidecar: ClaimSidecar = existingSidecar
+      ? { ...existingSidecar, chapterTextSha256: sha256Of(chapterDoc.body) }
+      : {
+          schemaVersion: "1.0",
+          chapter,
+          chapterTextSha256: sha256Of(chapterDoc.body),
+          claims: [],
+        };
+    await deps.evidenceStore.putClaims(volume, sidecar);
 
-  const result = await publishChapter(deps, volume, chapter);
+    return publishChapter(
+      { ...deps, withReindexLock: (fn) => deps.shadowAgent.withReindexLock(fn) },
+      volume,
+      chapter,
+    );
+  });
 
   // `publishChapter` may have rewritten the chapter body (conservative
   // repair, D9/D21) — re-read so the response reflects what is actually on

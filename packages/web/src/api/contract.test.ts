@@ -28,14 +28,10 @@ import { describe, expect, test } from "bun:test";
 import type { WithApiOptions } from "../../../api/src/test-helpers.ts";
 import { withApi, withScriptedApi } from "../../../api/src/test-helpers.ts";
 import { parseChapterBody } from "../components/chapter-body.ts";
-import {
-  appendUserMessage,
-  applyStreamEvent,
-  beginStreaming,
-  INITIAL_CHAT_STATE,
-} from "../pages/chat-transcript.ts";
+import { applyStreamEvent, beginStreaming, INITIAL_CHAT_STATE } from "../pages/chat-transcript.ts";
+import { FakeApiClient } from "./fake-client.ts";
 import { HttpApiClient } from "./http-client.ts";
-import { ApiError, type VolumeSummary } from "./types.ts";
+import { ApiError, type ChatStreamEvent, type VolumeSummary } from "./types.ts";
 
 describe("contract: HttpApiClient against a real @shadow/api server", () => {
   test("volumes: create, list, and get round-trip with the real wire shape (no chapterCount, ever)", async () => {
@@ -165,7 +161,11 @@ describe("contract: HttpApiClient against a real @shadow/api server", () => {
       const client = new HttpApiClient(`${baseUrl}/api`);
       await client.createVolume({ slug: "chat-craft", title: "Chat Craft" });
 
-      let state = beginStreaming(appendUserMessage(INITIAL_CHAT_STATE, OPERATOR_MESSAGE));
+      // T2.8: the `operator` wire event is the single source of the user
+      // bubble now — no local seed here any more (that would double it,
+      // one from this line and one from the real server's own `operator`
+      // event on the stream below).
+      let state = beginStreaming(INITIAL_CHAT_STATE);
       const seenEvents: string[] = [];
       for await (const event of client.chat({
         volumeSlug: "chat-craft",
@@ -188,9 +188,16 @@ describe("contract: HttpApiClient against a real @shadow/api server", () => {
       // module doc) — assert at least one arrived, so this test would fail
       // outright (not just silently pass) if the scripted turn stopped
       // exercising them.
+      expect(seenEvents).toContain("operator");
       expect(seenEvents).toContain("audit");
       expect(seenEvents).toContain("chapter.published");
       expect(state.streaming).toBe(false);
+
+      // Exactly one user bubble, minted from the real server's `operator`
+      // event — the T2.8 property this contract test exists to pin against
+      // the real wire, not just the fake.
+      const userItems = state.items.filter((item) => item.type === "user");
+      expect(userItems).toEqual([expect.objectContaining({ text: OPERATOR_MESSAGE })]);
 
       const auditItem = state.items.find((item) => item.type === "audit");
       expect(auditItem).toMatchObject({ passed: true });
@@ -236,6 +243,424 @@ describe("contract: HttpApiClient against a real @shadow/api server", () => {
       const client = new HttpApiClient(`${baseUrl}/api`);
       const volumes = await client.listVolumes();
       expect(volumes.map((v) => v.slug)).toContain("disconnect-test");
+    });
+  });
+
+  describe("T2.8: getSessionEvents — GET /api/sessions/:id/events", () => {
+    test("replays a turn's transcript via HttpApiClient, seq-stamped, ending with done", async () => {
+      const respond: WithApiOptions["respond"] = () => ({ text: "Full reply text." });
+
+      await withScriptedApi({ respond }, async ({ baseUrl }) => {
+        const client = new HttpApiClient(`${baseUrl}/api`);
+        await client.createVolume({ slug: "session-events-craft", title: "Session Events" });
+
+        let sessionId: string | undefined;
+        for await (const event of client.chat({
+          volumeSlug: "session-events-craft",
+          message: "Hello Shadow",
+        })) {
+          if (event.event === "session") sessionId = event.data.sessionId;
+        }
+        if (!sessionId) throw new Error("expected a sessionId from the chat stream");
+
+        const replayed: string[] = [];
+        const seqs: (number | undefined)[] = [];
+        for await (const envelope of client.getSessionEvents(sessionId)) {
+          replayed.push(envelope.event);
+          seqs.push(envelope.seq);
+        }
+
+        expect(replayed).toEqual(["operator", "text", "turn.ended", "done"]);
+        // Every record-derived event carries a seq; `done` (not derived
+        // from any one record) does not.
+        expect(seqs[0]).toBeGreaterThan(0);
+        expect(seqs[1]).toBeGreaterThan(seqs[0] as number);
+        expect(seqs[2]).toBeGreaterThan(seqs[1] as number);
+        expect(seqs[3]).toBeUndefined();
+      });
+    });
+
+    test("fromSeq dedupes on reconnect: only events at or after the given seq come back (T2.7's inclusive contract)", async () => {
+      const respond: WithApiOptions["respond"] = (_prompt, { turnIndex }) =>
+        turnIndex === 0 ? { text: "first reply" } : { text: "second reply" };
+
+      await withScriptedApi({ respond }, async ({ baseUrl }) => {
+        const client = new HttpApiClient(`${baseUrl}/api`);
+        await client.createVolume({ slug: "reconnect-craft", title: "Reconnect" });
+
+        let sessionId: string | undefined;
+        for await (const event of client.chat({
+          volumeSlug: "reconnect-craft",
+          message: "first message",
+        })) {
+          if (event.event === "session") sessionId = event.data.sessionId;
+        }
+        if (!sessionId) throw new Error("expected a sessionId from the chat stream");
+        for await (const _event of client.chat({ sessionId, message: "second message" })) {
+          // drain
+        }
+
+        // A client that saw everything through some seq N reconnects with
+        // fromSeq = N + 1 — simulated here by first reading the full
+        // transcript once to learn where the second turn's `operator`
+        // event landed.
+        const full: { readonly event: string; readonly seq: number | undefined }[] = [];
+        for await (const envelope of client.getSessionEvents(sessionId)) {
+          full.push({ event: envelope.event, seq: envelope.seq });
+        }
+        const operatorSeqs = full.filter((e) => e.event === "operator").map((e) => e.seq);
+        expect(operatorSeqs).toHaveLength(2);
+        const secondOperatorSeq = operatorSeqs[1];
+        if (secondOperatorSeq === undefined) throw new Error("expected the second operator's seq");
+
+        const reconnected: string[] = [];
+        const seqs: (number | undefined)[] = [];
+        for await (const envelope of client.getSessionEvents(sessionId, {
+          fromSeq: secondOperatorSeq,
+        })) {
+          reconnected.push(envelope.event);
+          seqs.push(envelope.seq);
+        }
+
+        // Only the second turn — the first turn's lower-seq events never
+        // reappear.
+        expect(reconnected).toEqual(["operator", "text", "turn.ended", "done"]);
+        expect(seqs.every((seq) => seq === undefined || seq >= (secondOperatorSeq as number))).toBe(
+          true,
+        );
+      });
+    });
+  });
+
+  describe("T2.8: FakeApiClient's getSessionEvents behaves like HttpApiClient's for an equivalent turn", () => {
+    test("replay-only produces the same event-type sequence, shaped identically, on both clients", async () => {
+      const respond: WithApiOptions["respond"] = () => ({ text: "reply text" });
+
+      await withScriptedApi({ respond }, async ({ baseUrl }) => {
+        const real = new HttpApiClient(`${baseUrl}/api`);
+        await real.createVolume({ slug: "parity-craft", title: "Parity" });
+
+        let realSessionId: string | undefined;
+        for await (const event of real.chat({ volumeSlug: "parity-craft", message: "hello" })) {
+          if (event.event === "session") realSessionId = event.data.sessionId;
+        }
+        if (!realSessionId) throw new Error("expected a sessionId");
+
+        const fake = new FakeApiClient({
+          streamDelayMs: 0,
+          chatScript: (sessionId, input): ChatStreamEvent[] => [
+            { event: "session", data: { sessionId } },
+            { event: "operator", data: { text: input.message } },
+            { event: "text", data: { delta: "reply text" } },
+            { event: "done", data: {} },
+          ],
+        });
+        let fakeSessionId: string | undefined;
+        for await (const event of fake.chat({ volumeSlug: "parity-craft", message: "hello" })) {
+          if (event.event === "session") fakeSessionId = event.data.sessionId;
+        }
+        if (!fakeSessionId) throw new Error("expected a sessionId");
+
+        const realReplay: string[] = [];
+        for await (const envelope of real.getSessionEvents(realSessionId)) {
+          realReplay.push(envelope.event);
+        }
+        const fakeReplay: string[] = [];
+        for await (const envelope of fake.getSessionEvents(fakeSessionId)) {
+          fakeReplay.push(envelope.event);
+        }
+
+        // Same wire vocabulary and order for the same interaction — the
+        // contract `ChatPage` relies on (`applyStreamEvent` doesn't care
+        // which client produced the event).
+        expect(fakeReplay).toEqual(realReplay);
+        expect(realReplay).toEqual(["operator", "text", "turn.ended", "done"]);
+      });
+    });
+
+    // F9 review fix: the review flagged `follow` itself as contract-untested
+    // — every case above exercises plain replay only. This drives a
+    // multi-chunk message (`events: [...]`, matching `session-service.test.ts`'s
+    // own tee-test pattern) through `?follow=true` on BOTH clients and
+    // checks the shapes agree, including the two things F2/F4 changed: a
+    // seq-stamped `text` carrying the FULL accumulated string (not a
+    // per-delta shape), and `turn.ended` (F3) — `follow` never sends `done`
+    // on either client, so this reads only up through `turn.ended`.
+    test("follow=true produces the same event-type sequence, seq-shape, and full text on both clients", async () => {
+      const respond: WithApiOptions["respond"] = () => ({
+        text: "reply text",
+        events: [
+          { type: "text-delta", text: "reply " },
+          { type: "text-delta", text: "text" },
+        ],
+      });
+
+      await withScriptedApi({ respond }, async ({ baseUrl }) => {
+        const real = new HttpApiClient(`${baseUrl}/api`);
+        await real.createVolume({ slug: "parity-follow-craft", title: "Parity Follow" });
+
+        let realSessionId: string | undefined;
+        for await (const event of real.chat({
+          volumeSlug: "parity-follow-craft",
+          message: "hello",
+        })) {
+          if (event.event === "session") realSessionId = event.data.sessionId;
+        }
+        if (!realSessionId) throw new Error("expected a sessionId");
+
+        const fake = new FakeApiClient({
+          streamDelayMs: 0,
+          chatScript: (sessionId, input): ChatStreamEvent[] => [
+            { event: "session", data: { sessionId } },
+            { event: "operator", data: { text: input.message } },
+            { event: "text", data: { delta: "reply " } },
+            { event: "text", data: { delta: "text" } },
+            { event: "done", data: {} },
+          ],
+        });
+        let fakeSessionId: string | undefined;
+        for await (const event of fake.chat({
+          volumeSlug: "parity-follow-craft",
+          message: "hello",
+        })) {
+          if (event.event === "session") fakeSessionId = event.data.sessionId;
+        }
+        if (!fakeSessionId) throw new Error("expected a sessionId");
+
+        // The turn has already completed by the time follow subscribes
+        // here — this is `follow`'s REPLAY half, but it's the half that
+        // carries the shape F2/F4 changed (a seq-stamped, full-text
+        // `text`), and the one the review flagged as never driven through
+        // `follow=true` on either client at all.
+        async function collectFollow(
+          client: HttpApiClient | FakeApiClient,
+          sessionId: string,
+        ): Promise<ReadonlyArray<{ event: string; hasSeq: boolean; delta: string | undefined }>> {
+          const out: { event: string; hasSeq: boolean; delta: string | undefined }[] = [];
+          for await (const envelope of client.getSessionEvents(sessionId, { follow: true })) {
+            const data = envelope.data as { readonly delta?: string } | undefined;
+            out.push({
+              event: envelope.event,
+              hasSeq: envelope.seq !== undefined,
+              delta: data?.delta,
+            });
+            // Neither client ever sends `done` under `?follow=true` (this
+            // module's own doc, `../../api/src/handlers/session-events.ts`'s
+            // module doc) — `turn.ended` is the last stored-derived event
+            // for a turn that already finished, so this is where a
+            // bounded collection has to stop instead of waiting forever.
+            if (envelope.event === "turn.ended") break;
+          }
+          return out;
+        }
+
+        const realFollow = await collectFollow(real, realSessionId);
+        const fakeFollow = await collectFollow(fake, fakeSessionId);
+
+        expect(fakeFollow).toEqual(realFollow);
+        expect(realFollow.map((e) => e.event)).toEqual(["operator", "text", "turn.ended"]);
+
+        const textEntry = realFollow.find((e) => e.event === "text");
+        // The ONE stored `text` entry carries a seq (F2/F4: it's the
+        // authoritative full-text replace, not a delta to append) and the
+        // FULL accumulated string — never the two individual chunks
+        // `respond`'s `events` streamed live.
+        expect(textEntry?.hasSeq).toBe(true);
+        expect(textEntry?.delta).toBe("reply text");
+      });
+    });
+  });
+
+  describe("T3.1/T3.2: listSessions/renameSession/deleteSession", () => {
+    test("listSessions: newest-first, volume-scoped, no internal SDK ids on the wire", async () => {
+      const respond: WithApiOptions["respond"] = () => ({ text: "ok" });
+      await withScriptedApi({ respond }, async ({ baseUrl }) => {
+        const client = new HttpApiClient(`${baseUrl}/api`);
+        await client.createVolume({ slug: "sessions-craft", title: "Sessions" });
+        await client.createVolume({ slug: "other-craft", title: "Other" });
+
+        let firstId: string | undefined;
+        for await (const event of client.chat({
+          volumeSlug: "sessions-craft",
+          message: "first session's opening line",
+        })) {
+          if (event.event === "session") firstId = event.data.sessionId;
+        }
+        let secondId: string | undefined;
+        for await (const event of client.chat({
+          volumeSlug: "sessions-craft",
+          message: "second session's opening line",
+        })) {
+          if (event.event === "session") secondId = event.data.sessionId;
+        }
+        for await (const _event of client.chat({
+          volumeSlug: "other-craft",
+          message: "a session in a different volume",
+        })) {
+          // drain — must never appear in "sessions-craft"'s list below.
+        }
+        if (!firstId || !secondId) throw new Error("expected two session ids");
+
+        const scoped = await client.listSessions("sessions-craft");
+        expect(scoped.map((s) => s.id)).toEqual([secondId, firstId]);
+        expect(scoped.map((s) => s.title)).toEqual([
+          "second session's opening line",
+          "first session's opening line",
+        ]);
+        expect(JSON.stringify(scoped)).not.toContain("sdkSessionId");
+
+        const global = await client.listSessions();
+        expect(global.map((s) => s.id)).toContain(firstId);
+        expect(global.length).toBeGreaterThanOrEqual(3);
+      });
+    });
+
+    test("renameSession: PATCH overrides the default title, 404s session_not_found for an unknown id", async () => {
+      const respond: WithApiOptions["respond"] = () => ({ text: "ok" });
+      await withScriptedApi({ respond }, async ({ baseUrl }) => {
+        const client = new HttpApiClient(`${baseUrl}/api`);
+        await client.createVolume({ slug: "rename-craft", title: "Rename" });
+
+        let sessionId: string | undefined;
+        for await (const event of client.chat({
+          volumeSlug: "rename-craft",
+          message: "default title from this line",
+        })) {
+          if (event.event === "session") sessionId = event.data.sessionId;
+        }
+        if (!sessionId) throw new Error("expected a sessionId");
+
+        const renamed = await client.renameSession(sessionId, "Operator-chosen title");
+        expect(renamed.id).toBe(sessionId);
+        expect(renamed.title).toBe("Operator-chosen title");
+
+        const [listed] = await client.listSessions("rename-craft");
+        expect(listed?.title).toBe("Operator-chosen title");
+
+        const error = await client.renameSession("no-such-session", "x").catch((e: unknown) => e);
+        expect(error).toBeInstanceOf(ApiError);
+        expect((error as ApiError).code).toBe("session_not_found");
+      });
+    });
+
+    test("deleteSession: removes the session from subsequent listings, 404s for an unknown id", async () => {
+      const respond: WithApiOptions["respond"] = () => ({ text: "ok" });
+      await withScriptedApi({ respond }, async ({ baseUrl }) => {
+        const client = new HttpApiClient(`${baseUrl}/api`);
+        await client.createVolume({ slug: "delete-craft", title: "Delete" });
+
+        let sessionId: string | undefined;
+        for await (const event of client.chat({
+          volumeSlug: "delete-craft",
+          message: "a session about to be deleted",
+        })) {
+          if (event.event === "session") sessionId = event.data.sessionId;
+        }
+        if (!sessionId) throw new Error("expected a sessionId");
+
+        await client.deleteSession(sessionId);
+        expect(await client.listSessions("delete-craft")).toEqual([]);
+
+        const error = await client.deleteSession(sessionId).catch((e: unknown) => e);
+        expect(error).toBeInstanceOf(ApiError);
+        expect((error as ApiError).code).toBe("session_not_found");
+      });
+    });
+  });
+
+  describe("T3.2: FakeApiClient's listSessions/renameSession/deleteSession behave like HttpApiClient's for an equivalent turn", () => {
+    test("listSessions: same newest-first order and title default on both clients", async () => {
+      const respond: WithApiOptions["respond"] = () => ({ text: "ok" });
+      await withScriptedApi({ respond }, async ({ baseUrl }) => {
+        const real = new HttpApiClient(`${baseUrl}/api`);
+        await real.createVolume({ slug: "parity-sessions-craft", title: "Parity Sessions" });
+        for await (const _event of real.chat({
+          volumeSlug: "parity-sessions-craft",
+          message: "real first line",
+        })) {
+          // drain
+        }
+        for await (const _event of real.chat({
+          volumeSlug: "parity-sessions-craft",
+          message: "real second line",
+        })) {
+          // drain
+        }
+
+        const fake = new FakeApiClient({ streamDelayMs: 0 });
+        for await (const _event of fake.chat({
+          volumeSlug: "parity-sessions-craft",
+          message: "real first line",
+        })) {
+          // drain
+        }
+        for await (const _event of fake.chat({
+          volumeSlug: "parity-sessions-craft",
+          message: "real second line",
+        })) {
+          // drain
+        }
+
+        const realList = await real.listSessions("parity-sessions-craft");
+        const fakeList = await fake.listSessions("parity-sessions-craft");
+        expect(fakeList.map((s) => s.title)).toEqual(realList.map((s) => s.title));
+        expect(realList.map((s) => s.title)).toEqual(["real second line", "real first line"]);
+      });
+    });
+
+    test("renameSession/deleteSession: same round-trip shape on both clients", async () => {
+      const respond: WithApiOptions["respond"] = () => ({ text: "ok" });
+      await withScriptedApi({ respond }, async ({ baseUrl }) => {
+        const real = new HttpApiClient(`${baseUrl}/api`);
+        await real.createVolume({ slug: "parity-mutate-craft", title: "Parity Mutate" });
+        let realId: string | undefined;
+        for await (const event of real.chat({
+          volumeSlug: "parity-mutate-craft",
+          message: "hello",
+        })) {
+          if (event.event === "session") realId = event.data.sessionId;
+        }
+        if (!realId) throw new Error("expected a real sessionId");
+
+        const fake = new FakeApiClient({ streamDelayMs: 0 });
+        let fakeId: string | undefined;
+        for await (const event of fake.chat({
+          volumeSlug: "parity-mutate-craft",
+          message: "hello",
+        })) {
+          if (event.event === "session") fakeId = event.data.sessionId;
+        }
+        if (!fakeId) throw new Error("expected a fake sessionId");
+
+        const realRenamed = await real.renameSession(realId, "Renamed");
+        const fakeRenamed = await fake.renameSession(fakeId, "Renamed");
+        expect(fakeRenamed.title).toBe(realRenamed.title);
+
+        await real.deleteSession(realId);
+        await fake.deleteSession(fakeId);
+        expect(await real.listSessions("parity-mutate-craft")).toEqual([]);
+        expect(await fake.listSessions("parity-mutate-craft")).toEqual([]);
+      });
+    });
+
+    // T3.2's UI needs `deleteSession` scriptable to 409 `session_busy` — the
+    // real server proves this shape at the handler level
+    // (`sessions.test.ts`'s gated-turn harness); this fake needs no live
+    // turn to reproduce the SAME error shape a `SessionList` delete-confirm
+    // has to handle (D6a: a fake must reproduce the real failure modes).
+    test("deleteSession: busySessionIds scripts a 409 session_busy shaped exactly like the real one", async () => {
+      const fake = new FakeApiClient({ streamDelayMs: 0, busySessionIds: ["sess_1"] });
+      for await (const _event of fake.chat({ volumeSlug: "busy-craft", message: "hello" })) {
+        // drain — mints "sess_1"
+      }
+
+      const error = await fake.deleteSession("sess_1").catch((e: unknown) => e);
+      expect(error).toBeInstanceOf(ApiError);
+      expect((error as ApiError).code).toBe("session_busy");
+
+      // Busy means "still there" — the session is NOT removed by a
+      // rejected delete.
+      expect((await fake.listSessions("busy-craft")).map((s) => s.id)).toEqual(["sess_1"]);
     });
   });
 });

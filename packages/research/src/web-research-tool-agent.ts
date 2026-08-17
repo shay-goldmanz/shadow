@@ -39,6 +39,16 @@
  * rather than closing over a fixed `ResearchRun`, which is what lets one
  * long-lived session serve many `research()` calls without rewiring tools
  * on every call.
+ *
+ * This reuse is what makes this class unsafe to share across concurrent
+ * callers (see the `busy` guard in `research()` below): a second concurrent
+ * `research()` call on the same instance would corrupt which run the
+ * shared tool handlers are scoped to, so it is refused rather than
+ * interleaved. `PerBriefResearchAgent` (`per-brief-research-agent.ts`,
+ * T0.1) is the concurrency-safe `ResearchBriefPort` built on top of this
+ * class: it constructs a fresh instance per `research()` call instead of
+ * sharing one, which is also why it passes `sessionTuning.persistSession:
+ * false` — see that field's doc.
  */
 
 import type { EvidenceStore } from "@shadow/evidence";
@@ -70,6 +80,19 @@ export interface ResearchSessionTuning {
   readonly maxTurns?: number;
   /** Appended to the built-in research system prompt, e.g. house style notes. */
   readonly systemPromptAppend?: string;
+  /**
+   * Passed straight through to `AgenticSessionOptions.persistSession`.
+   * Omitted (the default) takes the Agent SDK's own default (`true`),
+   * which is what this class's own "Session reuse (D6)" section depends
+   * on — a caller planning to send more than one `research()` call
+   * through the same instance must leave this unset. Set `false` only
+   * when the caller knows this specific instance will receive exactly one
+   * `research()` call, ever (T0.1's `PerBriefResearchAgent`, `@shadow/research`,
+   * is the reference caller): a session that will never be resumed gains
+   * nothing from being persisted, and persisting it anyway is what leaks
+   * one orphaned `~/.claude/projects/` transcript per brief.
+   */
+  readonly persistSession?: boolean;
 }
 
 export interface WebResearchToolAgentDeps {
@@ -201,17 +224,17 @@ export class WebResearchToolAgent implements ResearchBriefPort {
       toolServers: [toolServer],
       settingSources: [],
       permissionMode: "default",
-      // Deliberately NOT `persistSession: false`. Per the class doc's
-      // "Session reuse (D6)" section, this session handle is reused across
-      // every `research()` call on this instance — the second and later
-      // calls send their turn via `resume`, which only works against a
-      // session actually persisted to `~/.claude/projects/`.
-      // `persistSession: false` here would be the identical contradiction
-      // a Wave 3 review found and fixed in `@shadow/agent`'s
-      // `conversation.ts` (see that file's comment on this same field) —
-      // this session just hadn't been exercised with a second `research()`
-      // call against the *real* adapter yet. Omitting the field takes the
-      // Agent SDK's own default (`true`).
+      // Threaded straight from `sessionTuning.persistSession` — see that
+      // field's doc. Left unset (the common case, when this instance is
+      // reused across many `research()` calls per D6), this omits the
+      // field and takes the Agent SDK's own default (`true`), which is
+      // required for the second and later calls' `resume` to find
+      // anything. Passing `false` here for a reused instance would be the
+      // identical contradiction a Wave 3 review found and fixed in
+      // `@shadow/agent`'s `conversation.ts` (see that file's comment on
+      // this same field) — `sessionTuning.persistSession`'s doc is what
+      // keeps that mistake from recurring here.
+      persistSession: this.deps.sessionTuning?.persistSession,
     };
 
     this.session = this.deps.sessions.createSession(options);

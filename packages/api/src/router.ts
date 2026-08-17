@@ -15,6 +15,8 @@ import { postChat } from "./handlers/chat.ts";
 import { getLedger, getSnapshot, getSource } from "./handlers/evidence.ts";
 import { getIndex, reindex } from "./handlers/indexing.ts";
 import { getLint } from "./handlers/lint.ts";
+import { getSessionEvents } from "./handlers/session-events.ts";
+import { deleteSession, listSessions, updateSession } from "./handlers/sessions.ts";
 import {
   createVolume,
   deleteVolume,
@@ -85,6 +87,19 @@ export function buildRoutes(deps: ApiDeps) {
     },
     "/api/chat": {
       POST: bind(deps, postChat),
+      OPTIONS: () => corsPreflightResponse(),
+    },
+    "/api/sessions": {
+      GET: bind(deps, listSessions),
+      OPTIONS: () => corsPreflightResponse(),
+    },
+    "/api/sessions/:id": {
+      PATCH: bind(deps, updateSession),
+      DELETE: bind(deps, deleteSession),
+      OPTIONS: () => corsPreflightResponse(),
+    },
+    "/api/sessions/:id/events": {
+      GET: bind(deps, getSessionEvents),
       OPTIONS: () => corsPreflightResponse(),
     },
   } as const;

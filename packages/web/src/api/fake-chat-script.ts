@@ -12,19 +12,32 @@
  * `audit` carries `{ passed, repairs }` rather than `{ verdict, findings }`,
  * and there is no `indexed` event (never emitted for chat — see that
  * handler's module doc).
+ *
+ * `operator` (F7 review fix) is emitted right after `session`, before any
+ * agent event — matching the real handler's position — carrying the
+ * operator's actual sent text via `input.message`. Both research
+ * `briefId`s use the real `"<turnId>/brief-<n>"` format
+ * (`../../api/src/event-mapping.ts`'s `StoredEventStamper`) under one
+ * simulated turnId, since (per that handler's doc) a single HTTP
+ * `POST /api/chat` mints exactly one `turnId` for its whole auto-turn
+ * sequence, however many `research.started` directives fire across however
+ * many auto-turns happen underneath it — not one `turnId` per directive.
  */
 
-import type { ChatStreamEvent } from "./types.ts";
+import type { ChatInput, ChatStreamEvent } from "./types.ts";
 
-export function defaultChatScript(sessionId: string): ChatStreamEvent[] {
+const FAKE_TURN_ID = "fake-turn-1";
+
+export function defaultChatScript(sessionId: string, input: ChatInput): ChatStreamEvent[] {
   return [
     { event: "session", data: { sessionId } },
+    { event: "operator", data: { text: input.message } },
     { event: "text", data: { delta: "Got it — I'll look into both." } },
     { event: "text", data: { delta: " Starting with Linear and Notion's UI patterns." } },
     {
       event: "research.started",
       data: {
-        briefId: "brief-1",
+        briefId: `${FAKE_TURN_ID}/brief-1`,
         brief: {
           volume: "design-inspiration",
           goal: "How do Linear and Notion design their UI chrome?",
@@ -50,7 +63,7 @@ export function defaultChatScript(sessionId: string): ChatStreamEvent[] {
     {
       event: "research.finished",
       data: {
-        briefId: "brief-1",
+        briefId: `${FAKE_TURN_ID}/brief-1`,
         findings: [
           {
             text: "Linear: 4px scale, borders over shadows.",
@@ -85,7 +98,7 @@ export function defaultChatScript(sessionId: string): ChatStreamEvent[] {
     {
       event: "research.started",
       data: {
-        briefId: "brief-2",
+        briefId: `${FAKE_TURN_ID}/brief-2`,
         brief: {
           volume: "design-inspiration",
           goal: "How does Epoch magazine design one-pagers?",
@@ -103,7 +116,7 @@ export function defaultChatScript(sessionId: string): ChatStreamEvent[] {
     {
       event: "research.finished",
       data: {
-        briefId: "brief-2",
+        briefId: `${FAKE_TURN_ID}/brief-2`,
         findings: [
           {
             text: "Single dominant image, restrained three-colour palette this issue.",

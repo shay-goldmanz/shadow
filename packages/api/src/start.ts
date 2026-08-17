@@ -7,6 +7,7 @@
 
 import { buildRealApiDeps } from "./composition.ts";
 import { createServer } from "./server.ts";
+import { shutdownGracefully } from "./shutdown.ts";
 
 const port = Number(process.env.PORT ?? 4301);
 
@@ -23,17 +24,44 @@ const server = createServer(deps, { port, hostname: "127.0.0.1" });
 console.log(`@shadow/api listening at ${server.url.toString()}`);
 
 /**
- * Every live conversation persists its `AgenticSession`'s transcript on
- * disk for as long as it's held (`ConversationRegistry`'s doc). On a normal
- * shutdown (Ctrl-C, or `kill`) there is no later request that will ever
- * evict and dispose them, so this is the only chance to release them —
- * cheap, and the alternative is a slow accumulation of dead session
- * directories under `~/.claude/projects/` every time the server restarts.
+ * Graceful shutdown (T2.9). Once turns can outlive the request that started
+ * them (T2.5), the old sequence here — release every live handle, stop the
+ * server, exit — would hard-kill an SDK subprocess mid-turn and tear a
+ * `store.append` mid-write, turning *every* Ctrl-C during a turn into the
+ * crash path. `SessionService.shutdown()` (`session-service.ts`'s own doc)
+ * owns the real sequence now: stop accepting new turns (503), signal every
+ * running turn to wind down (`iterator.return()`, taking effect at its next
+ * yield point), append `turn-boundary(ended, interrupted)` for each,
+ * flush appends, and release every handle (T2.4's `release()` — memory
+ * hygiene only, not disk cleanup: every SDK transcript is left on disk under
+ * `~/.claude/projects/`, on purpose, so it stays resumable the next time the
+ * server starts) — bounded by a ~10s deadline so a turn that never reaches a
+ * yield point (a wedged subprocess, say) can't hold the process open
+ * forever; the torn-tail read tolerance from T2.1 is the backstop for that
+ * case, not the norm. `server.stop()` only happens *after* that sequence
+ * settles (or times out), so no new HTTP connection can slip in while
+ * turns are winding down — and, once it does happen, it happens WITH the
+ * force flag (F1 review fix, `shutdown.ts`'s own module doc): the unforced
+ * `server.stop()` never resolves while a T2.8 follow stream is still open,
+ * which is every mounted session tab, so Ctrl-C would otherwise hang
+ * forever the instant one viewer existed — undoing this whole sequence's
+ * point. `shutdownGracefully` (`shutdown.ts`) is the actual sequence;
+ * pulled into its own module so it's testable without this file's own
+ * side-effecting module-load (building a real `ApiDeps`, binding a real
+ * server) getting in the way.
+ *
+ * `shuttingDownStarted` guards against a second signal (SIGTERM arriving
+ * hot on SIGINT's heels, say) re-entering this — `SessionService.shutdown()`
+ * itself tolerates being called twice, but there is no reason to double the
+ * logging or race two `server.stop()` calls.
  */
+let shuttingDownStarted = false;
+
 async function shutdown(signal: NodeJS.Signals): Promise<void> {
-  console.log(`${signal} received — closing ${deps.conversations.size} live conversation(s)...`);
-  await deps.conversations.disposeAll();
-  await server.stop();
+  if (shuttingDownStarted) return;
+  shuttingDownStarted = true;
+  console.log(`${signal} received — winding down in-flight turns...`);
+  await shutdownGracefully({ sessionService: deps.sessionService, server });
   process.exit(0);
 }
 
