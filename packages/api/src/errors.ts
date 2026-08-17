@@ -96,6 +96,28 @@ export class TurnQueueBusyError extends ShadowApiError {
 }
 
 /**
+ * `SessionService.enqueueTurn` (T2.9) was called after `shutdown()` had
+ * already begun — the server is winding down and is no longer accepting new
+ * turns (PLAN.md's T2.9 entry: "stop accepting turns (`503` on enqueue)").
+ * Operator-visible, not a fault: the client should retry once the server has
+ * restarted. Reused, not reimplemented, by T3.1's error-mapping table — this
+ * is the "shutdown 503" row that block names; there is nothing further for
+ * `error-mapping.ts` to add, same as `TurnQueueBusyError`/`SessionNotFoundError`
+ * above (`session-service.ts`'s `enqueueTurn` doc: the generic
+ * `error instanceof ShadowApiError` branch already maps a subclass's own
+ * `status`/`code` fields).
+ */
+export class ServiceShuttingDownError extends ShadowApiError {
+  override readonly name = "ServiceShuttingDownError";
+  readonly status = 503;
+  readonly code = "shutting_down";
+
+  constructor() {
+    super("Server is shutting down; not accepting new turns");
+  }
+}
+
+/**
  * `GET /api/volumes/:slug/index` (or `/api/lint`) was called before the
  * volume was ever indexed — `VolumeStore.readIndex`/`readCorpusIndex`
  * returned `undefined`. Not a fault: `POST /api/volumes/:slug/reindex`

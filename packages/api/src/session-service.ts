@@ -51,7 +51,12 @@
  */
 
 import { randomUUID } from "node:crypto";
-import type { ShadowAgent, ShadowConversation, StartConversationOptions } from "@shadow/agent";
+import type {
+  ShadowAgent,
+  ShadowConversation,
+  ShadowEvent,
+  StartConversationOptions,
+} from "@shadow/agent";
 import type { VolumeSlug } from "@shadow/core";
 import type {
   SessionMeta,
@@ -63,7 +68,7 @@ import type {
 } from "@shadow/sessions";
 import { ConversationRegistry, type ConversationRegistryOptions } from "./conversation-registry.ts";
 import { toErrorResponse } from "./error-mapping.ts";
-import { SessionNotFoundError, TurnQueueBusyError } from "./errors.ts";
+import { ServiceShuttingDownError, SessionNotFoundError, TurnQueueBusyError } from "./errors.ts";
 import {
   operatorMessageEvent,
   StoredEventStamper,
@@ -152,12 +157,90 @@ function isTurnEndedRecord(message: SessionBusMessage): boolean {
   );
 }
 
+/**
+ * `SessionService.shutdown`'s wind-down bound (T2.9's "~10s deadline") —
+ * PLAN.md's T2.9 entry: "bounded by a ~10s deadline after which it exits
+ * anyway (the torn-tail read tolerance from T2.1 is the backstop, not the
+ * norm)." Injectable per call (`shutdown({ deadlineMs })`) so tests don't
+ * need a real 10-second wait to exercise the deadline-exceeded path.
+ */
+export const DEFAULT_SHUTDOWN_DEADLINE_MS = 10_000;
+
+/**
+ * Resolves once `promise` settles OR `deadlineMs` elapses, whichever comes
+ * first — never rejects, never waits past the deadline. `shutdown`'s only
+ * use of this: waiting for in-flight turns to wind down is a best-effort
+ * courtesy, not something a hung turn (T2.9's "refuses to wind down" case —
+ * an internal await that never resolves, e.g. a subprocess that never exits)
+ * gets to hold the whole process hostage over.
+ */
+function raceWithDeadline(promise: Promise<unknown>, deadlineMs: number): Promise<void> {
+  let timer: ReturnType<typeof setTimeout>;
+  const timeout = new Promise<void>((resolve) => {
+    timer = setTimeout(resolve, deadlineMs);
+  });
+  // `.then(() => undefined, () => undefined)` — this method's own contract
+  // ("never rejects") applies even if `promise` itself rejects (shouldn't
+  // happen; `runTurn` never throws — see that method's doc — but defended
+  // here anyway since a hung/rejected turn is exactly the case this
+  // function exists to not get stuck on).
+  return Promise.race([
+    promise.then(
+      () => undefined,
+      () => undefined,
+    ),
+    timeout,
+  ]).finally(() => clearTimeout(timer));
+}
+
 export class SessionService {
   private readonly store: SessionStore;
   private readonly shadowAgent: ShadowAgent;
   private readonly lock = new SessionLock();
   private readonly bus = new SessionEventBus();
   private readonly maxQueuedTurnsPerSession: number;
+
+  /**
+   * `true` from the first `shutdown()` call onward — checked synchronously,
+   * as the very first thing, by both `enqueueTurn` (new turns get
+   * `ServiceShuttingDownError`, 503) and `runTurn` (a turn `tryReserve`d
+   * before shutdown began but not yet running when its turn in the FIFO
+   * comes up is dropped cleanly instead of starting — T2.9's extension of
+   * the "crash while queued" row to the graceful path). Never reset: once a
+   * `SessionService` starts shutting down, it stays shut down.
+   */
+  private shuttingDown = false;
+  /**
+   * Every currently-running turn's own `conversation.sendMessage()`
+   * iterator, keyed by `turnId` — registered the instant `runTurn` creates
+   * it (before draining starts), removed the instant draining ends (however
+   * it ends). `shutdown()`'s "signal running turns to wind down" step
+   * (PLAN.md's T2.9 entry) is exactly `iterator.return()` on every value
+   * here.
+   */
+  private readonly activeIterators = new Map<
+    string,
+    AsyncGenerator<ShadowEvent, void, undefined>
+  >();
+  /**
+   * `turnId`s `shutdown()` has called `.return()` on — consulted (and
+   * cleared) by `runTurn`'s own `finally` to decide `endReason:
+   * "interrupted"` vs `"completed"`. Needed because native async-generator
+   * `.return()` semantics don't themselves distinguish "the caller asked me
+   * to stop" from "I was going to end here anyway" — from `runTurn`'s
+   * `for await` loop's point of view, both look like the loop simply ending
+   * without a thrown exception. This set is what makes that distinction.
+   */
+  private readonly interruptedTurnIds = new Set<string>();
+  /**
+   * Every turn's own settlement promise (`SessionLock.runReserved`'s return
+   * value), from the moment `enqueueTurn` reserves it — running *or* still
+   * queued — removed once it settles. `shutdown()`'s deadline race waits on
+   * a snapshot of this set: everything reserved at the moment `shutdown()`
+   * was called, whether it's the one turn currently draining or three more
+   * still queued behind it in the same session's FIFO.
+   */
+  private readonly inFlightTurns = new Set<Promise<void>>();
 
   /**
    * The cache of live `ShadowConversation` handles (T2.4's demoted
@@ -191,17 +274,23 @@ export class SessionService {
    * background, observed (optionally) via the returned `events` generator.
    *
    * Rejections happen synchronously relative to this call (no turn is ever
-   * partially started): `SessionNotFoundError` (404) if `target.sessionId`
-   * is absent from both the registry and the store, `TurnQueueBusyError`
-   * (409) if that session already has `maxQueuedTurnsPerSession` turns
-   * queued ahead of this one. Both are typed `ShadowApiError`s
-   * (`errors.ts`) — `error-mapping.ts` needs no new table row for either:
-   * its `error instanceof ShadowApiError` branch already maps a subclass's
-   * own `status`/`code` fields generically, which is why this task's
-   * "add the error-mapping row now, or leave for T3.1" decision resolves to
-   * *neither* — there is no row to add.
+   * partially started): `ServiceShuttingDownError` (503) once `shutdown()`
+   * has begun (T2.9 — checked first, before touching the store at all),
+   * `SessionNotFoundError` (404) if `target.sessionId` is absent from both
+   * the registry and the store, `TurnQueueBusyError` (409) if that session
+   * already has `maxQueuedTurnsPerSession` turns queued ahead of this one.
+   * All three are typed `ShadowApiError`s (`errors.ts`) — `error-mapping.ts`
+   * needs no new table row for any of them: its `error instanceof
+   * ShadowApiError` branch already maps a subclass's own `status`/`code`
+   * fields generically, which is why this task's "add the error-mapping row
+   * now, or leave for T3.1" decision resolves to *neither* — there is no row
+   * to add.
    */
   async enqueueTurn(target: EnqueueTarget, message: string): Promise<EnqueuedTurn> {
+    if (this.shuttingDown) {
+      throw new ServiceShuttingDownError();
+    }
+
     const sessionId = await this.resolveSessionId(target);
 
     // Synchronous check-and-reserve (`session-lock.ts`'s module doc) —
@@ -233,6 +322,9 @@ export class SessionService {
     const settled = this.lock.runReserved(sessionId, () =>
       this.runTurn(sessionId, turnId, message),
     );
+    // Tracked from reservation (running *or* still queued) until settlement
+    // — `shutdown()`'s deadline race waits on a snapshot of this set (T2.9).
+    this.inFlightTurns.add(settled);
     // Re-run eviction once this turn's lock hold fully releases (i.e. once
     // `hasActivity(sessionId)` can honestly flip to `false` for it) — a
     // session another turn's eviction pass skipped for being busy gets
@@ -240,7 +332,12 @@ export class SessionService {
     // doc, rather than waiting for some unrelated `set()` to retrigger it.
     // `runTurn` itself never throws (see that method's doc), but this
     // `catch` is defense-in-depth against an unhandled rejection regardless.
-    void settled.finally(() => this.registry.evict()).catch(() => {});
+    void settled
+      .finally(() => {
+        this.registry.evict();
+        this.inFlightTurns.delete(settled);
+      })
+      .catch(() => {});
 
     return { sessionId, turnId, events: drainChannel(channel, unsubscribe) };
   }
@@ -277,6 +374,16 @@ export class SessionService {
    * `conversation.sendMessage()` teeing every stored-shape event to the
    * store and bus, then append `turn-boundary(ended, …)` in a `finally`.
    *
+   * **Dropped cleanly if shutdown began before this turn ever started
+   * running (T2.9).** `tryReserve`d turns queued behind a currently-running
+   * one reach this method only once the `SessionLock` FIFO gets to them —
+   * possibly well after `shutdown()` set `shuttingDown`. The check below is
+   * the graceful-path twin of PLAN.md's "server crash with a turn queued"
+   * row: nothing has been appended for this turn yet (operator-message is
+   * the *first* thing this method would otherwise write), so returning here
+   * leaves genuinely nothing behind — no operator-message, no boundary, no
+   * meta touch.
+   *
    * Never lets an exception escape: every failure this method can observe —
    * `ensureConversation` throwing, `conversation.sendMessage()` throwing —
    * is caught and folded into the `turn-boundary(ended, "error", …)` record
@@ -287,6 +394,10 @@ export class SessionService {
    * method's own promise.
    */
   private async runTurn(sessionId: string, turnId: string, operatorText: string): Promise<void> {
+    if (this.shuttingDown) {
+      return;
+    }
+
     let endReason: TurnBoundaryEndReason = "completed";
     let errorInfo: { message: string; code: string } | undefined;
     let conversation: ShadowConversation | undefined;
@@ -301,20 +412,57 @@ export class SessionService {
       await this.appendAndPublish(sessionId, turnId, turnBoundaryStarted());
 
       const stamper = new StoredEventStamper(turnId);
-      for await (const event of conversation.sendMessage(operatorText)) {
-        if (event.type === "text-delta") {
-          // No stored shape at all (`@shadow/sessions` never persists
-          // deltas) — published straight to the bus, never appended.
-          this.bus.publish(sessionId, { kind: "text-delta", turnId, text: event.text });
-          continue;
+      // Held explicitly (not just looped over via `for await`) so
+      // `shutdown()` — running concurrently, on a different call stack —
+      // can reach this exact turn's iterator and call `.return()` on it
+      // (T2.9's interruption seam: "the generator's finally blocks and the
+      // service's finally still run" — `.return()` unwinds
+      // `ShadowConversation.sendMessage`'s own `try/finally` at whatever
+      // yield point it next reaches, same as any other generator
+      // early-exit). Registered before draining starts and removed the
+      // instant draining ends, however it ends.
+      const iterator = conversation.sendMessage(operatorText);
+      this.activeIterators.set(turnId, iterator);
+      if (this.shuttingDown) {
+        // Shutdown began in the narrow window between the top-of-method
+        // check and here (inside `ensureConversation`/the two boundary
+        // appends above) — `shutdown()`'s own sweep already ran and never
+        // saw this iterator, so signal it right away instead of letting a
+        // turn shutdown meant to interrupt run to completion unchecked.
+        this.interruptedTurnIds.add(turnId);
+        void iterator.return(undefined).catch(() => {});
+      }
+      try {
+        for await (const event of iterator) {
+          if (event.type === "text-delta") {
+            // No stored shape at all (`@shadow/sessions` never persists
+            // deltas) — published straight to the bus, never appended.
+            this.bus.publish(sessionId, { kind: "text-delta", turnId, text: event.text });
+            continue;
+          }
+          await this.appendAndPublish(sessionId, turnId, stamper.stampAgentEvent(event));
         }
-        await this.appendAndPublish(sessionId, turnId, stamper.stampAgentEvent(event));
+      } finally {
+        this.activeIterators.delete(turnId);
       }
     } catch (error) {
       endReason = "error";
       const mapped = toErrorResponse(error);
       errorInfo = { message: mapped.body.error.message, code: mapped.body.error.code };
     } finally {
+      // Consulted (and cleared) regardless of how the try block above
+      // ended: a `for await` loop that stops because `.return()` was called
+      // on its iterator exits *without* throwing — from this method's own
+      // point of view that's indistinguishable from a turn that simply had
+      // nothing left to say, which is exactly why `shutdown()` has to leave
+      // a separate breadcrumb (`interruptedTurnIds`) for `runTurn` to check.
+      // An error takes precedence if both happened (e.g. the interrupted
+      // generator's own cleanup threw): the boundary's error content is
+      // more informative than a bare "interrupted" would be.
+      const wasInterrupted = this.interruptedTurnIds.delete(turnId);
+      if (wasInterrupted && endReason !== "error") {
+        endReason = "interrupted";
+      }
       await this.finishTurn(
         sessionId,
         turnId,
@@ -454,6 +602,79 @@ export class SessionService {
   async hasSession(sessionId: string): Promise<boolean> {
     if (this.registry.get(sessionId)) return true;
     return (await this.store.get(sessionId)) !== undefined;
+  }
+
+  /**
+   * Graceful shutdown (T2.9, PLAN.md's Tier 2 entry and the failure table's
+   * "SIGINT with a turn running" row). `start.ts` calls this from its
+   * SIGINT/SIGTERM handler, ahead of `server.stop()`; tests call it directly
+   * with a small `deadlineMs` to exercise the wind-down and deadline paths
+   * without a real ~10s wait.
+   *
+   * Once turns can outlive the request that started them (T2.5), the old
+   * SIGINT path — release handles, stop the server, exit — would hard-kill
+   * an SDK subprocess mid-turn and tear a `store.append` mid-write, turning
+   * *every* Ctrl-C during a turn into the crash path. The sequence here
+   * instead:
+   *
+   * 1. **Stop accepting turns.** `this.shuttingDown = true`, set
+   *    synchronously as the very first statement — `enqueueTurn` checks the
+   *    same flag as *its* first statement, so no new turn can be accepted
+   *    after this point (JS's single-threaded execution rules out a race
+   *    between the two checks).
+   * 2. **Signal running turns to wind down.** `iterator.return()` on every
+   *    currently-draining turn's own `conversation.sendMessage()` generator
+   *    (`activeIterators`) — queued behind whatever internal work is
+   *    already in flight if the generator isn't idle right now (native
+   *    async-generator semantics: a `.return()` call made while a `.next()`
+   *    is still being processed is queued, not applied immediately), taking
+   *    effect the moment the generator next reaches a suspend point. This
+   *    is "the turn stops at its next yield point," not instantly — an
+   *    in-flight model round genuinely has to finish before the generator
+   *    can unwind through its own `try/finally`.
+   * 3. **`turn-boundary(ended, interrupted)`, flush appends, release
+   *    handles.** `runTurn`'s own `finally` (unchanged code path — it runs
+   *    exactly the same whether the loop ended on its own or because
+   *    `.return()` was called) is what actually appends the boundary and
+   *    updates meta; this method only waits for that to happen
+   *    (`inFlightTurns`) before calling `this.registry.releaseAll()` —
+   *    T2.4's `release()`, not delete: nothing on disk is touched, every SDK
+   *    transcript stays resumable next launch (D6b).
+   * 4. **Bounded by `deadlineMs`.** A turn stuck on an internal await that
+   *    never resolves (a wedged subprocess, say) would otherwise hold
+   *    `shutdown()` open forever — PLAN.md's own words: "bounded by a ~10s
+   *    deadline after which it exits anyway (the torn-tail read tolerance
+   *    from T2.1 is the backstop, not the norm)." `raceWithDeadline` is what
+   *    enforces that; a turn abandoned this way is simply never marked
+   *    `interrupted` — the store shows an opened-but-never-closed turn,
+   *    which is exactly the torn-tail shape T2.1's `readEvents` already
+   *    tolerates on read.
+   *
+   * A turn `tryReserve`d but not yet running when `shutdown()` is called
+   * gets neither of steps 2/3 — it has no iterator yet — but IS in
+   * `inFlightTurns`, so this method still waits (bounded) for it to either
+   * settle via `runTurn`'s own top-of-method `shuttingDown` check (drops
+   * cleanly, no records — T2.9's extension of "crash while queued" to the
+   * graceful path) or hit the deadline alongside everything else.
+   *
+   * Idempotent enough to call more than once (a second SIGINT arriving
+   * before the first finishes winding down, say): `shuttingDown` is already
+   * `true`, `activeIterators`/`inFlightTurns` simply reflect whatever's
+   * still outstanding, and `releaseAll()` on an empty/already-released
+   * registry is a no-op.
+   */
+  async shutdown(options: { readonly deadlineMs?: number } = {}): Promise<void> {
+    const deadlineMs = options.deadlineMs ?? DEFAULT_SHUTDOWN_DEADLINE_MS;
+    this.shuttingDown = true;
+
+    for (const [turnId, iterator] of this.activeIterators) {
+      this.interruptedTurnIds.add(turnId);
+      void iterator.return(undefined).catch(() => {});
+    }
+
+    await raceWithDeadline(Promise.allSettled(this.inFlightTurns), deadlineMs);
+
+    await this.registry.releaseAll();
   }
 
   /**
