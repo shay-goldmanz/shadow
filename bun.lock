@@ -103,6 +103,14 @@
         "zod": "^4.4.3",
       },
     },
+    "packages/sessions": {
+      "name": "@shadow/sessions",
+      "version": "0.0.0",
+      "dependencies": {
+        "@shadow/agent": "workspace:*",
+        "@shadow/core": "workspace:*",
+      },
+    },
     "packages/web": {
       "name": "@shadow/web",
       "version": "0.0.0",
@@ -243,6 +251,8 @@
     "@shadow/model": ["@shadow/model@workspace:packages/model"],
 
     "@shadow/research": ["@shadow/research@workspace:packages/research"],
+
+    "@shadow/sessions": ["@shadow/sessions@workspace:packages/sessions"],
 
     "@shadow/web": ["@shadow/web@workspace:packages/web"],
 
