@@ -1,9 +1,10 @@
 # Shadow Sessions — Implementation Plan
 
-Status: **reviewed** (adversarial model review incorporated — see changelog at
-bottom). Implements the locked design (“Shadow Sessions”, 4 tiers) with the
-refinements agreed in review. Companion to `docs/DECISIONS.md` (amends D6a —
-see T2.6).
+Status: **implemented** (Tiers 0-3 shipped on this branch; per-tier adversarial
+reviews + final review incorporated — see changelog at bottom; T0.4 cost
+measurement pending — see D6b). Implements the locked design (“Shadow
+Sessions”, 4 tiers) with the refinements agreed in review. Companion to
+`docs/DECISIONS.md` (amends D6a — see T2.6).
 
 ## What this plan adds to the locked design
 
@@ -518,3 +519,8 @@ written at run start, error content carried on boundaries (T2.1); the live
 LRU busy-skip weakens the size invariant and needs re-eviction on settle
 (T2.4); `fromSeq` is the sole reconnect cursor — no `Last-Event-ID` plumbing
 (T2.7); new 409/503 error-mapping rows (T3.1).
+
+**Implementation notes:** the deviations recorded while landing Tiers 0-3 —
+including T0.4's still-pending cost measurement — live in `docs/DECISIONS.md`'s
+D6b amendment, `docs/API.md`, and each affected module's own doc comments, not
+rewritten into the plan body above.

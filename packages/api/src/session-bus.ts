@@ -123,6 +123,23 @@ export class PushChannel<T> implements AsyncIterable<T> {
   private waiting: ((result: IteratorResult<T>) => void) | undefined;
   private ended = false;
 
+  /**
+   * Synchronously returns and clears everything currently buffered, without
+   * waiting for anything new — used by `handlers/session-events.ts`'s P1
+   * review fix to distinguish messages that accumulated during the
+   * subscribe->replay gap (this module's own doc, "Why the payload is a
+   * union") from ones that arrive genuinely live afterward: called once,
+   * synchronously, in the same tick `readEvents` resolves and before the
+   * caller's `for await` starts pulling, so nothing pushed after this call
+   * can possibly be included (single-threaded JS: nothing else runs between
+   * "replay just finished" and this call). Leaves the channel exactly as if
+   * these items had never been pushed — `push`/`end`/iteration afterward all
+   * behave normally, `[]` if nothing had accumulated.
+   */
+  drainBuffered(): T[] {
+    return this.buffered.splice(0, this.buffered.length);
+  }
+
   push(value: T): void {
     if (this.ended) return;
     if (this.waiting) {

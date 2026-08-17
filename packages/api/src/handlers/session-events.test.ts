@@ -203,6 +203,17 @@ class GatedReadEventsStore implements SessionStore {
   delete(id: string): Promise<void> {
     return this.inner.delete(id);
   }
+
+  /**
+   * P1 review fix's test: reads straight from the wrapped store, bypassing
+   * this decorator's `readEvents` gate entirely — used to poll for "has a
+   * turn's append actually landed yet" (e.g. via `waitUntil`) without ever
+   * going through the gated path under test, which would deadlock while
+   * held.
+   */
+  peekEvents(id: string): Promise<StoredEventRecord[]> {
+    return this.inner.readEvents(id);
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -496,6 +507,74 @@ async function withSteppedApi<T>(fn: (harness: SteppedHarness) => Promise<T>): P
 /** Drains a `POST /api/chat` SSE response to completion — the test only needs the turn to finish, not any specific event out of it. */
 async function drainChatResponse(response: Response): Promise<void> {
   await readAllSseEvents(response);
+}
+
+interface GatedSteppedHarness {
+  readonly baseUrl: string;
+  readonly sessions: SteppedAgenticSessionPort;
+  readonly store: GatedReadEventsStore;
+}
+
+/**
+ * P1 review fix's harness: `GatedReadEventsStore` (gates `readEvents`, so a
+ * follow request's replay can be held open on demand, same trick
+ * `withGatedApi` uses) PLUS `SteppedAgenticSessionPort` (individual
+ * `text-delta` pushes, same trick `withSteppedApi` uses) — together, so a
+ * test can push deltas AND complete the turn (append + publish the closing
+ * records) WHILE a follow viewer's replay read is still gated, then release
+ * it and observe what the drain phase does with whatever accumulated.
+ * Neither existing harness offers both knobs at once.
+ */
+async function withGatedSteppedApi<T>(
+  fn: (harness: GatedSteppedHarness) => Promise<T>,
+): Promise<T> {
+  const root = await mkdtemp(join(tmpdir(), "shadow-session-events-gated-stepped-"));
+  try {
+    const volumeStore = new FileSystemVolumeStore(root);
+    const evidenceStore = new FileSystemEvidenceStore(volumeStore);
+    const indexer = new StructuralIndexer({ rootDir: root });
+    const sessions = new SteppedAgenticSessionPort();
+    const volume = toVolumeSlug("design-craft");
+    await volumeStore.createVolume({ slug: volume, title: "Design Craft" });
+
+    const shadowAgent = new ShadowAgent({
+      agenticSessionPort: sessions,
+      researchBriefPort: unusedResearchBriefPort,
+      volumeStore,
+      evidenceStore,
+      indexer,
+      checkWorthinessClassifier: alwaysNarrativeClassifier,
+      entailmentRelevanceJudge: scriptedEntailmentJudge(),
+      claimRestater: neverRepairClaimRestater(),
+      sessionCwd: root,
+    });
+
+    const store = new GatedReadEventsStore(new InMemorySessionStore());
+    const sessionService = new SessionService({ store, shadowAgent, agenticSessionPort: sessions });
+
+    const deps: ApiDeps = {
+      volumeStore,
+      evidenceStore,
+      indexer,
+      checkWorthinessClassifier: alwaysNarrativeClassifier,
+      entailmentRelevanceJudge: scriptedEntailmentJudge(),
+      claimRestater: neverRepairClaimRestater(),
+      structuredGenerationPort: new FakeStructuredGenerationPort(),
+      missLog: new InMemoryMissLog(),
+      shadowAgent,
+      sessionService,
+      conversations: sessionService.registry,
+    };
+
+    const server = createServer(deps, { port: 0, hostname: "localhost" });
+    try {
+      return await fn({ baseUrl: server.url.toString().replace(/\/$/, ""), sessions, store });
+    } finally {
+      void server.stop(true);
+    }
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -1113,6 +1192,219 @@ describe("GET /api/sessions/:id/events?follow=true — F2/F4: viewer joins mid-a
       // rendered transcript ends with "Hello world" exactly once — never
       // "worldHello world" (an append) and never just "world" (the
       // pre-fix loss).
+    });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// 7. P1 review fix: a message that COMPLETES entirely during a gated replay
+//    read must not have its pre-completion deltas re-forwarded on top of the
+//    full text replay already delivers.
+// ---------------------------------------------------------------------------
+
+describe("GET /api/sessions/:id/events?follow=true — P1: message completes while replay is gated", () => {
+  test("deltas buffered before the completing record is replayed are dropped — the viewer's text equals the full message exactly once, never duplicated", async () => {
+    await withGatedSteppedApi(async ({ baseUrl, sessions, store }) => {
+      // Start the turn; nothing streams until the test pushes into it
+      // (`SteppedSession.stream()` blocks on its own per-turn `PushChannel`).
+      const chatPromise = postChatOnGatedHarness(baseUrl, {
+        volumeSlug: "design-craft",
+        message: "start",
+      });
+      await waitUntil(() => sessions.sessions.length > 0);
+      const session = sessions.sessions[0];
+      if (!session) throw new Error("expected a stepped session");
+
+      // Learn the session id the same way the F2/F4 test above does — by
+      // reading just the `session` event off the chat POST's own stream.
+      const initial = await readSseEventsUntil(
+        await chatPromise,
+        (collected) => collected.some((e) => e.event === "session"),
+        { timeoutMs: 2_000 },
+      );
+      const sessionId = dataOf<{ sessionId: string }>(initial[0]).sessionId;
+
+      // Gate the store's `readEvents` — the follow request below will
+      // subscribe to the bus (synchronous, before any await) and then block
+      // trying to replay, widening the subscribe->read gap on demand
+      // exactly as `withGatedApi`'s own race test does.
+      store.holdReads();
+      const readEventsCalled = new Promise<void>((resolve) => {
+        store.onReadEventsCalled = resolve;
+      });
+      const followPromise = fetch(`${baseUrl}/api/sessions/${sessionId}/events?follow=true`);
+      await readEventsCalled;
+
+      // The ENTIRE message streams and completes WHILE replay is still
+      // blocked: both deltas are published to the bus (and therefore
+      // buffered by the follow subscription, per this endpoint's
+      // Bus-first-buffer design) strictly before replay ever reads the
+      // store, and so is the closing `assistant-message` / `turn-boundary`
+      // append+publish that `finish` triggers. Confirmed via `peekEvents` —
+      // the store's UNGATED path (`readEvents` itself is still held, and
+      // the original chat POST's own SSE reader was already cancelled by
+      // `readSseEventsUntil` above, per that helper's doc, so it can't be
+      // read from again to detect this) — rather than a fixed delay, since
+      // the append is genuinely async relative to `finish()` returning.
+      session.pushDelta(0, "Hello ");
+      session.pushDelta(0, "world");
+      session.finish(0, "Hello world");
+      await waitUntil(async () =>
+        (await store.peekEvents(sessionId)).some(
+          (record) => record.event.type === "turn-boundary" && record.event.phase === "ended",
+        ),
+      );
+
+      // NOW release the gate: replay reads the store for the first time and
+      // sees the ALREADY-COMPLETE transcript, delivering the assistant
+      // message's full text as one seq-stamped event. Every record the
+      // completed turn produced is therefore ALSO sitting in the follow
+      // subscription's buffer, published there before replay ever ran —
+      // exactly the race this test pins.
+      store.releaseReads();
+
+      const followRes = await followPromise;
+      expect(followRes.status).toBe(200);
+
+      const events = await readSseEventsUntil(
+        followRes,
+        (collected) => collected.some((e) => e.event === "turn.ended"),
+        { timeoutMs: 5_000 },
+      );
+
+      // Exactly ONE `text` event reaches this viewer — replay's own
+      // seq-stamped full-text delivery. Before the P1 fix, the drain phase
+      // would additionally forward the two buffered `text-delta` messages
+      // ("Hello ", "world") on top of it, rendering as "Hello worldHello
+      // world" downstream (`chat-transcript.ts`'s delta-append case) instead
+      // of the single correct "Hello world".
+      const textEvents = events.filter((e) => e.event === "text");
+      expect(textEvents).toHaveLength(1);
+      expect(dataOf<{ delta: string }>(textEvents[0]).delta).toBe("Hello world");
+      expect(dataOf<{ seq?: number }>(textEvents[0]).seq).toBeDefined();
+    });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// 8. P2 review fix: a crash-torn transcript's interrupted marker must reach
+//    a follow viewer too — synthesized only when the service confirms the
+//    session is genuinely idle, never for a turn that's actually running.
+// ---------------------------------------------------------------------------
+
+describe("GET /api/sessions/:id/events?follow=true — P2: crash-torn transcript, idle service", () => {
+  test("a started-without-ended last turn, with SessionService reporting no activity, gets turn.interrupted synthesized before the stream goes live", async () => {
+    await withApi(async ({ deps, baseUrl, sessionStore }) => {
+      const volume = toVolumeSlug("design-craft");
+      await seedVolume(deps, volume);
+
+      // Written directly through the store, bypassing `SessionService`
+      // entirely — the exact shape a real server crash mid-turn leaves
+      // behind (T2.9/T3.1's own crash paths): a `turn-boundary(started)`
+      // with no `ended` to close it, and — because no turn ever actually
+      // ran through THIS `SessionService` instance for this id —
+      // `SessionLock` has no record of it at all, so `hasActivity` is
+      // honestly `false`, matching a freshly-restarted server that has
+      // never touched this session.
+      const sessionId = "torn-transcript-session";
+      const now = new Date().toISOString();
+      await sessionStore.create({
+        id: sessionId,
+        volume,
+        title: null,
+        createdAt: now,
+        lastActiveAt: now,
+      });
+      await sessionStore.append(sessionId, [
+        {
+          turnId: "torn-turn",
+          at: now,
+          event: { type: "operator-message", text: "were we mid-turn?" },
+        },
+        { turnId: "torn-turn", at: now, event: { type: "turn-boundary", phase: "started" } },
+      ]);
+
+      const followRes = await fetch(`${baseUrl}/api/sessions/${sessionId}/events?follow=true`);
+      expect(followRes.status).toBe(200);
+
+      const events = await readSseEventsUntil(
+        followRes,
+        (collected) => collected.some((e) => e.event === "turn.interrupted"),
+        { timeoutMs: 2_000 },
+      );
+
+      // Synthesized exactly once, with no `seq` — there is no backing
+      // `StoredEventRecord` for it, unlike every other event this handler
+      // sends (this module's "Wire encoding" doc).
+      const interrupted = events.filter((e) => e.event === "turn.interrupted");
+      expect(interrupted).toHaveLength(1);
+      expect(dataOf<{ seq?: number }>(interrupted[0]).seq).toBeUndefined();
+
+      // Downstream (`../../web/src/pages/chat-transcript.ts`'s
+      // `"turn.interrupted"` case, pinned separately): renders the same
+      // "interrupted" item `markInterruptedIfPending` would have produced
+      // for a plain (non-follow) replay — this follow viewer is no longer
+      // left staring at a turn that looks, forever, like it's still running.
+    });
+  });
+});
+
+describe("GET /api/sessions/:id/events?follow=true — P2: a genuinely running turn is NOT mistaken for a crash", () => {
+  test("a started-without-ended last turn with a turn still actually running gets no synthesized turn.interrupted — the live tail will deliver the real outcome", async () => {
+    await withGatedApi(async ({ baseUrl, sessions }) => {
+      const chatPromise = postChatOnGatedHarness(baseUrl, {
+        volumeSlug: "design-craft",
+        message: "still going",
+      });
+      await waitUntil(() => sessions.sessions.length > 0);
+      const controllable = sessions.sessions[0];
+      if (!controllable) throw new Error("expected a controllable session");
+      // Held open on PURPOSE — the turn's own `operator-message` +
+      // `turn-boundary(started)` are already appended (`runTurn` writes
+      // them before ever calling `AgenticSession.stream()`), but the turn
+      // itself is deliberately never released, so it's genuinely still
+      // running (`SessionLock.hasActivity` therefore genuinely `true`) —
+      // this session's transcript is torn in EXACTLY the same shape as the
+      // crash test above, but for a completely different, non-crash reason.
+      await controllable.waitForStart(0);
+
+      const initial = await readSseEventsUntil(
+        await chatPromise,
+        (collected) => collected.some((e) => e.event === "session"),
+        { timeoutMs: 2_000 },
+      );
+      const sessionId = dataOf<{ sessionId: string }>(initial[0]).sessionId;
+
+      const followRes = await fetch(`${baseUrl}/api/sessions/${sessionId}/events?follow=true`);
+      expect(followRes.status).toBe(200);
+
+      // Read until the replayed `operator` event arrives — the P2 check
+      // (`hasActivity`, synchronous, no `await`) runs immediately
+      // afterward, in the SAME synchronous continuation, strictly before
+      // this handler's very first genuine await point (the drain loop's
+      // `for await` blocking for real on an empty channel — nothing is
+      // queued yet, since the turn is still held before ever streaming
+      // anything). Whatever this handler was going to synthesize is
+      // therefore already decided, and already enqueued if it was going to
+      // happen at all, by the time this read returns — no race to wait out.
+      const events = await readSseEventsUntil(
+        followRes,
+        (collected) => collected.some((e) => e.event === "operator"),
+        { timeoutMs: 2_000 },
+      );
+
+      expect(events.some((e) => e.event === "turn.interrupted")).toBe(false);
+
+      // Clean up: release the turn so its generator (and `runTurn`'s own
+      // `for await`) can finish, rather than leaving it permanently parked
+      // mid-stream. The turn's own POST /api/chat response was only read
+      // until the `session` event (its reader already cancelled by
+      // `readSseEventsUntil`'s `finally`) — reading it again here would hit
+      // an already-cancelled body, so this doesn't try; the turn keeps
+      // running server-side regardless of that detach (T2.5's whole point)
+      // and settles on its own in the background, with no remaining
+      // subscriber left to publish to.
+      controllable.release(0);
     });
   });
 });

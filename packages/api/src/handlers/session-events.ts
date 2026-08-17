@@ -92,6 +92,30 @@
  * 5s interval, invisible to any real client but real traffic to the
  * connection and any proxy in front of it.
  *
+ * ## P2 review fix: a crash-torn transcript gets its interrupted marker in
+ * follow mode too
+ *
+ * The failure table's "crash mid-turn -> transcript shows interrupted turn"
+ * row holds for the store (a `turn-boundary(started)` with no matching
+ * `ended` — T2.9/T3.1's own crash paths) and for a plain, non-follow replay
+ * (the client's own `markInterruptedIfPending`,
+ * `../../web/src/pages/chat-transcript.ts`, fires once that replay's stream
+ * ends with `done` and the last turn never resolved). But a *follow* stream
+ * never sends `done` — "Turn end is not a close condition" above is exactly
+ * why — so a healthy follow connection opened onto a torn transcript would
+ * simply replay the dangling `started` boundary and then sit there live,
+ * forever, with `markInterruptedIfPending` never given the chance to fire.
+ * Fixed here, not on the client: once replay finishes, if the last replayed
+ * turn is started-without-ended AND `SessionService.hasActivity` confirms
+ * nothing is actually running or queued for this session right now, a
+ * `turn.interrupted` wire event is synthesized — no backing
+ * `StoredEventRecord`, so no `seq` — before the drain/live loop below ever
+ * starts. The `hasActivity` guard is load-bearing: a turn that genuinely IS
+ * still running (server just hasn't gotten to the boundary yet, not a crash
+ * at all) must NOT get this synthesized, since the live tail is about to
+ * deliver its real outcome — synthesizing here would either race that
+ * delivery or lie outright about a turn that's actually fine.
+ *
  * ## Close conditions
  *
  * Three ways this stream ends: the client disconnects (`cancel()` —
@@ -237,7 +261,18 @@ export async function getSessionEvents(
         // client passes `lastSeq + 1`, not `lastSeq`).
         const records = await deps.sessionService.readEvents(sessionId, fromSeq);
         let lastSeq = fromSeq !== undefined ? fromSeq - 1 : 0;
+        // P2 review fix: tracks whether the most recently replayed turn
+        // boundary was a `started` with no later `ended` to close it — a
+        // crash-torn transcript's exact shape (T2.9/T3.1's own crash paths).
+        // `false` after any `ended` boundary, `true` again after any later
+        // `started`; what survives to the end of the loop is the LAST turn's
+        // state, which is all that can possibly still be "torn" — every
+        // earlier turn, by construction, has both its boundaries already.
+        let lastTurnStartedWithoutEnding = false;
         for (const record of records) {
+          if (record.event.type === "turn-boundary") {
+            lastTurnStartedWithoutEnding = record.event.phase === "started";
+          }
           for (const wire of recordToWireEvents(record)) {
             send(wire.event, wire.data);
           }
@@ -248,41 +283,113 @@ export async function getSessionEvents(
           send("done", {});
           return;
         }
+
+        // P2 review fix (this module's own doc, above): a follow stream
+        // never sends `done`, so the client's own `markInterruptedIfPending`
+        // never gets the chance to run here. Synthesize its wire equivalent
+        // ourselves — but ONLY once `hasActivity` confirms nothing is
+        // actually running or queued for this session: a turn that's
+        // genuinely still in flight is not torn at all, just not finished
+        // yet, and the live tail below will deliver its real outcome.
+        if (
+          lastTurnStartedWithoutEnding &&
+          !closed &&
+          !deps.sessionService.hasActivity(sessionId)
+        ) {
+          send("turn.interrupted", {});
+        }
         if (closed) return; // client disconnected while replay was reading
 
         // 2 & 3. Drain whatever the subscription buffered during replay,
-        // then stay live — the same loop handles both, per this module's
-        // doc: `channel` doesn't distinguish "buffered before we were
-        // reading" from "arrived while we're genuinely waiting." Dedup by
-        // `seq`: anything already delivered by replay above (`seq <=
-        // lastSeq`) is skipped, never forwarded twice. Ends only when
-        // `cancel()` below calls `channel.end()` — a `turn-boundary(ended)`
-        // record is deliberately just another record here, not a close
-        // condition (this module's doc).
-        for await (const message of channel as PushChannel<SessionBusMessage>) {
-          if (closed) break;
+        // then stay live. Dedup by `seq`: anything already delivered by
+        // replay above (`seq <= lastSeq`) is skipped, never forwarded
+        // twice. Ends only when `cancel()` below calls `channel.end()` — a
+        // `turn-boundary(ended)` record is deliberately just another record
+        // here, not a close condition (this module's doc).
+        //
+        // P1 review fix: `text-delta` bus messages carry no `seq`, so the
+        // dedup-by-seq check just below can't touch them — and that's a
+        // real gap. If a running assistant message COMPLETES while replay
+        // is still reading (this endpoint's own "Bus-first-buffer" doc:
+        // subscribe happens before replay, so a slow or gated `readEvents`
+        // can genuinely race a turn to completion), replay reads back the
+        // ALREADY-COMPLETE transcript and delivers the record's full,
+        // seq-stamped text in one shot — but the deltas that streamed
+        // BEFORE that completion are still sitting in `channel`, buffered
+        // during the subscribe->read window, with no seq to dedup them by.
+        // Forwarding them anyway appends them onto the bubble replay just
+        // delivered in full ("Hello world" + "world" -> "Hello worldworld").
+        //
+        // Fixed in two phases, not one flag over the whole loop: `handleMessage`
+        // below is shared, but only `bufferedAtReplayEnd` — drained
+        // SYNCHRONOUSLY, in the same tick `readEvents` resolves, strictly
+        // before this loop ever starts pulling — has its `text-delta`s
+        // dropped. That set is EXACTLY what accumulated during the gap (see
+        // `PushChannel.drainBuffered`'s doc); nothing pushed afterward can
+        // land in it, because nothing else runs between "replay just
+        // finished" and the `drainBuffered()` call below (no `await` in
+        // between). A delta that arrives once the loop is genuinely live —
+        // e.g. from a turn still streaming when replay ended — is NOT in
+        // that set and is forwarded immediately, same as before this fix;
+        // only its OWN eventual completion record, seq-stamped, can ever
+        // dedup it, same as always. Any `text-delta` this fix does drop
+        // belongs to a turn whose stored shape replay (or a `record`
+        // message in this same buffered batch) already rendered in full, so
+        // the drop costs nothing but the live "typing" effect for a turn
+        // that already finished — the seq-stamped REPLACE semantics (this
+        // module's "Wire encoding" doc) already make that transient, never
+        // a permanent duplicate.
+        // Returns `true` if the drain/live loop below should stop right
+        // away (the "ended" case) — checked and acted on the INSTANT each
+        // message is handled, not merely at the top of the next loop
+        // iteration, since (for the live half) that next iteration would
+        // otherwise call `channel.next()` again and block waiting for a
+        // message that may never come (an `{ kind: "ended" }` bus message
+        // does not itself call `channel.end()` — it's just pushed like any
+        // other message; see `session-bus.ts`'s module doc).
+        const handleMessage = (message: SessionBusMessage, dropDeltas: boolean): boolean => {
           if (message.kind === "ended") {
             // T3.1: the session was deleted out from under this stream
             // (`session-bus.ts`'s module doc — the seam this module used to
             // just document as "not built here"). No wire event: a deleted
             // session has no client-visible content left to send, only a
             // stream to close, same as any other close condition below.
-            break;
+            return true;
           }
           if (message.kind === "text-delta") {
-            const wire = textDeltaWireEvent(message.text);
-            send(wire.event, wire.data);
-            continue;
+            if (!dropDeltas) {
+              const wire = textDeltaWireEvent(message.text);
+              send(wire.event, wire.data);
+            }
+            return false; // P1 review fix: dropped, not stopped — see above
           }
-          if (message.record.seq <= lastSeq) continue; // already delivered via replay
-          lastSeq = message.record.seq;
-          // F2/F4 review fix: `wireEventsFromStored`, not `wireEventsForLive`
-          // — see this module's doc for why the live tail needs the SAME
-          // mapping replay uses (a completed `assistant-message` record's
-          // full text must reach a follow viewer, seq-stamped, or a viewer
-          // who joined mid-message permanently loses the prefix).
-          for (const wire of recordToWireEvents(message.record)) {
-            send(wire.event, wire.data);
+          if (message.record.seq > lastSeq) {
+            // already delivered via replay otherwise
+            lastSeq = message.record.seq;
+            // F2/F4 review fix: `wireEventsFromStored`, not `wireEventsForLive`
+            // — see this module's doc for why the live tail needs the SAME
+            // mapping replay uses (a completed `assistant-message` record's
+            // full text must reach a follow viewer, seq-stamped, or a viewer
+            // who joined mid-message permanently loses the prefix).
+            for (const wire of recordToWireEvents(message.record)) {
+              send(wire.event, wire.data);
+            }
+          }
+          return false;
+        };
+
+        let endedEarly = false;
+        for (const message of (channel as PushChannel<SessionBusMessage>).drainBuffered()) {
+          if (closed) break;
+          if (handleMessage(message, /* dropDeltas */ true)) {
+            endedEarly = true;
+            break;
+          }
+        }
+        if (!closed && !endedEarly) {
+          for await (const message of channel as PushChannel<SessionBusMessage>) {
+            if (closed) break;
+            if (handleMessage(message, /* dropDeltas */ false)) break;
           }
         }
       } catch (error) {

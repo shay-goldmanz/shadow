@@ -776,6 +776,24 @@ export class SessionService {
   }
 
   /**
+   * Whether `sessionId` has a turn running or queued RIGHT NOW —
+   * `this.lock.hasActivity`, exposed publicly (P2 review fix). Was
+   * previously only reached indirectly through the `isSessionBusy`
+   * predicate wired into `ConversationRegistry` (T2.4/T2.5) and the direct
+   * `this.lock.hasActivity` calls inside this class's own `deleteSession`
+   * (T3.1's 409 `SessionBusyError` guard) — nothing outside this class ever
+   * needed the answer before. `handlers/session-events.ts`'s follow-mode
+   * replay now does: a torn transcript (started-without-ended, e.g. a
+   * server crash mid-turn) only gets `turn.interrupted` synthesized on the
+   * wire if THIS returns `false` — `true` means a turn is genuinely still
+   * running or about to, and the live tail will deliver the real outcome
+   * itself, so synthesizing anything here would race it and could be wrong.
+   */
+  hasActivity(sessionId: string): boolean {
+    return this.lock.hasActivity(sessionId);
+  }
+
+  /**
    * Graceful shutdown (T2.9, PLAN.md's Tier 2 entry and the failure table's
    * "SIGINT with a turn running" row). `start.ts` calls this from its
    * SIGINT/SIGTERM handler, ahead of `server.stop()`; tests call it directly

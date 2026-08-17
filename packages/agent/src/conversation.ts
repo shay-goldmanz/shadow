@@ -166,6 +166,14 @@ export interface StartConversationOptions {
      * conversation found" on the resumed first turn unhandled — it
      * propagates as an ordinary error, same as any other channel this
      * class doesn't special-case.
+     *
+     * Honestly scoped boundary (F6, final review — judged rare/acceptable,
+     * not fixed): this fallback only ever fires on the handle's very first
+     * `sendMessage` call — a *retry* after an `isError`-completed first
+     * turn (which leaves `resume` intact without throwing) finds
+     * `this.session` already set, so `isResumingFirstTurn` is false and a
+     * "No conversation found" on that retry propagates instead of falling
+     * back.
      */
     readonly fallbackSummary?: string;
   };
@@ -488,9 +496,23 @@ export class ShadowConversation {
             // here — see `StartConversationOptions.resume`'s doc), or a
             // resumed first turn that already yielded output before it
             // threw. Propagate as an ordinary error; `resume` stays intact
-            // on `this.session` (still `undefined` here, so the next call to
-            // `getOrCreateSession` — if the caller retries this same
-            // conversation — tries the same resume again, unchanged).
+            // for a caller that retries this same conversation handle — NOT
+            // because `this.session` is unset here (P4 review fix: it
+            // isn't — `getOrCreateSession` above already assigned it before
+            // `runModelTurn` ever ran), but because a retry's
+            // `getOrCreateSession` call finds that already-set `this.session`
+            // and reuses it as-is (`if (this.session) return this.session;`)
+            // rather than constructing a fresh one from `pendingResume`. The
+            // SAME session object this failed attempt was talking to is
+            // still wired to the ORIGINAL `resume` option it was constructed
+            // with, and stays that way: a thrown, pre-completion failure
+            // never gives the underlying adapter a chance to latch its own
+            // session id onto this handle (`ClaudeAgentSdkSession`'s
+            // contract — the same "never latches on `isError`" rule the F3
+            // comment below documents for a turn that fails by *completing*
+            // with `isError: true` applies just as much to one that fails by
+            // *throwing* before completing at all), so nothing has moved
+            // this handle's resume target since it was first created.
             throw error;
           }
 
