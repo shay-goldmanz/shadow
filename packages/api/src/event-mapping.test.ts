@@ -208,9 +208,8 @@ describe("wireEventsFromStored — golden mapping table", () => {
     ]);
   });
 
-  test("turn-boundary (started/ended-completed/ended-error) -> no wire representation", () => {
+  test("turn-boundary (started/ended-error) -> no wire representation", () => {
     expect(wireEventsFromStored(turnBoundaryStarted())).toEqual([]);
-    expect(wireEventsFromStored(turnBoundaryEnded("completed"))).toEqual([]);
     // ended/error's content is carried by `errorEventForBoundary` instead
     // (tested separately, below) — `wireEventsFromStored` itself still maps
     // it to nothing.
@@ -225,6 +224,17 @@ describe("wireEventsFromStored — golden mapping table", () => {
   test("turn-boundary (ended/interrupted) -> turn.interrupted", () => {
     expect(wireEventsFromStored(turnBoundaryEnded("interrupted"))).toEqual([
       { event: "turn.interrupted", data: {} },
+    ]);
+  });
+
+  // F3 review fix: the OTHER `turn-boundary` outcome that now gets a wire
+  // event — without it, a `?follow=true` viewer's `turnPending` had no way
+  // to learn a turn it's watching completed normally (`?follow=true` never
+  // sends `done`), so a later connection blip on an already-finished turn
+  // got mis-marked `turn.interrupted` with a live Retry.
+  test("turn-boundary (ended/completed) -> turn.ended", () => {
+    expect(wireEventsFromStored(turnBoundaryEnded("completed"))).toEqual([
+      { event: "turn.ended", data: {} },
     ]);
   });
 
@@ -375,10 +385,13 @@ function runLive(
 /**
  * Approximates the `StoredSessionEvent[]` T2.5's tee will append for the
  * same turn (`operator-message`, `turn-boundary(started)`, every non-delta
- * `ShadowEvent` stamped, `turn-boundary(ended)`) — good enough for this
- * mapping-layer test, since `turn-boundary` has no wire representation
- * either way — then replays it through `wireEventsFromStored`, exactly
- * what T2.7's replay endpoint will do.
+ * `ShadowEvent` stamped, `turn-boundary(ended, "completed")`) — always
+ * `"completed"` regardless of what `events` actually contains, which is a
+ * simplification the two call sites below account for by excluding
+ * `turn.ended` from their live/replay comparison (see their own doc) rather
+ * than this helper trying to infer the "real" end reason. Then replays it
+ * through `wireEventsFromStored`, exactly what T2.7's replay endpoint will
+ * do.
  */
 function runStoredThenReplay(
   operatorText: string,
@@ -434,9 +447,18 @@ describe("live vs replay — identical wire sequences for the same turn", () => 
     // Every non-text wire event is byte-identical, in the same order,
     // between the live stream and the replayed one — including the
     // research briefId, which round-tripped through a stored/replayed
-    // record rather than surviving by object identity.
-    const nonText = (list: WireEvent[]) => list.filter((w) => w.event !== "text");
-    expect(nonText(replayed)).toEqual(nonText(live));
+    // record rather than surviving by object identity. `turn.ended`/
+    // `turn.interrupted` are excluded on purpose (F3 review fix): both are
+    // T2.7's replay+follow-only wire events — `runLive` mirrors
+    // `chat.ts`'s real behavior of never running a `turn-boundary` record
+    // through this mapping at all (this module's own doc), so a genuine
+    // live stream never produces either one; only `runStoredThenReplay`'s
+    // synthetic trailing boundary does.
+    const comparable = (list: WireEvent[]) =>
+      list.filter(
+        (w) => w.event !== "text" && w.event !== "turn.ended" && w.event !== "turn.interrupted",
+      );
+    expect(comparable(replayed)).toEqual(comparable(live));
 
     // The text itself: live sent it as separate deltas that concatenate to
     // the same string replay sends as one delta (the one documented,
@@ -506,8 +528,13 @@ describe("live vs replay — identical wire sequences for the same turn", () => 
     const live = runLive("do something", events, "turn-e");
     const replayed = runStoredThenReplay("do something", events, "turn-e");
 
-    const nonText = (list: WireEvent[]) => list.filter((w) => w.event !== "text");
-    expect(nonText(replayed)).toEqual(nonText(live));
+    // See the identical helper's doc above for why `turn.ended`/
+    // `turn.interrupted` are excluded.
+    const comparable = (list: WireEvent[]) =>
+      list.filter(
+        (w) => w.event !== "text" && w.event !== "turn.ended" && w.event !== "turn.interrupted",
+      );
+    expect(comparable(replayed)).toEqual(comparable(live));
     expect(live.at(-1)).toEqual({
       event: "error",
       data: { message: "the model call failed", code: "shadow_turn_error" },

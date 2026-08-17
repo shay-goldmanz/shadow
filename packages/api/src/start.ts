@@ -7,6 +7,7 @@
 
 import { buildRealApiDeps } from "./composition.ts";
 import { createServer } from "./server.ts";
+import { shutdownGracefully } from "./shutdown.ts";
 
 const port = Number(process.env.PORT ?? 4301);
 
@@ -39,7 +40,15 @@ console.log(`@shadow/api listening at ${server.url.toString()}`);
  * forever; the torn-tail read tolerance from T2.1 is the backstop for that
  * case, not the norm. `server.stop()` only happens *after* that sequence
  * settles (or times out), so no new HTTP connection can slip in while
- * turns are winding down.
+ * turns are winding down — and, once it does happen, it happens WITH the
+ * force flag (F1 review fix, `shutdown.ts`'s own module doc): the unforced
+ * `server.stop()` never resolves while a T2.8 follow stream is still open,
+ * which is every mounted session tab, so Ctrl-C would otherwise hang
+ * forever the instant one viewer existed — undoing this whole sequence's
+ * point. `shutdownGracefully` (`shutdown.ts`) is the actual sequence;
+ * pulled into its own module so it's testable without this file's own
+ * side-effecting module-load (building a real `ApiDeps`, binding a real
+ * server) getting in the way.
  *
  * `shuttingDownStarted` guards against a second signal (SIGTERM arriving
  * hot on SIGINT's heels, say) re-entering this — `SessionService.shutdown()`
@@ -52,8 +61,7 @@ async function shutdown(signal: NodeJS.Signals): Promise<void> {
   if (shuttingDownStarted) return;
   shuttingDownStarted = true;
   console.log(`${signal} received — winding down in-flight turns...`);
-  await deps.sessionService.shutdown();
-  await server.stop();
+  await shutdownGracefully({ sessionService: deps.sessionService, server });
   process.exit(0);
 }
 

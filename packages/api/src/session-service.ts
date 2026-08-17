@@ -291,7 +291,8 @@ export class SessionService {
       throw new ServiceShuttingDownError();
     }
 
-    const sessionId = await this.resolveSessionId(target);
+    const resolved = await this.resolveSessionId(target);
+    const sessionId = resolved.sessionId;
 
     // Synchronous check-and-reserve (`session-lock.ts`'s module doc) —
     // nothing awaits between resolving `sessionId` above and this call that
@@ -320,7 +321,7 @@ export class SessionService {
     });
 
     const settled = this.lock.runReserved(sessionId, () =>
-      this.runTurn(sessionId, turnId, message),
+      this.runTurn(sessionId, turnId, message, resolved.pendingVolume),
     );
     // Tracked from reservation (running *or* still queued) until settlement
     // — `shutdown()`'s deadline race waits on a snapshot of this set (T2.9).
@@ -342,28 +343,45 @@ export class SessionService {
     return { sessionId, turnId, events: drainChannel(channel, unsubscribe) };
   }
 
-  /** Resolves `target` to a session id, minting a fresh session row for a `{volume}` target or validating an existing `{sessionId}` target exists somewhere (registry or store) — WITHOUT rehydrating it yet. Rehydration itself only ever happens inside the per-session lock (`ensureConversation`, called from `runTurn`), so this is deliberately just an existence check for `{sessionId}`. */
-  private async resolveSessionId(target: EnqueueTarget): Promise<string> {
+  /**
+   * Resolves `target` to a session id — for `{sessionId}`, validates it
+   * exists somewhere (registry or store) WITHOUT rehydrating it yet
+   * (rehydration only ever happens inside the per-session lock,
+   * `ensureConversation`, called from `runTurn`); for `{volume}`, mints a
+   * FRESH id synchronously (`randomUUID()` — no other caller could possibly
+   * already know it) but does NOT create its store row here any more.
+   *
+   * **F8 review fix.** This used to create the row for a `{volume}` target
+   * right here, unconditionally — an `await this.store.create(...)` call
+   * OUTSIDE the per-session lock and, crucially, outside `runTurn`'s own
+   * `shuttingDown` re-check. A `{volume}` enqueue that raced a concurrent
+   * `shutdown()` landing in that `await` gap would have this call finish
+   * creating the row regardless, then have `runTurn`'s early-return (T2.9's
+   * "queued turn dropped cleanly" check, at the top of that method) drop the
+   * turn without ever appending anything to it — leaving a permanent,
+   * zero-event "phantom" session row behind: a session that exists forever,
+   * with nothing in it, dropped from a list view. Deferring the actual
+   * `store.create` into `runTurn`, immediately after (no `await` in
+   * between) the SAME `shuttingDown` check that guards everything else that
+   * method writes, closes the gap structurally: the row is now created only
+   * once that check has ALREADY passed, atomically, with no window for a
+   * later `shutdown()` to land in between "checked" and "created."
+   */
+  private async resolveSessionId(
+    target: EnqueueTarget,
+  ): Promise<{ readonly sessionId: string; readonly pendingVolume?: VolumeSlug }> {
     if ("volume" in target) {
-      return this.createSessionRow(target.volume);
+      return { sessionId: randomUUID(), pendingVolume: target.volume };
     }
     const { sessionId } = target;
     if (this.registry.get(sessionId)) {
-      return sessionId;
+      return { sessionId };
     }
     const meta = await this.store.get(sessionId);
     if (!meta) {
       throw new SessionNotFoundError(sessionId);
     }
-    return sessionId;
-  }
-
-  /** Mints a fresh session id and its store row. Nothing else can race this — the id is freshly minted (`randomUUID()`), so no other caller could possibly already know it, unlike an operator-supplied `sessionId`. */
-  private async createSessionRow(volume: VolumeSlug): Promise<string> {
-    const id = randomUUID();
-    const now = new Date().toISOString();
-    await this.store.create({ id, volume, title: null, createdAt: now, lastActiveAt: now });
-    return id;
+    return { sessionId };
   }
 
   /**
@@ -393,7 +411,12 @@ export class SessionService {
    * is communicated entirely through the store/bus, not through this
    * method's own promise.
    */
-  private async runTurn(sessionId: string, turnId: string, operatorText: string): Promise<void> {
+  private async runTurn(
+    sessionId: string,
+    turnId: string,
+    operatorText: string,
+    pendingVolume?: VolumeSlug,
+  ): Promise<void> {
     if (this.shuttingDown) {
       return;
     }
@@ -404,6 +427,23 @@ export class SessionService {
     let priorTitle: string | null = null;
 
     try {
+      // F8 review fix: the store row for a fresh `{volume}` target is
+      // created HERE, immediately after the `shuttingDown` check above with
+      // no `await` in between — not in `resolveSessionId` any more (that
+      // method's own doc has the full story on the phantom-row race this
+      // closes). `pendingVolume` is `undefined` for a `{sessionId}` target,
+      // whose row already exists (`resolveSessionId` already validated it).
+      if (pendingVolume !== undefined) {
+        const now = new Date().toISOString();
+        await this.store.create({
+          id: sessionId,
+          volume: pendingVolume,
+          title: null,
+          createdAt: now,
+          lastActiveAt: now,
+        });
+      }
+
       const ensured = await this.ensureConversation(sessionId);
       conversation = ensured.conversation;
       priorTitle = ensured.meta.title;
@@ -714,6 +754,11 @@ export class SessionService {
     listener: (message: SessionBusMessage) => void,
   ): () => void {
     return this.bus.subscribe(sessionId, listener);
+  }
+
+  /** Test-only exposure of the internal bus's per-session listener count (F5 review fix — `SessionEventBus.listenerCount`'s own doc). Not used by any production path; lets a leaked-subscription test assert directly rather than inferring a leak indirectly. */
+  listenerCountForTest(sessionId: string): number {
+    return this.bus.listenerCount(sessionId);
   }
 
   /**

@@ -355,3 +355,93 @@ describe("SessionService.shutdown — deadline exceeded", () => {
     });
   });
 });
+
+// ---------------------------------------------------------------------------
+// 6. F8 review fix: a {volume} enqueue racing shutdown() creates no phantom
+//    session row.
+// ---------------------------------------------------------------------------
+
+describe("SessionService.shutdown — F8: no phantom session row", () => {
+  test("a fresh {volume} enqueue that loses the race against shutdown() persists no row at all", async () => {
+    await withShutdownHarness(async ({ service, store, volume }) => {
+      // Neither call is awaited before the other starts — `enqueueTurn`
+      // resolves `resolveSessionId` synchronously for a `{volume}` target
+      // now (F8's own fix: it only mints an id, no `await this.store.create`
+      // any more) and then suspends at its own first genuine `await`
+      // (`lock.tryReserve` is synchronous, but `runReserved`'s internal
+      // `await previous` is not) — so `shutdown()`, called immediately
+      // after on the very next line, sets `shuttingDown = true`
+      // SYNCHRONOUSLY, strictly before `runTurn` ever gets a chance to run
+      // (queued behind at least one more microtask tick via
+      // `SessionLock.runReserved`). By the time `runTurn` does execute, its
+      // own top-of-method check sees the flag already set and returns
+      // before ever reaching the `store.create` call this fix moved inside
+      // that same guard.
+      const enqueuedPromise = service.enqueueTurn({ volume }, "racing shutdown");
+      const shutdownPromise = service.shutdown({ deadlineMs: 500 });
+
+      const enqueued = await enqueuedPromise;
+      await shutdownPromise;
+
+      // A short real-time settle, defensive against any remaining
+      // scheduling slack — `runTurn`'s early return has no async work of
+      // its own, so this is generous, not load-bearing for the ordering
+      // argument above.
+      await new Promise((resolve) => setTimeout(resolve, 20));
+
+      const meta = await store.get(enqueued.sessionId);
+      expect(meta).toBeUndefined();
+    });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// 7. F9 remainder: double/concurrent shutdown() is idempotent.
+// ---------------------------------------------------------------------------
+
+describe("SessionService.shutdown — F9: double/concurrent shutdown is idempotent", () => {
+  test("two concurrent shutdown() calls during a running turn both resolve, and the turn is only ever marked interrupted once", async () => {
+    await withShutdownHarness(async ({ service, store, sessions, volume }) => {
+      const enqueued = await service.enqueueTurn({ volume }, "op-1");
+      const session = await waitForSession(sessions);
+      await session.waitForGated(); // genuinely mid-flight, past the first delta
+
+      const deadlineMs = 2000;
+      // Two overlapping calls — the second stands in for a SIGTERM arriving
+      // hot on a SIGINT's heels, the exact scenario `start.ts`'s own
+      // `shuttingDownStarted` guard exists for one layer up; this proves
+      // `SessionService.shutdown` itself tolerates it too, independent of
+      // that guard.
+      const firstShutdown = service.shutdown({ deadlineMs });
+      const secondShutdown = service.shutdown({ deadlineMs });
+      session.release();
+
+      // Plain await + assert, not `expect(promise).resolves...` — that
+      // matcher is typed `void` despite needing an await, which trips
+      // oxlint's type-aware `await-thenable` rule (`contract.test.ts`'s own
+      // comment documents the same workaround for `.rejects`).
+      const results = await Promise.all([firstShutdown, secondShutdown]);
+      expect(results).toEqual([undefined, undefined]);
+
+      // Exactly one closing boundary for the turn — a second `shutdown()`
+      // call never double-signals the same iterator into a second
+      // `turn-boundary(ended, ...)`.
+      const records = await store.readEvents(enqueued.sessionId);
+      const endedBoundaries = records.filter(
+        (r) => r.event.type === "turn-boundary" && (r.event as { phase: string }).phase === "ended",
+      );
+      expect(endedBoundaries).toHaveLength(1);
+      expect(endedBoundaries[0]?.event).toMatchObject({ endReason: "interrupted" });
+    });
+  });
+
+  test("shutdown() on an already-shut-down service (no activity at all) resolves both times", async () => {
+    await withShutdownHarness(async ({ service }) => {
+      await service.shutdown({ deadlineMs: 500 });
+      // A second call after the first has already fully settled — the
+      // simplest possible double-call shape.
+      const result = await service.shutdown({ deadlineMs: 500 });
+      expect(result).toBeUndefined();
+    });
+  });
+});

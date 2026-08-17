@@ -3,7 +3,7 @@
  * T2.7 entry calls for, at HTTP level (real `fetch()` against a real
  * server, via `test-helpers.ts`'s harness with `sessionStore` exposed).
  *
- * Two harnesses:
+ * Three harnesses:
  * - `withApi`/`withScriptedApi` (`test-helpers.ts`) — for replay-only,
  *   reconnect, and 404 cases, none of which need a turn to be genuinely
  *   mid-flight.
@@ -12,6 +12,12 @@
  *   one layer down but wired through a real HTTP server, for the
  *   replay-then-follow race and the idle-gap test, both of which need a
  *   turn to be observably running while the SSE connection is open.
+ * - `withSteppedApi` (local to this file, F2/F4 review fix) — a
+ *   `SteppedAgenticSessionPort` harness whose underlying session streams
+ *   individual `text-delta`s one push at a time, for the mid-assistant-
+ *   message-join test: a turn can be held with SOME deltas sent and more
+ *   still to come, which `ControllableSession`'s single all-or-nothing gate
+ *   can't express.
  */
 
 import { describe, expect, test } from "bun:test";
@@ -42,6 +48,7 @@ import type {
 import { InMemorySessionStore } from "@shadow/sessions/test-helpers";
 import type { ApiDeps } from "../deps.ts";
 import { createServer } from "../server.ts";
+import { PushChannel } from "../session-bus.ts";
 import { SessionService } from "../session-service.ts";
 import {
   alwaysNarrativeClassifier,
@@ -97,6 +104,8 @@ function dataOf<T>(event: ParsedSseEvent | undefined): T {
 class GatedReadEventsStore implements SessionStore {
   private gate: Promise<void> = Promise.resolve();
   private release: () => void = () => {};
+  /** F5 review fix's test: the next `readEvents` call throws this instead of delegating, then clears itself — one-shot, so only the call under test is affected. */
+  private pendingReadError: Error | undefined;
   /**
    * Fires the INSTANT `readEvents` is called, before it ever awaits the
    * gate — a test-observable proxy for "the handler's subscribe-then-
@@ -125,6 +134,11 @@ class GatedReadEventsStore implements SessionStore {
     this.release();
   }
 
+  /** F5 review fix's test: makes the NEXT `readEvents` call reject with `error` instead of delegating to `inner` — one-shot. */
+  throwOnNextRead(error: Error): void {
+    this.pendingReadError = error;
+  }
+
   create(meta: SessionMeta): Promise<void> {
     return this.inner.create(meta);
   }
@@ -143,6 +157,11 @@ class GatedReadEventsStore implements SessionStore {
   async readEvents(id: string, fromSeq?: number): Promise<StoredEventRecord[]> {
     this.onReadEventsCalled?.();
     await this.gate;
+    if (this.pendingReadError) {
+      const error = this.pendingReadError;
+      this.pendingReadError = undefined;
+      throw error;
+    }
     return this.inner.readEvents(id, fromSeq);
   }
   delete(id: string): Promise<void> {
@@ -299,6 +318,143 @@ async function postChatOnGatedHarness(
   });
 }
 
+// ---------------------------------------------------------------------------
+// Stepped underlying session — F2/F4 review fix's harness: `stream()` drains
+// a `PushChannel` (`../session-bus.ts` — the exact same mechanism the
+// production code under test uses, reused here rather than hand-rolled)
+// that the test pushes individual `text-delta`s and a final `done` into,
+// one at a time. Unlike `ControllableSession` above (one all-or-nothing gate
+// per turn), this lets a test hold a message genuinely MID-STREAM — some
+// deltas sent, more still to come — so a follow viewer can be proven to join
+// in the middle of one. Channels are created lazily (`ensureChannel`) so a
+// test can start pushing before `stream()` has necessarily been called yet
+// without losing anything (`PushChannel` already buffers regardless of
+// whether anyone's consuming — this module's own doc).
+// ---------------------------------------------------------------------------
+
+class SteppedSession implements AgenticSession {
+  sessionId: string | undefined;
+  usage = ZERO_USAGE;
+  readonly prompts: string[] = [];
+  private turnIndex = 0;
+  private readonly channels: PushChannel<AgenticStreamEvent>[] = [];
+
+  constructor(
+    private readonly assignedSessionId: string,
+    public readonly options: AgenticSessionOptions,
+  ) {}
+
+  private ensureChannel(index: number): PushChannel<AgenticStreamEvent> {
+    let channel = this.channels[index];
+    if (!channel) {
+      channel = new PushChannel<AgenticStreamEvent>();
+      this.channels[index] = channel;
+    }
+    return channel;
+  }
+
+  async *stream(prompt: string): AsyncGenerator<AgenticStreamEvent, void, undefined> {
+    this.prompts.push(prompt);
+    const index = this.turnIndex++;
+    const channel = this.ensureChannel(index);
+    for await (const event of channel) {
+      yield event;
+    }
+  }
+
+  /** Pushes one live `text-delta` chunk into `index`'s turn. */
+  pushDelta(index: number, text: string): void {
+    this.ensureChannel(index).push({ type: "text-delta", text });
+  }
+
+  /** Completes `index`'s turn with `finalText` — the eventual `assistant-message` record's full text. */
+  finish(index: number, finalText: string): void {
+    this.sessionId = this.assignedSessionId;
+    const result: AgenticTurnResult = {
+      text: finalText,
+      usage: ZERO_USAGE,
+      sessionId: this.assignedSessionId,
+      stopReason: "end_turn",
+      isError: false,
+      subagentsEnabled: false,
+    };
+    const channel = this.ensureChannel(index);
+    channel.push({ type: "done", result });
+    channel.end();
+  }
+
+  async close(): Promise<void> {}
+}
+
+class SteppedAgenticSessionPort implements AgenticSessionPort {
+  readonly sessions: SteppedSession[] = [];
+  private counter = 0;
+
+  createSession(options: AgenticSessionOptions = {}): AgenticSession {
+    this.counter += 1;
+    const session = new SteppedSession(`stepped-session-${this.counter}`, options);
+    this.sessions.push(session);
+    return session;
+  }
+
+  async deleteStoredSession(): Promise<void> {}
+}
+
+interface SteppedHarness {
+  readonly baseUrl: string;
+  readonly sessions: SteppedAgenticSessionPort;
+}
+
+async function withSteppedApi<T>(fn: (harness: SteppedHarness) => Promise<T>): Promise<T> {
+  const root = await mkdtemp(join(tmpdir(), "shadow-session-events-stepped-"));
+  try {
+    const volumeStore = new FileSystemVolumeStore(root);
+    const evidenceStore = new FileSystemEvidenceStore(volumeStore);
+    const indexer = new StructuralIndexer({ rootDir: root });
+    const sessions = new SteppedAgenticSessionPort();
+    const volume = toVolumeSlug("design-craft");
+    await volumeStore.createVolume({ slug: volume, title: "Design Craft" });
+
+    const shadowAgent = new ShadowAgent({
+      agenticSessionPort: sessions,
+      researchBriefPort: unusedResearchBriefPort,
+      volumeStore,
+      evidenceStore,
+      indexer,
+      checkWorthinessClassifier: alwaysNarrativeClassifier,
+      entailmentRelevanceJudge: scriptedEntailmentJudge(),
+      claimRestater: neverRepairClaimRestater(),
+      sessionCwd: root,
+    });
+
+    const store = new InMemorySessionStore();
+    const sessionService = new SessionService({ store, shadowAgent });
+
+    const deps: ApiDeps = {
+      volumeStore,
+      evidenceStore,
+      indexer,
+      checkWorthinessClassifier: alwaysNarrativeClassifier,
+      entailmentRelevanceJudge: scriptedEntailmentJudge(),
+      claimRestater: neverRepairClaimRestater(),
+      structuredGenerationPort: new FakeStructuredGenerationPort(),
+      missLog: new InMemoryMissLog(),
+      shadowAgent,
+      sessionService,
+      conversations: sessionService.registry,
+    };
+
+    const server = createServer(deps, { port: 0, hostname: "localhost" });
+    try {
+      return await fn({ baseUrl: server.url.toString().replace(/\/$/, ""), sessions });
+    } finally {
+      void server.stop(true);
+    }
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+}
+
 /** Drains a `POST /api/chat` SSE response to completion — the test only needs the turn to finish, not any specific event out of it. */
 async function drainChatResponse(response: Response): Promise<void> {
   await readAllSseEvents(response);
@@ -330,17 +486,21 @@ describe("GET /api/sessions/:id/events — replay-only", () => {
       const replayEvents = await readAllSseEvents(replayRes);
 
       // Stored: operator-message, turn-boundary(started), operator-turn-recorded,
-      // assistant-message, turn-boundary(ended) — only operator-message and
-      // assistant-message have a wire representation (`wireEventsFromStored`).
-      expect(replayEvents.map((e) => e.event)).toEqual(["operator", "text", "done"]);
+      // assistant-message, turn-boundary(ended, completed) — operator-message,
+      // assistant-message, AND (F3 review fix) the closing
+      // turn-boundary(ended, completed) all have a wire representation
+      // (`wireEventsFromStored`); only the started boundary and the
+      // operator-turn-recorded record produce nothing.
+      expect(replayEvents.map((e) => e.event)).toEqual(["operator", "text", "turn.ended", "done"]);
       expect(dataOf<{ text: string }>(replayEvents[0]).text).toBe("Hello Shadow");
       expect(dataOf<{ delta: string }>(replayEvents[1]).delta).toBe("Full reply text.");
 
       // Every record-derived wire event carries its record's seq — strictly
       // increasing, no gaps among the ones that DO carry it (operator=1,
-      // assistant-message=4; boundary/operator-turn-recorded records
-      // legitimately produce no wire event at all).
-      expect(seqsOf(replayEvents)).toEqual([1, 4]);
+      // assistant-message=4, the closing turn-boundary=5; the started
+      // boundary/operator-turn-recorded records legitimately produce no
+      // wire event at all).
+      expect(seqsOf(replayEvents)).toEqual([1, 4, 5]);
 
       // done has no seq (it isn't derived from any one record).
       expect(dataOf<{ seq?: number }>(replayEvents.at(-1)).seq).toBeUndefined();
@@ -435,12 +595,14 @@ describe("GET /api/sessions/:id/events?follow=true — replay-then-follow during
         expect((seqs[i] ?? 0) > (seqs[i - 1] ?? 0)).toBe(true);
       }
       expect(new Set(seqs).size).toBe(seqs.length); // no duplicates
-      // operator(seq 1), text(seq 4) for turn 1; operator(seq 6), text(seq
-      // 9) for turn 2 — the two turns' seq ranges are contiguous 5-record
-      // blocks (operator-message, turn-boundary, operator-turn-recorded,
+      // operator(seq 1), text(seq 4), turn.ended(seq 5) for turn 1;
+      // operator(seq 6), text(seq 9), turn.ended(seq 10) for turn 2 — the
+      // two turns' seq ranges are contiguous 5-record blocks
+      // (operator-message, turn-boundary, operator-turn-recorded,
       // assistant-message, turn-boundary), matching `session-service.test.ts`'s
-      // tee test.
-      expect(seqs).toEqual([1, 4, 6, 9]);
+      // tee test; `turn-boundary(ended, completed)` now has a wire
+      // representation too (F3 review fix), unlike the started boundary.
+      expect(seqs).toEqual([1, 4, 5, 6, 9, 10]);
     });
   });
 });
@@ -496,10 +658,76 @@ describe("GET /api/sessions/:id/events?fromSeq= — reconnect cursor", () => {
 
       // Only the second turn's content — the first turn's operator/text
       // events (lower seq) are absent entirely.
-      expect(reconnectEvents.map((e) => e.event)).toEqual(["operator", "text", "done"]);
+      expect(reconnectEvents.map((e) => e.event)).toEqual([
+        "operator",
+        "text",
+        "turn.ended",
+        "done",
+      ]);
       expect(dataOf<{ text: string }>(reconnectEvents[0]).text).toBe("second message");
       expect(dataOf<{ delta: string }>(reconnectEvents[1]).delta).toBe("second reply");
       expect(seqsOf(reconnectEvents).every((seq) => seq >= secondOperator.seq)).toBe(true);
+    });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// F2/F4 review fix: reconnecting after a completed message re-delivers its
+// FULL text exactly once — never duplicated, never per-delta.
+// ---------------------------------------------------------------------------
+
+describe("GET /api/sessions/:id/events?fromSeq= — F2/F4: reconnect after a completed message", () => {
+  test("fromSeq at the assistant-message record's own seq re-delivers the FULL text as ONE text event, not per delta chunk", async () => {
+    const respond: FakeAgenticTurnResponder = () => ({
+      text: "Hello world",
+      events: [
+        { type: "text-delta", text: "Hello " },
+        { type: "text-delta", text: "world" },
+      ],
+    });
+
+    await withScriptedApi({ respond }, async ({ baseUrl, deps }) => {
+      const volume = toVolumeSlug("design-craft");
+      await seedVolume(deps, volume);
+
+      const chatRes = await fetch(`${baseUrl}/api/chat`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ volumeSlug: "design-craft", message: "hi" }),
+      });
+      const chatEvents = await readAllSseEvents(chatRes);
+      const sessionId = dataOf<{ sessionId: string }>(chatEvents[0]).sessionId;
+      // The live stream itself sent two separate `text` deltas that summed
+      // to the full string — proof this scenario actually exercises a
+      // multi-chunk message, not a single-chunk one that would pass either
+      // way.
+      const liveDeltas = chatEvents.filter((e) => e.event === "text");
+      expect(liveDeltas.map((e) => (e.data as { delta: string }).delta)).toEqual([
+        "Hello ",
+        "world",
+      ]);
+
+      const replayed = await readAllSseEvents(
+        await fetch(`${baseUrl}/api/sessions/${sessionId}/events`),
+      );
+      const textRecord = replayed.find((e) => e.event === "text");
+      if (!textRecord) throw new Error("expected a text event in the replayed transcript");
+      const seq = dataOf<{ seq: number }>(textRecord).seq;
+
+      // A client reconnecting exactly at (or before) the record's own seq —
+      // the inclusive `fromSeq` contract re-delivers it.
+      const reconnected = await readAllSseEvents(
+        await fetch(`${baseUrl}/api/sessions/${sessionId}/events?fromSeq=${seq}`),
+      );
+      const textEvents = reconnected.filter((e) => e.event === "text");
+
+      // Exactly ONE `text` event — the stored `assistant-message` record's
+      // full accumulated string, never the two individual deltas the live
+      // stream sent (deltas have no stored shape at all, so a reconnect can
+      // never re-derive or duplicate them).
+      expect(textEvents).toHaveLength(1);
+      expect(dataOf<{ delta: string; seq: number }>(textEvents[0]).delta).toBe("Hello world");
+      expect(dataOf<{ seq: number }>(textEvents[0]).seq).toBe(seq);
     });
   });
 });
@@ -609,6 +837,147 @@ describe("GET /api/sessions/:id/events — 404 and no rehydration", () => {
       // Replay is read-only (PLAN.md's T2.7 entry) — it must not have
       // rehydrated a `ShadowConversation` for this cold session.
       expect(deps.sessionService.registry.get(sessionId)).toBeUndefined();
+    });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// 6. F5 review fix: a readEvents failure on the follow endpoint's error path
+//    still unsubscribes the bus listener — no leaked subscription.
+// ---------------------------------------------------------------------------
+
+describe("GET /api/sessions/:id/events?follow=true — F5: bus unsubscribe on the error path", () => {
+  test("a replay-read failure sends an in-band error, closes the stream, and leaves the bus listener count at zero", async () => {
+    await withGatedApi(async ({ baseUrl, sessions, store, deps }) => {
+      // A real, existing session — `hasSession`'s pre-stream check only
+      // touches the registry/store's `get`, never `readEvents`, so this
+      // needs to succeed before the throwing read is ever reached.
+      const firstChat = postChatOnGatedHarness(baseUrl, {
+        volumeSlug: "design-craft",
+        message: "turn one",
+      });
+      await waitUntil(() => sessions.sessions.length > 0);
+      const controllable = sessions.sessions[0];
+      if (!controllable) throw new Error("expected a controllable session");
+      await controllable.waitForStart(0);
+      controllable.release(0);
+      const firstChatEvents = await readAllSseEvents(await firstChat);
+      const sessionId = dataOf<{ sessionId: string }>(firstChatEvents[0]).sessionId;
+
+      // Before this fix: subscribeToSession registers a listener here, the
+      // replay read below throws, and NOTHING ever called `unsubscribe()`
+      // on that path — the listener stayed registered forever.
+      store.throwOnNextRead(new Error("simulated readEvents failure"));
+
+      const res = await fetch(`${baseUrl}/api/sessions/${sessionId}/events?follow=true`);
+      expect(res.status).toBe(200); // the failure happens INSIDE the stream, after headers are already committed
+
+      // The handler's own `catch` sends an in-band `error` event and its
+      // `finally` closes the controller — this stream, unlike an ordinary
+      // follow stream, genuinely ends on its own here, so a plain
+      // `readAllSseEvents` (not `readSseEventsUntil`) is the right reader.
+      const events = await readAllSseEvents(res);
+      expect(events.map((e) => e.event)).toEqual(["error"]);
+      expect(dataOf<{ message: string }>(events[0]).message).toContain(
+        "simulated readEvents failure",
+      );
+
+      // The fix under test: the bus listener this request's
+      // `subscribeToSession` registered is gone, not leaked.
+      expect(deps.sessionService.listenerCountForTest(sessionId)).toBe(0);
+    });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// F2/F4 review fix: a follow viewer who subscribes MID-assistant-message —
+// after some deltas, before the message completes — still ends up with the
+// COMPLETE text exactly once, via the eventual seq-stamped full-text replace
+// event, instead of permanently losing the prefix it missed.
+// ---------------------------------------------------------------------------
+
+describe("GET /api/sessions/:id/events?follow=true — F2/F4: viewer joins mid-assistant-message", () => {
+  test("deltas flow before the join, the viewer joins, more deltas flow, then the record lands: the wire carries the complete text as ONE seq-stamped replace event", async () => {
+    await withSteppedApi(async ({ baseUrl, sessions }) => {
+      // Start the turn. `SteppedSession.stream()` blocks on its own
+      // per-turn `PushChannel` until pushed into — nothing streams until
+      // this test says so.
+      const chatPromise = postChatOnGatedHarness(baseUrl, {
+        volumeSlug: "design-craft",
+        message: "start",
+      });
+
+      // Proves the session row + `ShadowConversation` already exist (F8
+      // review fix: for a fresh `{volume}` target, the row is now created
+      // from INSIDE `runTurn`, which only runs once `ensureConversation`
+      // has constructed this exact session — `hasSession`'s pre-stream
+      // check below needs that to have already happened).
+      await waitUntil(() => sessions.sessions.length > 0);
+      const session = sessions.sessions[0];
+      if (!session) throw new Error("expected a stepped session");
+
+      // Read just the `session` event off the chat POST's own stream to
+      // learn the id, then let that one viewer go — the turn keeps running
+      // server-side regardless (T2.5's whole point; `postChatOnGatedHarness`
+      // callers elsewhere in this file rely on the same fact).
+      const initial = await readSseEventsUntil(
+        await chatPromise,
+        (collected) => collected.some((e) => e.event === "session"),
+        { timeoutMs: 2_000 },
+      );
+      const sessionId = dataOf<{ sessionId: string }>(initial[0]).sessionId;
+
+      // Some of the message streams BEFORE any viewer joins — this is the
+      // prefix a follow-only viewer can never recover from live deltas
+      // alone.
+      session.pushDelta(0, "Hello ");
+
+      // The viewer joins mid-message. `fetch()` resolving here is itself
+      // the proof the subscribe has already happened — Bun does not flush
+      // a streamed response's headers until its first `enqueue()`, and
+      // `subscribeToSession` runs strictly before replay's first enqueue
+      // (`session-events.ts`'s "Bus-first-buffer" doc).
+      const followRes = await fetch(`${baseUrl}/api/sessions/${sessionId}/events?follow=true`);
+      expect(followRes.status).toBe(200);
+
+      // More of the message streams AFTER the join — this part the viewer
+      // DOES receive live, as an ordinary seq-less delta.
+      session.pushDelta(0, "world");
+      // The message completes: the stored `assistant-message` record (full
+      // text "Hello world") and the closing `turn-boundary(ended,
+      // completed)` record are appended and published.
+      session.finish(0, "Hello world");
+
+      const events = await readSseEventsUntil(
+        followRes,
+        (collected) => collected.some((e) => e.event === "turn.ended"),
+        { timeoutMs: 5_000 },
+      );
+
+      const textEvents = events.filter((e) => e.event === "text");
+      const seqCarrying = textEvents.filter((e) => (e.data as { seq?: number }).seq !== undefined);
+      const seqLess = textEvents.filter((e) => (e.data as { seq?: number }).seq === undefined);
+
+      // The pre-join delta ("Hello ") never arrives on its own — this
+      // viewer wasn't subscribed yet when it was sent, and it has no
+      // stored shape a later record could re-derive it from individually.
+      expect(seqLess.map((e) => (e.data as { delta: string }).delta)).toEqual(["world"]);
+
+      // Exactly ONE seq-carrying `text` event — the eventual
+      // `assistant-message` record, now reaching the live tail too (F2/F4
+      // fix) — carrying the FULL, authoritative text. Before this fix, the
+      // live tail suppressed this record entirely (`wireEventsForLive`),
+      // so this viewer would have been stuck with only "world" forever —
+      // the prefix it missed by joining mid-message, permanently lost.
+      expect(seqCarrying).toHaveLength(1);
+      expect(dataOf<{ delta: string }>(seqCarrying[0]).delta).toBe("Hello world");
+
+      // Downstream (`../../web/src/pages/chat-transcript.ts`'s `"text"`
+      // case, pinned separately in that package's own tests): a seq-carrying
+      // `text` REPLACES the assistant bubble outright, so this viewer's
+      // rendered transcript ends with "Hello world" exactly once — never
+      // "worldHello world" (an append) and never just "world" (the
+      // pre-fix loss).
     });
   });
 });

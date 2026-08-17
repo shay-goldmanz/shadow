@@ -84,6 +84,11 @@ export class SessionEventBus {
       listener(message);
     }
   }
+
+  /** Test-only (F5 review fix): how many listeners `sessionId` currently has — 0 both for "never subscribed" and "every subscriber's `unsubscribe()` has run" (the same map entry is deleted at zero, per `subscribe`'s own cleanup). Not used by any production path; exists so a leaked-subscription test can assert directly on this class rather than inferring a leak indirectly. */
+  listenerCount(sessionId: string): number {
+    return this.listenersBySession.get(sessionId)?.size ?? 0;
+  }
 }
 
 /**

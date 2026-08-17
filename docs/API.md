@@ -193,17 +193,26 @@ cursor this contract offers.
 
 **`operator` and every event from the Chat table above** can appear here exactly as they would
 on `POST /api/chat`'s own stream — replay reconstructs the same wire sequence a live viewer would
-have seen, via the identical mapping code. One addition that `POST /api/chat` cannot ever produce
+have seen, via the identical mapping code. Two additions that `POST /api/chat` cannot ever produce
 on its own stream:
 
 | event | data | meaning |
 |---|---|---|
 | `turn.interrupted` | `{}` | this turn ended without completing — graceful shutdown (or any future source of the same shape) cut it off. No further events for this turn are coming; offer Retry. |
+| `turn.ended` | `{}` | this turn completed normally. Exists only so a `?follow=true` viewer — which never receives `done` (see above) — has SOME way to learn a turn it's watching finished without a stall; a client tracking "is a turn currently pending" clears that flag on this event and does not otherwise treat it as content. |
 
-A plain, silently-ended turn (nothing further, no `turn.interrupted`, no trailing `error`) should
-not be assumed complete either — a truncated transcript with no closing marker at all means the
-server crashed mid-turn (the torn-tail case): the next `POST /api/chat` on that session resumes
-the underlying SDK session at its last completed turn regardless.
+A plain, silently-ended turn (nothing further, no `turn.interrupted`, no `turn.ended`, no trailing
+`error`) should not be assumed complete either — a truncated transcript with no closing marker at
+all means the server crashed mid-turn (the torn-tail case): the next `POST /api/chat` on that
+session resumes the underlying SDK session at its last completed turn regardless.
+
+**A `text` event's `seq` field changes what it means, not just how it reconnects.** Every event on
+this stream derived from a stored record carries `seq` (below) — for `text` specifically, a
+`?follow=true` viewer needs to tell a live, chunked delta (no `seq`: append it) apart from the one
+stored `assistant-message` record's FULL text (carries `seq`: replace whatever's accumulated so
+far with it). A viewer that subscribes mid-message only ever sees the delta chunks that arrive
+*after* it joined — this is what recovers the prefix it missed, and what makes a `fromSeq`
+reconnect mid-message self-correcting instead of duplicating text.
 
 **Heartbeats** work identically to `POST /api/chat`'s (an SSE comment line every 5 seconds).
 

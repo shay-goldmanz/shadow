@@ -6,18 +6,35 @@
  *
  * Default (`?follow` absent or not `"true"`): pure replay. Every stored
  * event from `?fromSeq` onward (default: the whole transcript), mapped
- * through `../event-mapping.ts`'s `wireEventsFromStored` — the exact same
- * pure function chat.ts's live path is *not* using here, because a replay
- * reader has no live delta history to lean on (see that module's doc for
- * why `wireEventsForLive` differs only in suppressing `assistant-message`).
- * The stream ends with a `done` event once the stored transcript is
- * exhausted.
+ * through `../event-mapping.ts`'s `wireEventsFromStored`. The stream ends
+ * with a `done` event once the stored transcript is exhausted.
  *
  * `?follow=true`: replay, then stay live. `SessionService.subscribeToSession`
  * (T2.5's "small, natural extension," finally landing here) is called
  * *before* replay starts reading — see "Bus-first-buffer" below for why
  * that ordering is the whole point — and the stream never sends `done`;
  * it stays open until the client disconnects.
+ *
+ * **F2/F4 review fix — the live tail also uses `wireEventsFromStored`, not
+ * `wireEventsForLive`.** Before this fix, a `record` message on the live
+ * tail was mapped through `wireEventsForLive` — the same suppression
+ * `chat.ts`'s OWN live stream needs, so it never double-sends text it
+ * already streamed chunk by chunk as `text-delta`s. But this endpoint's
+ * live tail is a DIFFERENT viewer's stream: a follow subscriber has no live
+ * delta history of their own to avoid duplicating (they may have just this
+ * instant subscribed, mid-message). Reusing `wireEventsForLive` here meant
+ * the one stored record carrying a message's FULL, authoritative text — the
+ * `assistant-message` record, appended once the message completes — was
+ * silently dropped for every follow viewer, permanently, with no way to
+ * ever recover a prefix they missed by joining mid-message. `record`
+ * messages on the live tail now go through the SAME `wireEventsFromStored`
+ * replay already uses, so that record arrives as an ordinary, `seq`-stamped
+ * `text` event — see "Wire encoding" below for how the client tells it
+ * apart from a live delta, and `../../web/src/api/types.ts`'s
+ * `SessionEventEnvelope` doc for the full story. `text-delta` bus messages
+ * are unaffected — they never had a stored shape to map through either
+ * function (this module's own doc, below) and keep flowing straight to the
+ * wire via `textDeltaWireEvent`, exactly as before.
  *
  * ## Wire encoding: `seq` on every record-derived event
  *
@@ -30,11 +47,13 @@
  * explicit that `fromSeq` — not `Last-Event-ID` (`web/src/api/sse.ts`'s
  * fetch-based reader ignores `id:` lines) — is the *only* reconnect
  * mechanism. Live `text-delta` chunks (`textDeltaWireEvent`) have no
- * backing record and therefore no `seq` — they're transient, chunked
- * pieces of a `text` the eventual `assistant-message` record will already
- * carry a `seq` for. This `seq` encoding is scoped to this endpoint only;
- * `chat.ts`'s own `POST /api/chat` stream is a separate, already-shipped
- * wire contract this task has no reason to touch.
+ * backing record and therefore no `seq` — they're transient, and (as of the
+ * F2/F4 fix above) the client-visible DIFFERENCE between them and the
+ * eventual `seq`-stamped `assistant-message`-derived `text` event is exactly
+ * the point: a `seq`-less `text` is a delta to APPEND, a `seq`-carrying
+ * `text` is the full message to REPLACE with. This `seq` encoding is scoped
+ * to this endpoint only; `chat.ts`'s own `POST /api/chat` stream is a
+ * separate, already-shipped wire contract this task has no reason to touch.
  *
  * ## Bus-first-buffer: closing the replay-end/subscribe gap
  *
@@ -94,7 +113,7 @@
  * then.
  */
 
-import type { StoredEventRecord, StoredSessionEvent } from "@shadow/sessions";
+import type { StoredEventRecord } from "@shadow/sessions";
 import type { BunRequest } from "bun";
 import type { ApiDeps } from "../deps.ts";
 import { InvalidRequestError, SessionNotFoundError } from "../errors.ts";
@@ -102,7 +121,6 @@ import {
   errorEventForBoundary,
   textDeltaWireEvent,
   type WireEvent,
-  wireEventsForLive,
   wireEventsFromStored,
   withSeq,
 } from "../event-mapping.ts";
@@ -122,14 +140,20 @@ function parseFromSeq(url: URL): number | undefined {
   return n;
 }
 
-/** Maps one stored record to its wire event(s) via `mapper` (`wireEventsFromStored` for replay, `wireEventsForLive` for the live tail — see this module's doc for why they differ), applying the shared `turn-boundary(ended, error)` synthesis both paths need identically, and stamping `seq` on everything that comes out. */
-function recordToWireEvents(
-  record: StoredEventRecord,
-  mapper: (event: StoredSessionEvent) => readonly WireEvent[],
-): readonly WireEvent[] {
+/**
+ * Maps one stored record to its wire event(s) via `wireEventsFromStored`,
+ * applying the shared `turn-boundary(ended, error)` synthesis both replay
+ * and the live tail need identically, and stamping `seq` on everything that
+ * comes out. Used by both call sites below — replay and the live tail alike
+ * (F2/F4 review fix: they used to differ, one via `wireEventsForLive`; see
+ * this module's doc for why that was the bug, and why both now need the
+ * SAME mapping). No `mapper` parameter any more since there is only ever
+ * one to pass.
+ */
+function recordToWireEvents(record: StoredEventRecord): readonly WireEvent[] {
   const errorWire = errorEventForBoundary(record.event);
   if (errorWire) return [withSeq(errorWire, record.seq)];
-  return mapper(record.event).map((wire) => withSeq(wire, record.seq));
+  return wireEventsFromStored(record.event).map((wire) => withSeq(wire, record.seq));
 }
 
 export async function getSessionEvents(
@@ -205,7 +229,7 @@ export async function getSessionEvents(
         const records = await deps.sessionService.readEvents(sessionId, fromSeq);
         let lastSeq = fromSeq !== undefined ? fromSeq - 1 : 0;
         for (const record of records) {
-          for (const wire of recordToWireEvents(record, wireEventsFromStored)) {
+          for (const wire of recordToWireEvents(record)) {
             send(wire.event, wire.data);
           }
           lastSeq = record.seq;
@@ -235,7 +259,12 @@ export async function getSessionEvents(
           }
           if (message.record.seq <= lastSeq) continue; // already delivered via replay
           lastSeq = message.record.seq;
-          for (const wire of recordToWireEvents(message.record, wireEventsForLive)) {
+          // F2/F4 review fix: `wireEventsFromStored`, not `wireEventsForLive`
+          // — see this module's doc for why the live tail needs the SAME
+          // mapping replay uses (a completed `assistant-message` record's
+          // full text must reach a follow viewer, seq-stamped, or a viewer
+          // who joined mid-message permanently loses the prefix).
+          for (const wire of recordToWireEvents(message.record)) {
             send(wire.event, wire.data);
           }
         }
@@ -250,6 +279,17 @@ export async function getSessionEvents(
           });
         }
       } finally {
+        // F5 review fix: `cancel()` (below) already unsubscribes for the
+        // ordinary client-disconnect path, but a throw from THIS block
+        // (`readEvents` failing, say) reaches this `finally` WITHOUT ever
+        // going through `cancel()` — nothing else in that path ever called
+        // `unsubscribe()`. Left out, that leaked the bus listener forever:
+        // registered in `subscribeToSession` above, never removed, quietly
+        // pushing into a `channel` nobody drains from that point on.
+        // Idempotent (`SessionEventBus.subscribe`'s contract), so calling it
+        // here AND in `cancel()` on whichever path actually runs is safe —
+        // neither call assumes the other hasn't already happened.
+        unsubscribe?.();
         clearInterval(heartbeat);
         close();
       }

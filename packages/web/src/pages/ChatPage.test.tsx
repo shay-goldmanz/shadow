@@ -14,6 +14,26 @@ class DroppingSessionEventsClient extends FakeApiClient {
   }
 }
 
+/**
+ * F3 review fix — `FakeApiClient`, but `getSessionEvents` yields a COMPLETE
+ * turn (ending with `turn.ended`, the F3 wire signal) before the connection
+ * drops. Standing in for a follow connection that drops AFTER the turn it
+ * was watching already finished — no fault of the turn itself, e.g. a
+ * network blip during the idle gap before the next one. Before F3, nothing
+ * on the wire ever cleared `turnPending` for a follow viewer (`?follow=true`
+ * never sends `done`), so this exact drop shape used to mis-render an
+ * interrupted marker with a live Retry on a turn that had already
+ * succeeded — resending would have duplicated it.
+ */
+class DroppingAfterCompletedTurnClient extends FakeApiClient {
+  override async *getSessionEvents(): AsyncGenerator<SessionEventEnvelope> {
+    yield { event: "operator", data: { text: "already finished" }, seq: 1 };
+    yield { event: "text", data: { delta: "done talking", seq: 4 }, seq: 4 };
+    yield { event: "turn.ended", data: {}, seq: 5 };
+    throw new Error("connection dropped after the turn completed");
+  }
+}
+
 afterEach(() => cleanup());
 
 function send(
@@ -331,5 +351,31 @@ describe("ChatPage", () => {
     const retryButton = await findByText("Retry last message");
     expect(retryButton).toBeTruthy();
     expect(document.querySelector(".chat-transcript__item--interrupted")).toBeTruthy();
+  });
+
+  // F3 review fix — extends the T2.8 passive-tab scenario above (a follow
+  // viewer watching a turn it didn't send) with the one state the review
+  // flagged as unasserted there: what happens when the CONNECTION itself
+  // drops after the turn it was watching already completed.
+  test("F3: a follow connection that drops AFTER a completed turn does not render an interrupted marker", async () => {
+    const dropping = new DroppingAfterCompletedTurnClient({ streamDelayMs: 0 });
+
+    const { findByText } = render(
+      <ChatPage
+        client={dropping}
+        slug="design-inspiration"
+        sessionId="sess_done"
+        navigate={() => {}}
+      />,
+    );
+
+    expect(await findByText("done talking")).toBeTruthy();
+    // Let the dropped connection's rejection propagate through ChatPage's
+    // own catch/finally (`markInterruptedIfPending`'s defensive call on
+    // every stream end, per its own doc) before asserting its absence.
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect(document.querySelector(".chat-transcript__item--interrupted")).toBeNull();
+    expect(document.querySelectorAll(".button--retry").length).toBe(0);
   });
 });

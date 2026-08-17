@@ -568,4 +568,137 @@ describe("chat transcript reducer", () => {
       expect(state.items.find((i) => i.id === interruptedId)).toMatchObject({ retry: undefined });
     });
   });
+
+  describe("F3 review fix: turn.ended clears turnPending only", () => {
+    test("clears turnPending without touching items or streaming", () => {
+      let state = applyStreamEvent(INITIAL_CHAT_STATE, {
+        event: "operator",
+        data: { text: "please finish this" },
+      });
+      state = applyStreamEvent(state, { event: "text", data: { delta: "working on it" } });
+      expect(state.turnPending).toBe(true);
+      const beforeItems = state.items;
+
+      state = applyStreamEvent(state, { event: "turn.ended", data: {} });
+
+      expect(state.turnPending).toBe(false);
+      // Not a content event — no item appended, transcript untouched.
+      expect(state.items).toBe(beforeItems);
+    });
+
+    test("a follow stream dropping AFTER turn.ended does not get mis-marked interrupted (the F3 bug)", () => {
+      let state = applyStreamEvent(INITIAL_CHAT_STATE, {
+        event: "operator",
+        data: { text: "please finish this" },
+      });
+      state = applyStreamEvent(state, { event: "text", data: { delta: "done talking" } });
+      state = applyStreamEvent(state, { event: "turn.ended", data: {} });
+
+      // The connection then drops with no further signal — whoever noticed
+      // calls this defensively, same as any other stream end. Before F3,
+      // `turnPending` would still have been `true` here (nothing else ever
+      // cleared it for a follow viewer, since `?follow=true` never sends
+      // `done`), so this would have wrongly rendered an interrupted marker
+      // with a live Retry on a turn that had already completed.
+      const afterDrop = markInterruptedIfPending(state);
+
+      expect(afterDrop).toEqual(state);
+      expect(types(afterDrop.items)).toEqual(["user", "assistant"]);
+    });
+
+    test("streaming (a different tab's own send() lifecycle) is untouched by turn.ended", () => {
+      let state = applyStreamEvent(INITIAL_CHAT_STATE, {
+        event: "operator",
+        data: { text: "x" },
+      });
+      state = { ...state, streaming: true }; // simulates this tab's OWN unrelated send() in flight
+      state = applyStreamEvent(state, { event: "turn.ended", data: {} });
+      expect(state.streaming).toBe(true);
+      expect(state.turnPending).toBe(false);
+    });
+  });
+
+  describe("F2/F4 review fix: a seq-carrying text REPLACES, a seq-less text APPENDS", () => {
+    test("seq-less text deltas keep coalescing into one growing assistant bubble (unchanged live behavior)", () => {
+      let state = applyStreamEvent(INITIAL_CHAT_STATE, {
+        event: "operator",
+        data: { text: "hi" },
+      });
+      state = applyStreamEvent(state, { event: "text", data: { delta: "Hello" } });
+      state = applyStreamEvent(state, { event: "text", data: { delta: " there" } });
+
+      expect(types(state.items)).toEqual(["user", "assistant"]);
+      expect(state.items[1]).toMatchObject({ type: "assistant", text: "Hello there" });
+    });
+
+    test("a seq-carrying text REPLACES the current assistant bubble with its full text, not appends", () => {
+      let state = applyStreamEvent(INITIAL_CHAT_STATE, {
+        event: "operator",
+        data: { text: "hi" },
+      });
+      // A follow viewer who joined mid-message: some deltas arrived first
+      // (no seq — a partial prefix this viewer happens to have seen)...
+      state = applyStreamEvent(state, { event: "text", data: { delta: "partial pre" } });
+      // ...then the stored assistant-message record lands, carrying the
+      // FULL text — self-correcting, not summing onto the partial prefix.
+      state = applyStreamEvent(state, {
+        event: "text",
+        data: { delta: "The complete message.", seq: 4 },
+      });
+
+      expect(types(state.items)).toEqual(["user", "assistant"]);
+      expect(state.items[1]).toMatchObject({ type: "assistant", text: "The complete message." });
+    });
+
+    test("a seq-carrying text with no prior assistant bubble still mints one (the viewer joined exactly at message end)", () => {
+      let state = applyStreamEvent(INITIAL_CHAT_STATE, {
+        event: "operator",
+        data: { text: "hi" },
+      });
+      state = applyStreamEvent(state, {
+        event: "text",
+        data: { delta: "The complete message.", seq: 4 },
+      });
+
+      expect(types(state.items)).toEqual(["user", "assistant"]);
+      expect(state.items[1]).toMatchObject({ type: "assistant", text: "The complete message." });
+    });
+
+    test("a seq-carrying text after ANOTHER seq-carrying text replaces again, not duplicates (fromSeq reconnect mid-message, no duplication)", () => {
+      let state = applyStreamEvent(INITIAL_CHAT_STATE, {
+        event: "operator",
+        data: { text: "hi" },
+      });
+      // Simulates a reconnect that re-delivers the same record twice (e.g.
+      // an overlapping `fromSeq` boundary) — each is independently
+      // authoritative, so replaying it again must not double the text.
+      state = applyStreamEvent(state, {
+        event: "text",
+        data: { delta: "The complete message.", seq: 4 },
+      });
+      state = applyStreamEvent(state, {
+        event: "text",
+        data: { delta: "The complete message.", seq: 4 },
+      });
+
+      expect(state.items[1]).toMatchObject({ type: "assistant", text: "The complete message." });
+    });
+
+    test("a live delta AFTER a seq-carrying replace still appends onto the replaced text (a new message starting right after)", () => {
+      let state = applyStreamEvent(INITIAL_CHAT_STATE, {
+        event: "operator",
+        data: { text: "hi" },
+      });
+      state = applyStreamEvent(state, {
+        event: "text",
+        data: { delta: "First message done.", seq: 4 },
+      });
+      state = applyStreamEvent(state, { event: "text", data: { delta: " More." } });
+
+      expect(state.items[1]).toMatchObject({
+        type: "assistant",
+        text: "First message done. More.",
+      });
+    });
+  });
 });

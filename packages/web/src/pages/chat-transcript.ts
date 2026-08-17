@@ -221,17 +221,24 @@ function isRetryableErrorCode(code: string): boolean {
 }
 
 /**
- * Mints a local "user" item directly — used by `ChatPage`'s retry
- * affordance (T1.4, re-sending the same text through the ordinary send
- * path) and by tests that want to seed a prior turn's operator message
- * without driving a full event sequence. NOT used by `ChatPage`'s `send()`
- * for the operator's own outgoing message any more (T2.8): the `operator`
- * wire event below is the single source of truth for that bubble now — the
- * sending tab renders it once, from the same event a second viewer's
- * replay/follow sees, rather than a local append racing (and duplicating)
- * it. Retry-flag clearing for a new user item lives in `withItem` itself
- * (F5 review fix, see that function), so it applies here identically to the
- * `operator` case below.
+ * Mints a local "user" item directly.
+ *
+ * F10 review fix: this doc used to claim `ChatPage`'s retry affordance
+ * (T1.4) called this — it doesn't, and hasn't since T2.8. `ChatPage`'s retry
+ * re-sends the failed text through the ORDINARY `send()` path
+ * (`ChatPage.tsx`'s `onRetry`), the same as any other message; the
+ * `operator` wire event below is the single source of the user bubble now
+ * (see that case's own doc) — the sending tab renders it once, from the
+ * same event a second viewer's replay/follow sees, rather than a local
+ * append racing (and duplicating) it. This export is test-only at this
+ * point: seeding a prior turn's operator message directly, without driving
+ * a full event sequence, for tests that don't need one. @internal
+ * (test-only — not called by any production code path).
+ *
+ * Retry-flag clearing for a new user item lives in `withItem` itself (F5
+ * review fix, see that function), so it applies here identically to the
+ * `operator` case below, on the rare chance a test DOES chain this after a
+ * retryable error/interrupted item.
  */
 export function appendUserMessage(state: ChatState, text: string): ChatState {
   return withItem(state, { type: "user", text });
@@ -302,6 +309,27 @@ export function applyStreamEvent(state: ChatState, event: ChatStreamEvent): Chat
 
     case "text": {
       const last = state.items[state.items.length - 1];
+      // F2/F4 review fix: `seq`'s mere PRESENCE (not its value) is the
+      // semantic switch (`../api/types.ts`'s `ChatStreamEvent` "text" case,
+      // `SessionEventEnvelope` doc). `POST /api/chat` never stamps one — its
+      // own live deltas always append, unchanged. `GET
+      // /api/sessions/:id/events`'s follow endpoint stamps one ONLY on the
+      // record-derived event carrying a completed message's FULL text (the
+      // `assistant-message` record, now mapped on the live tail too — see
+      // that endpoint's module doc for the bug this closes); every seq-less
+      // `text` there is still a live, transient, chunked delta and appends
+      // exactly as before. A `seq`-carrying `text` REPLACES the current
+      // assistant bubble outright — the authoritative full string
+      // self-corrects whatever this viewer did or didn't see build up to
+      // it, whether that's a prefix missed by joining mid-message or a
+      // duplicate risked by a `fromSeq` reconnect mid-message.
+      if (event.data.seq !== undefined) {
+        if (last?.type === "assistant") {
+          const replaced: TranscriptItem = { ...last, text: event.data.delta };
+          return { ...state, items: [...state.items.slice(0, -1), replaced] };
+        }
+        return withItem(state, { type: "assistant", text: event.data.delta });
+      }
       if (last?.type === "assistant") {
         const merged: TranscriptItem = { ...last, text: last.text + event.data.delta };
         return { ...state, items: [...state.items.slice(0, -1), merged] };
@@ -426,6 +454,19 @@ export function applyStreamEvent(state: ChatState, event: ChatStreamEvent): Chat
         turnPending: false,
       };
     }
+
+    case "turn.ended":
+      // F3 review fix: the follow endpoint's honest "this turn finished
+      // normally" signal (`event-mapping.ts`'s (api package) `turn-boundary`
+      // case doc — the wire counterpart to `turn.interrupted` above, for the
+      // outcome that ISN'T a stall). Clears `turnPending` ONLY — this is not
+      // a content event (no item is appended, unlike every other case here)
+      // and `streaming` stays whatever it already was: a passive follow
+      // viewer never touched it in the first place, and the sending tab's
+      // OWN `streaming` lifecycle is owned by its `send()` call directly
+      // (`ChatPage.tsx`'s doc), not by anything arriving through this
+      // reducer.
+      return { ...state, turnPending: false };
 
     case "done":
       return { ...state, streaming: false, turnPending: false };

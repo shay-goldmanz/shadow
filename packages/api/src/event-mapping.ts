@@ -58,22 +58,25 @@
  * `operator` is new (T2.2) — no `ShadowEvent` produces it; it comes from
  * the store-level `operator-message` record, which the live path (`chat.ts`)
  * synthesizes itself at the start of every turn (see `operatorMessageEvent`).
- * `turn.interrupted` is new (T2.8) — the ONE `turn-boundary` phase/endReason
- * combination that gets a wire representation: `ended`/`interrupted`
- * (T2.9's graceful-shutdown boundary, or any future source of the same
- * shape). `started`, `ended/completed`, and `ended/error` still map to `[]`
- * here — `started`/`completed` need no client-visible marker (the live path
- * signals completion via `done`, driven by the turn's generator ending, not
- * by this mapping; replay has nothing to mark for a turn that simply
- * finished), and `ended/error`'s content is carried by `errorEventForBoundary`
- * instead (below), not this function. `wireEventsForLive` inherits this
- * unchanged, but `chat.ts`'s live path never actually reaches it for
- * `turn-boundary` records at all (it special-cases them via
- * `errorEventForBoundary` alone and `continue`s) — `turn.interrupted` is
- * therefore only ever observed through T2.7's replay+follow endpoint, which
- * runs every record through this module's `recordToWireEvents` uniformly.
- * See `../../web/src/pages/chat-transcript.ts`'s `"turn.interrupted"` case
- * for the client side: a stalled turn's Retry affordance.
+ * `turn.interrupted` is new (T2.8) — one of two `turn-boundary`
+ * phase/endReason combinations that get a wire representation:
+ * `ended`/`interrupted` (T2.9's graceful-shutdown boundary, or any future
+ * source of the same shape). `ended`/`completed` gets one too, as of the F3
+ * review fix: `turn.ended` (below) — a follow viewer's `turnPending` has no
+ * OTHER way to learn a turn it's watching actually finished normally (see
+ * that case's own doc for the bug this closes). `started` and `ended/error`
+ * still map to `[]` here — `started` needs no client-visible marker (the
+ * live path signals its own completion via `done`, driven by the turn's
+ * generator ending, not by this mapping), and `ended/error`'s content is
+ * carried by `errorEventForBoundary` instead (below), not this function.
+ * `wireEventsForLive` inherits this unchanged, but `chat.ts`'s live path
+ * never actually reaches it for `turn-boundary` records at all (it
+ * special-cases them via `errorEventForBoundary` alone and `continue`s) —
+ * `turn.interrupted`/`turn.ended` are therefore only ever observed through
+ * T2.7's replay+follow endpoint, which runs every record through this
+ * module's `recordToWireEvents` uniformly. See
+ * `../../web/src/pages/chat-transcript.ts`'s `"turn.interrupted"`/
+ * `"turn.ended"` cases for the client side.
  */
 
 import type { ShadowEvent } from "@shadow/agent";
@@ -362,20 +365,37 @@ export function wireEventsFromStored(event: StoredSessionEvent): readonly WireEv
       return [{ event: "error", data: { message: event.error, code: "shadow_turn_error" } }];
 
     case "turn-boundary": {
-      // `started`/`ended-completed`/`ended-error` have no wire
-      // representation — `docs/API.md`'s SSE table has no row for any
-      // `turn-boundary` phase, `ended/error`'s content is carried by
-      // `errorEventForBoundary` instead (this module's doc), and
-      // `started`/`ended-completed` need no client marker at all. The one
-      // exception (T2.8): `ended/interrupted` — the sole shape T2.1's
-      // stored transcript can carry that otherwise leaves a replaying
-      // client no way to ever learn a turn stalled (no further events for
-      // it are ever coming). `UnknownStoredEvent`'s index-signature overlap
-      // (documented above, `research-completed`/`chapter-audit`) is why
-      // this narrows explicitly rather than a plain property read.
+      // `started`/`ended-error` have no wire representation of their own —
+      // `docs/API.md`'s SSE table has no row for `started`, and
+      // `ended/error`'s content is carried by `errorEventForBoundary`
+      // instead (this module's doc). `ended/interrupted` (T2.8) and
+      // `ended/completed` (F3 review fix, below) both get one:
+      // `UnknownStoredEvent`'s index-signature overlap (documented above,
+      // `research-completed`/`chapter-audit`) is why this narrows
+      // explicitly rather than a plain property read.
       const boundary = event as Extract<StoredSessionEvent, { readonly type: "turn-boundary" }>;
       if (boundary.phase === "ended" && boundary.endReason === "interrupted") {
         return [{ event: "turn.interrupted", data: {} }];
+      }
+      // F3 review fix: `ended`/`completed` used to map to `[]` here too —
+      // fine for `chat.ts`'s live path (which never reaches this case at
+      // all, this module's doc), but T2.7's replay+follow endpoint DOES run
+      // every record through this switch uniformly, and its client-side
+      // `turnPending` (`chat-transcript.ts`'s `ChatState` doc) had no other
+      // way to ever learn a turn it's watching completed normally — only
+      // `turn.interrupted`, `error`, or the replay-only `done` cleared it,
+      // and `?follow=true` never sends `done` at all (this module's doc: a
+      // follow stream stays open across turns on purpose). A live viewer
+      // whose connection merely BLIPPED after a turn had already completed
+      // — no fault of the turn itself — would reconnect, `markInterruptedIfPending`
+      // would see a still-`true` `turnPending` it was never told to clear,
+      // and mark a COMPLETED turn interrupted with a live "Retry" button:
+      // resending would duplicate the turn. `turn.ended` is the honest
+      // signal: the reducer clears `turnPending` on it and nothing else —
+      // it is not a content event, so `streaming` (a different tab's own
+      // `send()` lifecycle) is untouched.
+      if (boundary.phase === "ended" && boundary.endReason === "completed") {
+        return [{ event: "turn.ended", data: {} }];
       }
       return [];
     }

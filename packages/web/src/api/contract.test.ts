@@ -270,12 +270,13 @@ describe("contract: HttpApiClient against a real @shadow/api server", () => {
           seqs.push(envelope.seq);
         }
 
-        expect(replayed).toEqual(["operator", "text", "done"]);
+        expect(replayed).toEqual(["operator", "text", "turn.ended", "done"]);
         // Every record-derived event carries a seq; `done` (not derived
         // from any one record) does not.
         expect(seqs[0]).toBeGreaterThan(0);
         expect(seqs[1]).toBeGreaterThan(seqs[0] as number);
-        expect(seqs[2]).toBeUndefined();
+        expect(seqs[2]).toBeGreaterThan(seqs[1] as number);
+        expect(seqs[3]).toBeUndefined();
       });
     });
 
@@ -323,7 +324,7 @@ describe("contract: HttpApiClient against a real @shadow/api server", () => {
 
         // Only the second turn — the first turn's lower-seq events never
         // reappear.
-        expect(reconnected).toEqual(["operator", "text", "done"]);
+        expect(reconnected).toEqual(["operator", "text", "turn.ended", "done"]);
         expect(seqs.every((seq) => seq === undefined || seq >= (secondOperatorSeq as number))).toBe(
           true,
         );
@@ -373,7 +374,99 @@ describe("contract: HttpApiClient against a real @shadow/api server", () => {
         // contract `ChatPage` relies on (`applyStreamEvent` doesn't care
         // which client produced the event).
         expect(fakeReplay).toEqual(realReplay);
-        expect(realReplay).toEqual(["operator", "text", "done"]);
+        expect(realReplay).toEqual(["operator", "text", "turn.ended", "done"]);
+      });
+    });
+
+    // F9 review fix: the review flagged `follow` itself as contract-untested
+    // — every case above exercises plain replay only. This drives a
+    // multi-chunk message (`events: [...]`, matching `session-service.test.ts`'s
+    // own tee-test pattern) through `?follow=true` on BOTH clients and
+    // checks the shapes agree, including the two things F2/F4 changed: a
+    // seq-stamped `text` carrying the FULL accumulated string (not a
+    // per-delta shape), and `turn.ended` (F3) — `follow` never sends `done`
+    // on either client, so this reads only up through `turn.ended`.
+    test("follow=true produces the same event-type sequence, seq-shape, and full text on both clients", async () => {
+      const respond: WithApiOptions["respond"] = () => ({
+        text: "reply text",
+        events: [
+          { type: "text-delta", text: "reply " },
+          { type: "text-delta", text: "text" },
+        ],
+      });
+
+      await withScriptedApi({ respond }, async ({ baseUrl }) => {
+        const real = new HttpApiClient(`${baseUrl}/api`);
+        await real.createVolume({ slug: "parity-follow-craft", title: "Parity Follow" });
+
+        let realSessionId: string | undefined;
+        for await (const event of real.chat({
+          volumeSlug: "parity-follow-craft",
+          message: "hello",
+        })) {
+          if (event.event === "session") realSessionId = event.data.sessionId;
+        }
+        if (!realSessionId) throw new Error("expected a sessionId");
+
+        const fake = new FakeApiClient({
+          streamDelayMs: 0,
+          chatScript: (sessionId, input): ChatStreamEvent[] => [
+            { event: "session", data: { sessionId } },
+            { event: "operator", data: { text: input.message } },
+            { event: "text", data: { delta: "reply " } },
+            { event: "text", data: { delta: "text" } },
+            { event: "done", data: {} },
+          ],
+        });
+        let fakeSessionId: string | undefined;
+        for await (const event of fake.chat({
+          volumeSlug: "parity-follow-craft",
+          message: "hello",
+        })) {
+          if (event.event === "session") fakeSessionId = event.data.sessionId;
+        }
+        if (!fakeSessionId) throw new Error("expected a sessionId");
+
+        // The turn has already completed by the time follow subscribes
+        // here — this is `follow`'s REPLAY half, but it's the half that
+        // carries the shape F2/F4 changed (a seq-stamped, full-text
+        // `text`), and the one the review flagged as never driven through
+        // `follow=true` on either client at all.
+        async function collectFollow(
+          client: HttpApiClient | FakeApiClient,
+          sessionId: string,
+        ): Promise<ReadonlyArray<{ event: string; hasSeq: boolean; delta: string | undefined }>> {
+          const out: { event: string; hasSeq: boolean; delta: string | undefined }[] = [];
+          for await (const envelope of client.getSessionEvents(sessionId, { follow: true })) {
+            const data = envelope.data as { readonly delta?: string } | undefined;
+            out.push({
+              event: envelope.event,
+              hasSeq: envelope.seq !== undefined,
+              delta: data?.delta,
+            });
+            // Neither client ever sends `done` under `?follow=true` (this
+            // module's own doc, `../../api/src/handlers/session-events.ts`'s
+            // module doc) — `turn.ended` is the last stored-derived event
+            // for a turn that already finished, so this is where a
+            // bounded collection has to stop instead of waiting forever.
+            if (envelope.event === "turn.ended") break;
+          }
+          return out;
+        }
+
+        const realFollow = await collectFollow(real, realSessionId);
+        const fakeFollow = await collectFollow(fake, fakeSessionId);
+
+        expect(fakeFollow).toEqual(realFollow);
+        expect(realFollow.map((e) => e.event)).toEqual(["operator", "text", "turn.ended"]);
+
+        const textEntry = realFollow.find((e) => e.event === "text");
+        // The ONE stored `text` entry carries a seq (F2/F4: it's the
+        // authoritative full-text replace, not a delta to append) and the
+        // FULL accumulated string — never the two individual chunks
+        // `respond`'s `events` streamed live.
+        expect(textEntry?.hasSeq).toBe(true);
+        expect(textEntry?.delta).toBe("reply text");
       });
     });
   });

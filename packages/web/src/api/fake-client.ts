@@ -47,14 +47,36 @@ export interface FakeApiClientOptions {
   readonly chatScript?: (sessionId: string, input: ChatInput) => readonly ChatStreamEvent[];
 }
 
-/** A `getSessionEvents` subscriber — pushed to synchronously (`recordSessionEvent`), exactly like the real `SessionEventBus` (`@shadow/api`'s `session-bus.ts`): this stand-in is single-threaded JS, so "subscribe, then read the log" (below) can never miss an event the way an actually-concurrent bus could without the real one's bus-first-buffer care. */
-type SessionEventListener = (event: StoredEnvelope) => void;
+/** A `getSessionEvents` subscriber — pushed to synchronously (`recordSessionEvent`/`publishTextDelta`), exactly like the real `SessionEventBus` (`@shadow/api`'s `session-bus.ts`): this stand-in is single-threaded JS, so "subscribe, then read the log" (below) can never miss an event the way an actually-concurrent bus could without the real one's bus-first-buffer care. */
+type SessionEventListener = (message: SessionBusMessage) => void;
 
-/** Every event this fake ever logs/publishes carries a REAL `seq` (stamped the instant it's recorded) — narrower than the public `SessionEventEnvelope` (`seq: number | undefined`, since a live `text` delta or the replay-only `done` marker carry none on the real wire either). Kept distinct so the internal log/bus never has to juggle a possibly-`undefined` seq it never actually produces; `getSessionEvents` widens back to `SessionEventEnvelope` only at its own `done`/live-tail yield points. */
+/** Every STORED (record-kind) event this fake logs/publishes carries a REAL `seq` (stamped the instant it's recorded) — narrower than the public `SessionEventEnvelope` (`seq: number | undefined`). Kept distinct so the internal log never has to juggle a possibly-`undefined` seq it never actually produces; `getSessionEvents` widens back to `SessionEventEnvelope`, folding `seq` into `data` too (mirroring the real wire's `withSeq`), only at its own yield points. */
 interface StoredEnvelope {
   readonly event: SessionEventEnvelope["event"];
   readonly data: unknown;
   readonly seq: number;
+}
+
+/**
+ * F2/F4/F9 review fix — mirrors `@shadow/api`'s own `SessionBusMessage`
+ * (`session-bus.ts`): a two-case union, not just `StoredEnvelope`, so a live
+ * `text` delta (no stored shape, no `seq` — this fake's `chatScript` events
+ * ARE the wire shape already, unlike the real server which derives them
+ * from raw `ShadowEvent`s, but the seq-carrying-vs-not distinction is
+ * identical either way) can flow to a follow subscriber without being
+ * confused for the one stored `text` event that carries a completed
+ * message's FULL accumulated text. See `chat()`'s doc for how the two are
+ * told apart from a script that only ever writes individual delta chunks.
+ */
+type SessionBusMessage =
+  | { readonly kind: "record"; readonly envelope: StoredEnvelope }
+  | { readonly kind: "text-delta"; readonly data: unknown };
+
+/** Folds `seq` into `data` (mirroring `@shadow/api`'s `withSeq`) for a stored, record-kind event's public `SessionEventEnvelope` shape — every consumer (both real and fake clients) reads `data.seq`, not the envelope's own `seq` field, to tell a full-text `text` apart from a live delta (`../pages/chat-transcript.ts`'s `"text"` case doc). */
+function withSeqData(data: unknown, seq: number): unknown {
+  return typeof data === "object" && data !== null
+    ? { ...(data as Record<string, unknown>), seq }
+    : data;
 }
 
 export class FakeApiClient implements ShadowApiClient {
@@ -64,14 +86,21 @@ export class FakeApiClient implements ShadowApiClient {
   private nextSessionId = 1;
   /**
    * Per-session stand-in for `@shadow/sessions`' `events.jsonl` — every
-   * `chat()`-scripted event `recordSessionEvent` stamps with a monotonic
-   * `seq`, mirroring `@shadow/api`'s `event-mapping.ts`/`session-events.ts`:
-   * `session` (a `POST /api/chat`-only synthetic, minted at enqueue time,
-   * never stored) and `done` (never stored either — `?follow=true` never
-   * sends it at all, and plain replay synthesizes it fresh once the stored
-   * transcript is exhausted, per `getSessionEvents` below) are the two
-   * event kinds this log never holds, matching the real server's own
-   * `StoredSessionEvent` union having no shape for either.
+   * event `recordSessionEvent` stamps with a monotonic `seq`, mirroring
+   * `@shadow/api`'s `event-mapping.ts`/`session-events.ts`. `session` (a
+   * `POST /api/chat`-only synthetic, minted at enqueue time, never stored)
+   * and `done` (never stored either — `?follow=true` never sends it at all,
+   * and plain replay synthesizes it fresh once the stored transcript is
+   * exhausted, per `getSessionEvents` below) are never logged, matching the
+   * real server's own `StoredSessionEvent` union having no shape for
+   * either. Neither is an individual `text` DELTA (F2/F4 review fix — see
+   * `chat()`'s doc): only the FULL text `chat()` accumulates from a run of
+   * consecutive delta chunks is ever logged here, one entry per run, the
+   * same way `@shadow/sessions` only ever stores one `assistant-message`
+   * record per contiguous run of deltas, never the deltas themselves. `done`
+   * itself is instead logged as a synthetic `turn.ended` entry (F3 review
+   * fix) — this fake's stand-in for the real `turn-boundary(ended,
+   * completed)` record now getting its own wire representation.
    */
   private readonly sessionLogs = new Map<string, StoredEnvelope[]>();
   private readonly sessionSeqs = new Map<string, number>();
@@ -274,29 +303,79 @@ export class FakeApiClient implements ShadowApiClient {
     return { events: this.requireVolume(slug).ledger };
   }
 
+  /**
+   * F2/F4/F9 review fix: consecutive `text` events in the script are
+   * treated as one message's delta chunks, exactly like `@shadow/agent`
+   * yielding several `text-delta` `ShadowEvent`s before its one
+   * `assistant-message` (`packages/agent/src/conversation.ts`'s
+   * `runModelTurn`/`sendMessage`). Each chunk is published live (a
+   * transient `text-delta` bus message, no `seq`, never logged) as it's
+   * yielded to THIS call's own consumer; once a run of `text` events ends
+   * (the next scripted event isn't `"text"`, or the script itself ends),
+   * the accumulated full string is recorded as ONE stored, `seq`-stamped
+   * `text` entry — the fake's stand-in for the real `assistant-message`
+   * record. `done` itself becomes a stored `turn.ended` entry instead of
+   * being skipped (F3 review fix) — this fake's stand-in for
+   * `turn-boundary(ended, completed)`, which now gets a wire
+   * representation on the real server too.
+   */
   async *chat(input: ChatInput): AsyncIterable<ChatStreamEvent> {
     const sessionId = input.sessionId ?? `sess_${this.nextSessionId++}`;
+    let pendingText = "";
+    const flushPendingText = (): void => {
+      if (pendingText === "") return;
+      this.recordSessionEvent(sessionId, { event: "text", data: { delta: pendingText } });
+      pendingText = "";
+    };
     for (const event of this.chatScript(sessionId, input)) {
       if (this.streamDelayMs > 0) await sleep(this.streamDelayMs);
+      if (event.event === "text") {
+        pendingText += event.data.delta;
+        this.publishTextDelta(sessionId, event.data);
+        yield event;
+        continue;
+      }
+      flushPendingText();
+      if (event.event === "session") {
+        yield event;
+        continue;
+      }
+      if (event.event === "done") {
+        this.recordSessionEvent(sessionId, { event: "turn.ended", data: {} });
+        yield event;
+        continue;
+      }
       this.recordSessionEvent(sessionId, event);
       yield event;
     }
   }
 
-  /** Stamps + stores + publishes one `chat()`-scripted event for `getSessionEvents` — a no-op for `session`/`done` (this fake's log never holds either; see the `sessionLogs` field doc). */
-  private recordSessionEvent(sessionId: string, event: ChatStreamEvent): void {
-    if (event.event === "session" || event.event === "done") return;
+  /** Stamps + stores + publishes one record-kind event for `getSessionEvents` — every scripted event EXCEPT `session`/`done`/individual `text` deltas (see `chat()`'s doc for how those three are handled instead). */
+  private recordSessionEvent(sessionId: string, event: { event: string; data: unknown }): void {
     const seq = (this.sessionSeqs.get(sessionId) ?? 0) + 1;
     this.sessionSeqs.set(sessionId, seq);
-    const envelope: StoredEnvelope = { event: event.event, data: event.data, seq };
+    const envelope: StoredEnvelope = {
+      event: event.event as SessionEventEnvelope["event"],
+      data: event.data,
+      seq,
+    };
     const log = this.sessionLogs.get(sessionId);
     if (log) {
       log.push(envelope);
     } else {
       this.sessionLogs.set(sessionId, [envelope]);
     }
+    const message: SessionBusMessage = { kind: "record", envelope };
     for (const listener of this.sessionListeners.get(sessionId) ?? []) {
-      listener(envelope);
+      listener(message);
+    }
+  }
+
+  /** Publishes one live `text` delta chunk to `sessionId`'s follow subscribers ONLY — never logged (mirrors `@shadow/sessions` never storing `text-delta` `ShadowEvent`s at all). */
+  private publishTextDelta(sessionId: string, data: unknown): void {
+    const message: SessionBusMessage = { kind: "text-delta", data };
+    for (const listener of this.sessionListeners.get(sessionId) ?? []) {
+      listener(message);
     }
   }
 
@@ -310,11 +389,11 @@ export class FakeApiClient implements ShadowApiClient {
     // though single-threaded JS makes the race it guards against
     // unreachable here — same shape either way, so a caller can't tell
     // this fake apart from the real endpoint by relying on ordering).
-    const buffered: StoredEnvelope[] = [];
+    const buffered: SessionBusMessage[] = [];
     let wake: (() => void) | undefined;
     const listener: SessionEventListener | undefined = options.follow
-      ? (event) => {
-          buffered.push(event);
+      ? (message) => {
+          buffered.push(message);
           wake?.();
         }
       : undefined;
@@ -328,7 +407,11 @@ export class FakeApiClient implements ShadowApiClient {
       let lastSeq = fromSeq - 1;
       for (const envelope of this.sessionLogs.get(sessionId) ?? []) {
         if (envelope.seq < fromSeq) continue;
-        yield envelope;
+        yield {
+          event: envelope.event,
+          data: withSeqData(envelope.data, envelope.seq),
+          seq: envelope.seq,
+        };
         lastSeq = envelope.seq;
       }
 
@@ -340,9 +423,20 @@ export class FakeApiClient implements ShadowApiClient {
       for (;;) {
         while (buffered.length > 0) {
           const next = buffered.shift();
-          if (!next || next.seq <= lastSeq) continue; // already delivered above — dedup by seq, same as the real endpoint
-          lastSeq = next.seq;
-          yield next;
+          if (!next) continue;
+          if (next.kind === "text-delta") {
+            // Never dedup'd by seq — it has none, same as the real endpoint
+            // (`../../api/src/handlers/session-events.ts`'s module doc).
+            yield { event: "text", data: next.data, seq: undefined };
+            continue;
+          }
+          if (next.envelope.seq <= lastSeq) continue; // already delivered above — dedup by seq, same as the real endpoint
+          lastSeq = next.envelope.seq;
+          yield {
+            event: next.envelope.event,
+            data: withSeqData(next.envelope.data, next.envelope.seq),
+            seq: next.envelope.seq,
+          };
         }
         await new Promise<void>((resolve) => {
           wake = resolve;
