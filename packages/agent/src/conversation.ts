@@ -89,7 +89,11 @@ import type {
   RepairDecision,
 } from "@shadow/evidence";
 import type { Indexer } from "@shadow/indexing";
-import type { AgenticSession, AgenticSessionPort } from "@shadow/model";
+import {
+  type AgenticSession,
+  type AgenticSessionPort,
+  isNoConversationFoundError,
+} from "@shadow/model";
 import type { ResearchBrief, ResearchBriefPort, ResearchResult } from "@shadow/research";
 import { recordSessionTranscriptSource } from "@shadow/research";
 import { draftChapter } from "./chapter-draft.ts";
@@ -126,6 +130,59 @@ export interface ShadowAgentDeps {
 export interface StartConversationOptions {
   /** Stable id for this conversation, used to derive the transcript source's `session:<id>` url. Defaults to a fresh random id. */
   readonly conversationId?: string;
+  /**
+   * Resume a previously-persisted SDK session instead of starting fresh
+   * (T2.3). `getOrCreateSession` forwards `sdkSessionId` as
+   * `options.resume` on the underlying `AgenticSessionPort.createSession`
+   * call — see `@shadow/model`'s `AgenticSessionOptions.resume` — so the
+   * conversation's *first* turn continues that transcript rather than
+   * opening a new one. `@shadow/api`'s `SessionService` (T2.5) is the
+   * intended caller: it rehydrates a cold session id and builds
+   * `fallbackSummary` from the stored transcript.
+   *
+   * Composes with T1.1/T1.2 for free: a transient failure (529/overloaded)
+   * on the resumed first turn retries *with resume intact* — the retrying
+   * decorator re-issues the same underlying handle, which still carries
+   * `options.resume` (`../model/src/retrying-agentic-session.ts`'s module
+   * doc). The one failure that decorator never retries — the SDK's
+   * "No conversation found" error (`conservativeRetryPolicy`,
+   * `isNoConversationFoundError`) — is exactly the one this class's own
+   * fallback below handles instead.
+   */
+  readonly resume?: {
+    readonly sdkSessionId: string;
+    /**
+     * Deterministic prior-conversation context (T2.5 builds this from
+     * stored transcript events), used *only* if the resumed first turn
+     * fails with "No conversation found" (the SDK transcript is genuinely
+     * gone — deleted, expired, moved machines). When present, `sendMessage`
+     * drops the dead session handle, opens a fresh one *without* `resume`,
+     * and re-issues the same turn with this text prepended to the **model
+     * prompt only** — never to the recorded operator transcript source
+     * (D19/D23; see `sendMessage`'s doc). Omit this to leave "No
+     * conversation found" on the resumed first turn unhandled — it
+     * propagates as an ordinary error, same as any other channel this
+     * class doesn't special-case.
+     */
+    readonly fallbackSummary?: string;
+  };
+}
+
+/**
+ * Prepended to the model prompt (never to the recorded operator transcript
+ * source) when T2.3's in-conversation resume fallback fires — the exact
+ * framing the plan specifies, so `fallbackSummary` reads as recovered
+ * context rather than something the operator just said, and Shadow never
+ * cites it as an `operator`-kind claim's source.
+ */
+function buildFallbackPrompt(fallbackSummary: string, prompt: string): string {
+  return [
+    "Context recovered from a previous conversation — not operator speech; " +
+      "never cite it as an operator source.",
+    fallbackSummary,
+    "",
+    prompt,
+  ].join("\n");
 }
 
 export type ShadowEvent =
@@ -223,6 +280,15 @@ function formatChapterDraftFailure(slug: string, error: string): string {
 export class ShadowConversation {
   private readonly conversationId: string;
   private session: AgenticSession | undefined;
+  /**
+   * `StartConversationOptions.resume`, while it's still live. Consulted by
+   * `getOrCreateSession` (forwarded as `options.resume` on session
+   * creation) and by `sendMessage`'s fallback (T2.3, this module's doc on
+   * `StartConversationOptions.resume`). Cleared — not just ignored — once
+   * the fallback fires: the recreated session must never itself carry
+   * `resume`, and `getOrCreateSession` reads this same field to decide.
+   */
+  private pendingResume: StartConversationOptions["resume"];
 
   constructor(
     private readonly deps: ShadowAgentDeps,
@@ -232,6 +298,7 @@ export class ShadowConversation {
     options: StartConversationOptions = {},
   ) {
     this.conversationId = options.conversationId ?? randomUUID();
+    this.pendingResume = options.resume;
   }
 
   get id(): string {
@@ -270,6 +337,14 @@ export class ShadowConversation {
    * auto-continuation rounds (research delegation, chapter drafting and
    * publication) it triggers. Streams progress as `ShadowEvent`s so a
    * caller (`@shadow/api`, T3.4) can surface it live.
+   *
+   * `recordSessionTranscriptSource` below runs exactly once, before any
+   * model turn — the *only* legitimate way to write down what the operator
+   * said (D19/D23, module doc). T2.3's resume fallback further down this
+   * method never re-runs it and never routes `fallbackSummary` through it:
+   * the summary only ever gets prepended to a re-issued *model prompt*, so
+   * it can never become a citable `operator`-kind source, and the operator
+   * turn is never double-recorded.
    */
   async *sendMessage(operatorText: string): AsyncGenerator<ShadowEvent, void, undefined> {
     const operatorSource = await recordSessionTranscriptSource(
@@ -286,23 +361,58 @@ export class ShadowConversation {
     let prompt = buildOperatorPrompt(operatorText, operatorSource.id);
 
     for (let turn = 0; turn < maxAutoTurns; turn++) {
+      // True only for the very first `stream()` call this conversation will
+      // ever make on a session created with `resume` — `this.session` is
+      // still unset (no turn has ever run on this handle) and there's a
+      // `pendingResume` to lose. Every later iteration of this loop reuses
+      // the already-created `this.session` (D6), so this is `false` for
+      // every turn after the conversation's first — matching the plan's
+      // "only the first turn of a resumed conversation falls back."
+      const isResumingFirstTurn = this.session === undefined && this.pendingResume !== undefined;
       const session = await this.getOrCreateSession();
-      let finalText = "";
-      let turnFailed = false;
 
-      for await (const event of session.stream(prompt)) {
-        if (event.type === "text-delta") {
-          yield { type: "text-delta", text: event.text };
-        } else if (event.type === "done") {
-          finalText = event.result.text;
-          if (event.result.isError) {
-            turnFailed = true;
-            yield {
-              type: "error",
-              error: `Shadow's turn failed (stopReason: ${event.result.stopReason ?? "unknown"})`,
-            };
-          }
+      let finalText: string;
+      let turnFailed: boolean;
+      try {
+        ({ finalText, turnFailed } = yield* this.runModelTurn(session, prompt));
+      } catch (error) {
+        const fallbackSummary = this.pendingResume?.fallbackSummary;
+        if (
+          !isResumingFirstTurn ||
+          fallbackSummary === undefined ||
+          !isNoConversationFoundError(error)
+        ) {
+          // Not T2.3's fallback case: a non-first-turn failure (shouldn't
+          // happen — this handle resumes its own id after the first turn),
+          // a first turn that wasn't resumed at all, a resumed first turn
+          // with no `fallbackSummary` to fall back with (documented
+          // behavior — no fallback possible), or a resumed first turn that
+          // failed for any other reason (a transient failure already
+          // retried *with* resume intact by the decorator before reaching
+          // here — see `StartConversationOptions.resume`'s doc). Propagate
+          // as an ordinary error; `resume` stays intact on `this.session`
+          // (still `undefined` here, so the next call to `getOrCreateSession`
+          // — if the caller retries this same conversation — tries the same
+          // resume again, unchanged).
+          throw error;
         }
+
+        // T2.3 in-conversation fallback: the resumed transcript genuinely
+        // doesn't exist on this machine (deleted, expired, moved). Drop the
+        // dead handle (`close()` here is a documented no-op for this exact
+        // shape — a thrown, pre-"done" failure latches neither `ownSessionId`
+        // nor `failedSessionIds` on the underlying session, real adapter or
+        // fake alike — kept anyway for defense-in-depth against a future SDK
+        // that partially persists before throwing), recreate without
+        // `resume`, and re-issue the *same* turn with the summary prepended
+        // to the model prompt only (this class doc, `buildFallbackPrompt`).
+        await this.session?.close?.();
+        this.session = undefined;
+        this.pendingResume = undefined;
+
+        const fallbackSession = await this.getOrCreateSession();
+        const fallbackPrompt = buildFallbackPrompt(fallbackSummary, prompt);
+        ({ finalText, turnFailed } = yield* this.runModelTurn(fallbackSession, fallbackPrompt));
       }
       if (turnFailed) return;
 
@@ -327,6 +437,40 @@ export class ShadowConversation {
     }
 
     throw new AutoTurnBudgetExceededError(maxAutoTurns);
+  }
+
+  /**
+   * Drive one `session.stream(prompt)` call to completion, yielding
+   * `text-delta`/`error` `ShadowEvent`s as they arrive and returning the
+   * turn's outcome — factored out of `sendMessage` so T2.3's fallback can
+   * re-issue the same logic against a freshly-created session/prompt
+   * without duplicating the event-mapping. A thrown failure (including the
+   * SDK's no-conversation-found error) propagates out of this generator
+   * uncaught; `sendMessage` is the layer that decides whether to catch it.
+   */
+  private async *runModelTurn(
+    session: AgenticSession,
+    prompt: string,
+  ): AsyncGenerator<ShadowEvent, { finalText: string; turnFailed: boolean }, undefined> {
+    let finalText = "";
+    let turnFailed = false;
+
+    for await (const event of session.stream(prompt)) {
+      if (event.type === "text-delta") {
+        yield { type: "text-delta", text: event.text };
+      } else if (event.type === "done") {
+        finalText = event.result.text;
+        if (event.result.isError) {
+          turnFailed = true;
+          yield {
+            type: "error",
+            error: `Shadow's turn failed (stopReason: ${event.result.stopReason ?? "unknown"})`,
+          };
+        }
+      }
+    }
+
+    return { finalText, turnFailed };
   }
 
   /**
@@ -483,6 +627,15 @@ export class ShadowConversation {
       allowedTools: ["Skill"],
       disallowedTools: ["WebFetch", "WebSearch", "Bash", "Read", "Write", "Edit", "Agent", "Task"],
       permissionMode: "default",
+      // T2.3: forward `StartConversationOptions.resume`, while it's still
+      // set, as this port's own `resume` option — honored only on this
+      // handle's first `stream()` call (`@shadow/model`'s
+      // `AgenticSessionOptions.resume` doc: "ignored after the first turn
+      // of a session that already has its own sessionId"). `undefined`
+      // once `sendMessage`'s fallback has cleared `pendingResume` (or if
+      // this conversation was never asked to resume anything), so the
+      // recreated post-fallback session is a genuinely fresh one.
+      resume: this.pendingResume ? { sessionId: this.pendingResume.sdkSessionId } : undefined,
       // Deliberately NOT `persistSession: false`. This handle is reused
       // across every `sendMessage` call and every auto-continuation round
       // (module doc above, D6) via `resume` — and `resume` only works

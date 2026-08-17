@@ -164,6 +164,22 @@ export const noRetryPolicy: RetryPolicy = {
 const NO_CONVERSATION_FOUND_PATTERN = /no conversation found/i;
 
 /**
+ * True when `error`'s message matches the SDK's no-conversation-found
+ * signature (`NO_CONVERSATION_FOUND_PATTERN` above) — the exact ground
+ * truth `conservativeRetryPolicy` uses to never retry it. Exported so a
+ * caller other than this policy can recognize the same failure without
+ * duplicating the pattern: T2.3's in-conversation resume fallback
+ * (`@shadow/agent`'s `ShadowConversation`) is the first consumer — it needs
+ * to tell "the resumed session doesn't exist" apart from every other
+ * thrown failure on a resumed first turn, using the identical signature
+ * this module already verified live (see this module's doc).
+ */
+export function isNoConversationFoundError(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : String(error);
+  return NO_CONVERSATION_FOUND_PATTERN.test(message);
+}
+
+/**
  * Case-insensitive keyword/status-code signatures for the transient
  * failures `conservativeRetryPolicy` retries: 529/"overloaded", rate
  * limiting, and transient 5xx. Named after the Agent SDK's own

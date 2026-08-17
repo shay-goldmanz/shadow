@@ -3,6 +3,7 @@ import { AgenticSessionError, SubscriptionAuthError } from "../errors.ts";
 import type { AgenticTurnResult } from "./agentic-session.ts";
 import {
   conservativeRetryPolicy,
+  isNoConversationFoundError,
   noRetryPolicy,
   type TurnFailure,
   turnFailureFromErrorResult,
@@ -185,5 +186,27 @@ describe("conservativeRetryPolicy", () => {
     const failure = turnFailureFromErrorResult(errorResult({ text: "Overloaded" }));
     expect(conservativeRetryPolicy.delayBeforeRetry(failure, 0)).toBe(1000);
     expect(conservativeRetryPolicy.delayBeforeRetry(failure, 1)).toBe(4000);
+  });
+});
+
+describe("isNoConversationFoundError", () => {
+  test("matches an Error whose message is the SDK's no-conversation-found text", () => {
+    expect(
+      isNoConversationFoundError(new Error("No conversation found with session ID: abc-123")),
+    ).toBe(true);
+  });
+
+  test("matches case-insensitively, mirroring conservativeRetryPolicy's own match", () => {
+    expect(isNoConversationFoundError(new Error("NO CONVERSATION FOUND with session ID: x"))).toBe(
+      true,
+    );
+  });
+
+  test("matches a non-Error thrown value stringified the same way turnFailureFromThrown does", () => {
+    expect(isNoConversationFoundError("No conversation found with session ID: x")).toBe(true);
+  });
+
+  test("does not match an unrelated thrown error", () => {
+    expect(isNoConversationFoundError(new Error("Overloaded"))).toBe(false);
   });
 });

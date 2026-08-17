@@ -60,6 +60,7 @@ export { runToCompletion } from "./ports/agentic-session.ts";
 export type { RetryPolicy, TurnFailure } from "./ports/retry-policy.ts";
 export {
   conservativeRetryPolicy,
+  isNoConversationFoundError,
   noRetryPolicy,
   turnFailureFromErrorResult,
   turnFailureFromThrown,

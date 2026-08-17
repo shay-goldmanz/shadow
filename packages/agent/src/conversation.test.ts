@@ -24,11 +24,28 @@ import {
   type CheckWorthinessClassifier,
   type ClaimSidecar,
   FileSystemEvidenceStore,
+  type SessionTranscriptWitness,
+  type SourceMetadata,
+  type SourceRecord,
 } from "@shadow/evidence";
 import type { BuildIndexResult, IndexDocument } from "@shadow/indexing";
 import { StructuralIndexer } from "@shadow/indexing";
-import type { AgenticSessionOptions, FakeAgenticTurnResponder } from "@shadow/model";
-import { FakeAgenticSessionPort } from "@shadow/model";
+import type {
+  AgenticSession,
+  AgenticSessionOptions,
+  AgenticSessionPort,
+  FakeAgenticTurnResponder,
+  RetryPolicy,
+} from "@shadow/model";
+import {
+  AgenticSessionError,
+  conservativeRetryPolicy,
+  FakeAgenticSessionPort,
+  failNTimesThenSucceed,
+  isNoConversationFoundError,
+  noConversationFoundError,
+  RetryingAgenticSession,
+} from "@shadow/model";
 import type { Finding, ResearchBrief, ResearchBriefPort, ResearchResult } from "@shadow/research";
 import { ShadowAgent, type ShadowAgentDeps, type ShadowEvent } from "./conversation.ts";
 import { AutoTurnBudgetExceededError } from "./errors.ts";
@@ -1429,6 +1446,323 @@ describe("ShadowConversation — chapter events stream out while the volume lock
 
         expect(events.some((e) => e.type === "chapter-published")).toBe(true);
         expect(events.some((e) => e.type === "error" || e.type === "chapter-rejected")).toBe(false);
+      });
+    });
+  });
+});
+
+// -----------------------------------------------------------------------
+// T2.3 — resume pass-through + in-conversation fallback.
+// -----------------------------------------------------------------------
+
+/**
+ * Wraps a real `FileSystemEvidenceStore`'s `putSourceFromTranscript` — the
+ * one and only seam `recordSessionTranscriptSource` (D19/D23) writes
+ * through — with a call log, so a test can assert it fired exactly once and
+ * inspect exactly what text it recorded, without a hand-rolled fake
+ * `EvidenceStore` that would have to reimplement every other method these
+ * tests' `draftChapter`/`publishChapter` calls also need.
+ */
+class ProbeTranscriptEvidenceStore extends FileSystemEvidenceStore {
+  readonly transcriptCalls: SessionTranscriptWitness[] = [];
+
+  override async putSourceFromTranscript(
+    volume: VolumeSlug,
+    witness: SessionTranscriptWitness,
+    metadata: SourceMetadata,
+  ): Promise<SourceRecord> {
+    this.transcriptCalls.push(witness);
+    return super.putSourceFromTranscript(volume, witness, metadata);
+  }
+}
+
+/**
+ * Mirrors `@shadow/model`'s `factory.ts#withRetrying`: wraps every session
+ * an `AgenticSessionPort` hands out in `RetryingAgenticSession`, governed by
+ * `policy`. Built here rather than imported because `withRetrying` itself
+ * isn't part of `@shadow/model`'s public surface (only its effect,
+ * `createModel`, is) — this is the same composition `@shadow/agent`'s real
+ * callers get for free via `createModel()`, reproduced for a test that
+ * specifically wants to prove T1.1/T1.2/T1.3 compose with T2.3's `resume`
+ * pass-through (test 6 below). `sleep` defaults to instant so retry-delay
+ * tests don't actually wait ~1s/~4s.
+ */
+function withRetrying(
+  port: AgenticSessionPort,
+  policy: RetryPolicy = conservativeRetryPolicy,
+): AgenticSessionPort {
+  const instantSleep = async () => {};
+  return {
+    createSession(options?: AgenticSessionOptions): AgenticSession {
+      return new RetryingAgenticSession(port.createSession(options), policy, instantSleep);
+    },
+  };
+}
+
+async function drain(
+  conversation: {
+    sendMessage(text: string): AsyncGenerator<ShadowEvent, void, undefined>;
+  },
+  text: string,
+): Promise<ShadowEvent[]> {
+  const events: ShadowEvent[] = [];
+  for await (const event of conversation.sendMessage(text)) {
+    events.push(event);
+  }
+  return events;
+}
+
+function buildFallbackDeps(
+  agenticSessionPort: AgenticSessionPort,
+  research: ResearchBriefPort,
+  evidenceStore: ShadowAgentDeps["evidenceStore"],
+  volumeStore: VolumeStore,
+  root: string,
+  sessionCwd: string,
+): ShadowAgentDeps {
+  return {
+    agenticSessionPort,
+    researchBriefPort: research,
+    volumeStore,
+    evidenceStore,
+    indexer: freshIndexer(root),
+    checkWorthinessClassifier: alwaysNarrativeClassifier,
+    entailmentRelevanceJudge: scriptedEntailmentJudge(),
+    claimRestater: scriptedClaimRestater(() => {
+      throw new Error("should not be called in T2.3 fallback tests");
+    }),
+    sessionCwd,
+  };
+}
+
+describe("ShadowConversation — resume pass-through (T2.3)", () => {
+  test("StartConversationOptions.resume is forwarded to the session port as options.resume", async () => {
+    await withVolumeHarness(async ({ evidenceStore, volumeStore, volume, root }) => {
+      await withSessionCwd(async (sessionCwd) => {
+        const research = new FakeResearchBriefPort(evidenceStore, () => []);
+        const sessions = new FakeAgenticSessionPort(() => ({ text: "Hello again." }));
+        const deps = buildFallbackDeps(
+          sessions,
+          research,
+          evidenceStore,
+          volumeStore,
+          root,
+          sessionCwd,
+        );
+
+        const agent = new ShadowAgent(deps);
+        const conversation = agent.startConversation(volume, {
+          resume: { sdkSessionId: "sdk-session-abc" },
+        });
+
+        await drain(conversation, "Continuing from before.");
+
+        expect(sessions.sessions).toHaveLength(1);
+        expect(sessions.sessions[0]?.options.resume).toEqual({ sessionId: "sdk-session-abc" });
+      });
+    });
+  });
+});
+
+describe("ShadowConversation — in-conversation resume fallback (T2.3)", () => {
+  test("resumed first turn hits no-conversation-found -> a second session is created without resume, the fallback summary reaches the model prompt with non-citable framing, and the turn completes", async () => {
+    await withVolumeHarness(async ({ evidenceStore, volumeStore, volume, root }) => {
+      await withSessionCwd(async (sessionCwd) => {
+        const research = new FakeResearchBriefPort(evidenceStore, () => []);
+        const respond = failNTimesThenSucceed(1, noConversationFoundError("dead-sdk-id"), {
+          text: "Picking up where we left off.",
+        });
+        const sessions = new FakeAgenticSessionPort(respond);
+        const deps = buildFallbackDeps(
+          sessions,
+          research,
+          evidenceStore,
+          volumeStore,
+          root,
+          sessionCwd,
+        );
+
+        const agent = new ShadowAgent(deps);
+        const conversation = agent.startConversation(volume, {
+          resume: {
+            sdkSessionId: "dead-sdk-id",
+            fallbackSummary: "Operator previously asked about density in list views.",
+          },
+        });
+
+        const events = await drain(conversation, "What did we cover last time?");
+
+        // --- a second session, without resume ------------------------------
+        expect(sessions.sessions).toHaveLength(2);
+        expect(sessions.sessions[0]?.options.resume).toEqual({ sessionId: "dead-sdk-id" });
+        expect(sessions.sessions[1]?.options.resume).toBeUndefined();
+
+        // --- the re-issued turn's prompt carries the summary, framed as
+        // recovered context, never operator speech ---------------------------
+        const fallbackPrompt = sessions.sessions[1]?.prompts[0] ?? "";
+        expect(fallbackPrompt).toContain(
+          "Context recovered from a previous conversation — not operator speech; " +
+            "never cite it as an operator source.",
+        );
+        expect(fallbackPrompt).toContain("Operator previously asked about density in list views.");
+        // ...and the operator's actual turn is still in there too (same
+        // prompt that would have been sent had resume worked).
+        expect(fallbackPrompt).toContain("What did we cover last time?");
+
+        // --- the turn completes normally, no error surfaced ------------------
+        expect(events.some((e) => e.type === "error")).toBe(false);
+        expect(events.some((e) => e.type === "assistant-message")).toBe(true);
+      });
+    });
+  });
+
+  test("the operator source is recorded exactly once, and never contains the fallback summary text (D19/D23)", async () => {
+    await withVolumeHarness(async ({ volumeStore, volume, root }) => {
+      await withSessionCwd(async (sessionCwd) => {
+        const probeStore = new ProbeTranscriptEvidenceStore(volumeStore);
+        const research = new FakeResearchBriefPort(probeStore, () => []);
+        const respond = failNTimesThenSucceed(1, noConversationFoundError("dead-sdk-id"), {
+          text: "Understood.",
+        });
+        const sessions = new FakeAgenticSessionPort(respond);
+        const deps = buildFallbackDeps(
+          sessions,
+          research,
+          probeStore,
+          volumeStore,
+          root,
+          sessionCwd,
+        );
+
+        const agent = new ShadowAgent(deps);
+        const conversation = agent.startConversation(volume, {
+          resume: {
+            sdkSessionId: "dead-sdk-id",
+            fallbackSummary: "SECRET-SUMMARY-TEXT-must-not-be-recorded",
+          },
+        });
+
+        const operatorText = "The operator's real turn text.";
+        await drain(conversation, operatorText);
+
+        expect(probeStore.transcriptCalls).toHaveLength(1);
+        expect(probeStore.transcriptCalls[0]?.transcriptText).toBe(operatorText);
+        expect(probeStore.transcriptCalls[0]?.transcriptText).not.toContain(
+          "SECRET-SUMMARY-TEXT-must-not-be-recorded",
+        );
+      });
+    });
+  });
+
+  test("a non-no-conversation-found error on the resumed first turn is not handled by the fallback -- it propagates, and resume is never dropped", async () => {
+    await withVolumeHarness(async ({ evidenceStore, volumeStore, volume, root }) => {
+      await withSessionCwd(async (sessionCwd) => {
+        const research = new FakeResearchBriefPort(evidenceStore, () => []);
+        const boom = new AgenticSessionError("some unrelated transport failure");
+        const sessions = new FakeAgenticSessionPort(() => ({ throws: boom }));
+        const deps = buildFallbackDeps(
+          sessions,
+          research,
+          evidenceStore,
+          volumeStore,
+          root,
+          sessionCwd,
+        );
+
+        const agent = new ShadowAgent(deps);
+        const conversation = agent.startConversation(volume, {
+          resume: {
+            sdkSessionId: "dead-sdk-id",
+            fallbackSummary: "should never be used",
+          },
+        });
+
+        const rejection = await expectRejection(drain(conversation, "Hello?"), AgenticSessionError);
+        expect(rejection).toBe(boom);
+
+        // No fallback: exactly one session was ever created, still carrying
+        // its original resume target.
+        expect(sessions.sessions).toHaveLength(1);
+        expect(sessions.sessions[0]?.options.resume).toEqual({ sessionId: "dead-sdk-id" });
+      });
+    });
+  });
+
+  test("no-conversation-found with no fallbackSummary provided propagates -- no fallback possible", async () => {
+    await withVolumeHarness(async ({ evidenceStore, volumeStore, volume, root }) => {
+      await withSessionCwd(async (sessionCwd) => {
+        const research = new FakeResearchBriefPort(evidenceStore, () => []);
+        const sessions = new FakeAgenticSessionPort(() => ({
+          throws: noConversationFoundError("dead-sdk-id"),
+        }));
+        const deps = buildFallbackDeps(
+          sessions,
+          research,
+          evidenceStore,
+          volumeStore,
+          root,
+          sessionCwd,
+        );
+
+        const agent = new ShadowAgent(deps);
+        // resume set, but no fallbackSummary.
+        const conversation = agent.startConversation(volume, {
+          resume: { sdkSessionId: "dead-sdk-id" },
+        });
+
+        const rejection = await expectRejection(drain(conversation, "Hello?"), AgenticSessionError);
+        expect(isNoConversationFoundError(rejection)).toBe(true);
+
+        expect(sessions.sessions).toHaveLength(1);
+      });
+    });
+  });
+
+  test("composition guard: a transient 529-style thrown error on the resumed first turn is retried by the decorator with resume intact, then succeeds -- no fallback triggered", async () => {
+    await withVolumeHarness(async ({ evidenceStore, volumeStore, volume, root }) => {
+      await withSessionCwd(async (sessionCwd) => {
+        const research = new FakeResearchBriefPort(evidenceStore, () => []);
+        const transientFailure = new AgenticSessionError("529 overloaded, please retry");
+        const respond = failNTimesThenSucceed(1, transientFailure, {
+          text: "Made it through after the retry.",
+        });
+        const rawSessions = new FakeAgenticSessionPort(respond);
+        const sessions = withRetrying(rawSessions);
+        const deps = buildFallbackDeps(
+          sessions,
+          research,
+          evidenceStore,
+          volumeStore,
+          root,
+          sessionCwd,
+        );
+
+        const agent = new ShadowAgent(deps);
+        const conversation = agent.startConversation(volume, {
+          resume: {
+            sdkSessionId: "sdk-session-still-alive",
+            fallbackSummary: "should never be used -- this is not a no-conversation-found error",
+          },
+        });
+
+        const events = await drain(conversation, "Are you still there?");
+
+        // Exactly one underlying session -- the retry decorator re-issues
+        // the same handle, it never asks the port for a second one, so
+        // T2.3's fallback (which *would* create a second session) never
+        // fired.
+        expect(rawSessions.sessions).toHaveLength(1);
+        expect(rawSessions.sessions[0]?.options.resume).toEqual({
+          sessionId: "sdk-session-still-alive",
+        });
+        expect(
+          rawSessions.sessions[0]?.prompts.some((p) =>
+            p.includes("Context recovered from a previous conversation"),
+          ),
+        ).toBe(false);
+
+        expect(events.some((e) => e.type === "error")).toBe(false);
+        expect(events.some((e) => e.type === "assistant-message")).toBe(true);
       });
     });
   });
